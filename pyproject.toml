@@ -1,0 +1,18 @@
+[project]
+name = "trend-fusion"
+version = "0.1.0"
+description = "Multi-indicator crypto scalp & swing signals (MACD, EMA, BB, StochRSI, VPVR) using Binance data"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "you" }]
+dependencies = [
+  "pandas>=2.2.0",
+  "numpy>=1.26.0",
+  "requests>=2.31.0",
+  "matplotlib>=3.8.0",
+  "schedule>=1.2.2",
+  "websockets>=15.0.1",
+]
+
+[project.scripts]
+crypto-signals = "main:main"
