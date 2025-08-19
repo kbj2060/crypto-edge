@@ -18,7 +18,7 @@ class IntegratedConfig:
     hybrid_interval_5m: str = "5m"
     hybrid_limit_15m: int = 200
     hybrid_limit_5m: int = 300
-    hybrid_min_confidence: float = 0.50  # 0.12에서 0.50으로 높임 (더 신중한 진입)
+    hybrid_min_confidence: float = 0.4     # 0.50에서 0.25로 낮춤 (더 민감하게)
     hybrid_trend_weight: float = 0.4
     hybrid_entry_weight: float = 0.6
     

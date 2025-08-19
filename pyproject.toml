@@ -12,6 +12,8 @@ dependencies = [
   "matplotlib>=3.8.0",
   "schedule>=1.2.2",
   "websockets>=15.0.1",
+  "seaborn>=0.13.2",
+  "scikit-learn>=1.7.1",
 ]
 
 [project.scripts]
