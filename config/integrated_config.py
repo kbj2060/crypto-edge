@@ -32,7 +32,7 @@ class IntegratedConfig:
     liquidation_buy_ratio: float = 0.5  # 0.6에서 0.5로 낮춤 (더 예민하게)
     liquidation_sell_ratio: float = 0.5  # 0.6에서 0.5로 낮춤 (더 예민하게)
     liquidation_volume_threshold: float = 1.2  # 1.5에서 1.2로 낮춤 (더 예민하게)
-    liquidation_window_minutes: int = 2  # 3에서 2로 낮춤 (더 예민하게)
+    liquidation_window_minutes: int = 10  # 2에서 10으로 늘림 (더 많은 데이터 유지)
     
     # 청산 예측 전략 설정
     enable_liquidation_prediction: bool = True

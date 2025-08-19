@@ -376,6 +376,10 @@ class IntegratedSmartTrader:
             recent_liquidations = websocket.get_recent_liquidations(self.config.liquidation_window_minutes)
             liquidation_density = websocket.get_liquidation_density_analysis(current_price, 2.0)
             
+            # 청산 데이터 수집 상태 확인
+            total_liquidations = len(websocket.liquidations)
+            print(f"🔍 청산 데이터 상태: 총 {total_liquidations}개, 최근 {len(recent_liquidations)}개 (윈도우: {self.config.liquidation_window_minutes}분)")
+            
             # 청산 데이터가 없으면 중립 신호 생성 (디버깅 출력 없음)
             if not recent_liquidations:
                 return {
@@ -392,7 +396,7 @@ class IntegratedSmartTrader:
                     'ema_slope': 0.0,
                     'rsi_k': 50.0,
                     'timestamp': datetime.datetime.now(),
-                    'reason': '청산 데이터 없음 - 대기 중'
+                    'reason': f'청산 데이터 없음 - 총 {total_liquidations}개 중 최근 {self.config.liquidation_window_minutes}분 윈도우에 해당하는 데이터 없음'
                 }
             
             # 5분봉 데이터 로딩
