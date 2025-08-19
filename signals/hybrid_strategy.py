@@ -457,6 +457,10 @@ def make_hybrid_trade_plan(df_15m: pd.DataFrame, df_5m: pd.DataFrame, vpvr_level
             print(f"VPVR 헤드룸 계산 중 오류: {e}")
             vpvr_headroom = 0
     
+    # 신뢰도 임계값 체크
+    if final_signal != "NEUTRAL" and confidence < cfg.min_hybrid_confidence:
+        return None  # 신뢰도 부족으로 신호 생성 안함
+    
     return {
         "timestamp": datetime.now(),
         "signal_type": "HYBRID",  # 신호 타입 추가

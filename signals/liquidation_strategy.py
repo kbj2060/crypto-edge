@@ -34,10 +34,10 @@ class LiquidationStrategy:
         self.signal_cooldown = timedelta(minutes=2)  # 신호 간 최소 대기 시간
     
     def analyze_liquidation_signal(self, 
-                                 liquidation_stats: Dict, 
-                                 volume_analysis: Dict,
-                                 current_price: float,
-                                 atr: float) -> Optional[Dict]:
+                                    liquidation_stats: Dict, 
+                                    volume_analysis: Dict,
+                                    current_price: float,
+                                    atr: float) -> Optional[Dict]:
         """청산 데이터 기반 신호 분석"""
         
         # 신호 쿨다운 체크
@@ -87,6 +87,10 @@ class LiquidationStrategy:
         
         # 신뢰도 계산
         confidence = self._calculate_confidence(liquidation_stats, volume_analysis)
+        
+        # 최소 신뢰도 체크 (추가)
+        if confidence < 0.3:  # 기본 최소 신뢰도 30%
+            return None
         
         # BUY 신호 조건
         if (buy_ratio > self.config.buy_liquidation_ratio and 

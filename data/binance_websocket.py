@@ -116,9 +116,7 @@ class BinanceWebSocket:
                         callback(liquidation)
                     except Exception as e:
                         self.logger.error(f"청산 콜백 실행 오류: {e}")
-                
-                self.logger.info(f"청산 감지: {liquidation['side']} {liquidation['quantity']} @ {liquidation['price']}")
-                
+                                
         except Exception as e:
             self.logger.error(f"청산 데이터 처리 오류: {e}")
     
@@ -369,12 +367,12 @@ class BinanceWebSocket:
             price_bins[bin_key]['total_volume'] += volume
             price_bins[bin_key]['total_value'] += volume * liq['price']
             
-            if liq['side'] == 'BUY':  # 롱 청산
-                price_bins[bin_key]['long_volume'] += volume
-                price_bins[bin_key]['long_count'] += 1
-            else:  # 숏 청산
+            if liq['side'] == 'BUY':  # 숏 청산
                 price_bins[bin_key]['short_volume'] += volume
                 price_bins[bin_key]['short_count'] += 1
+            else:  # 롱 청산
+                price_bins[bin_key]['long_volume'] += volume
+                price_bins[bin_key]['long_count'] += 1
         
         # 청산 밀도 순으로 정렬
         price_levels = sorted(
