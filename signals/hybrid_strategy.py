@@ -71,9 +71,9 @@ def analyze_15m_trend(df: pd.DataFrame, vpvr_levels: List[Dict], config: HybridC
     bb_position = (current_price - bb_lower) / (bb_upper - bb_lower)
     
     if bb_position > 0.8:  # 상단 밴드 근처
-        bb_trend = -0.6  # 과매수 신호 (SELL 유리)
+        bb_trend = -0.8  # -0.6 → -0.8로 강화 (SELL 신호 증가)
     elif bb_position < 0.2:  # 하단 밴드 근처
-        bb_trend = 0.6   # 과매도 신호 (BUY 유리)
+        bb_trend = 0.8   # 0.6 → 0.8로 강화 (BUY 신호 증가)
     elif 0.4 <= bb_position <= 0.6:  # 중앙 밴드
         bb_trend = 0.0   # 중립
     else:
@@ -86,9 +86,9 @@ def analyze_15m_trend(df: pd.DataFrame, vpvr_levels: List[Dict], config: HybridC
     macd_hist = df['MACD_hist'].iloc[-1]  # macd_hist → MACD_hist
     
     if macd_line > macd_signal and macd_hist > 0:
-        macd_trend = 0.7  # 상승 모멘텀
+        macd_trend = 0.8  # 0.7 → 0.8로 강화
     elif macd_line < macd_signal and macd_hist < 0:
-        macd_trend = 0.7  # 하락 모멘텀
+        macd_trend = -0.8  # 0.7 → -0.8로 강화 (SELL 신호 증가)
     elif abs(macd_hist) < 0.1:  # MACD 히스토그램이 작음 (횡보)
         macd_trend = 0.0  # 중립
     else:
@@ -99,14 +99,16 @@ def analyze_15m_trend(df: pd.DataFrame, vpvr_levels: List[Dict], config: HybridC
     stoch_k = df['StochRSI_K'].iloc[-1]  # stoch_k → StochRSI_K
     stoch_d = df['StochRSI_D'].iloc[-1]  # stoch_d → StochRSI_D
     
-    if stoch_k > 80 and stoch_d > 80:
-        stoch_trend = -0.6  # 과매수 (SELL 유리)
-    elif stoch_k < 20 and stoch_d < 20:
-        stoch_trend = 0.6   # 과매도 (BUY 유리)
-    elif 40 <= stoch_k <= 60 and 40 <= stoch_d <= 60:
-        stoch_trend = 0.0   # 중립 (횡보)
+    if stoch_k < 20 and stoch_d < 20:
+        stoch_trend = 0.8  # 0.7 → 0.8로 강화
+    elif stoch_k > 80 and stoch_d > 80:
+        stoch_trend = -0.8  # 0.7 → -0.8로 강화 (SELL 신호 증가)
+    elif stoch_k < 30 and stoch_d < 30:
+        stoch_trend = 0.4  # 0.3 → 0.4로 강화
+    elif stoch_k > 70 and stoch_d > 70:
+        stoch_trend = -0.4  # 0.3 → -0.4로 강화 (SELL 신호 증가)
     else:
-        stoch_trend = 0.0   # 중립
+        stoch_trend = 0.0  # 중립
     
     # 5. 가격 모멘텀 (새로 추가)
     momentum_trend = 0.0
@@ -191,7 +193,7 @@ def analyze_5m_entry(df: pd.DataFrame, trend_15m: Dict, config: HybridConfig) ->
             entry_score += 1
             reasons.append("5분봉: 하락 트렌드 유지")
     
-    # 2. 볼린저 밴드 진입 (가중치: 2.5)
+    # 2. 볼린저 밴드 위치 (가중치: 2.5)
     max_score += 2.5
     bb_upper = df['BB_upper'].iloc[-1]  # bb_upper → BB_upper
     bb_lower = df['BB_lower'].iloc[-1]  # bb_lower → BB_lower
@@ -203,7 +205,7 @@ def analyze_5m_entry(df: pd.DataFrame, trend_15m: Dict, config: HybridConfig) ->
         entry_score += 2.5
         reasons.append("5분봉: BB 하단 근처 (BUY 유리)")
     elif bb_position > 0.8:  # 상단 밴드 근처 (SELL 유리)
-        entry_score += 0
+        entry_score += 0.5  # 0 → 0.5로 조정 (SELL 신호 증가)
         reasons.append("5분봉: BB 상단 근처 (SELL 유리)")
     elif 0.3 <= bb_position <= 0.7:  # 중앙 밴드
         entry_score += 1.5
@@ -225,13 +227,13 @@ def analyze_5m_entry(df: pd.DataFrame, trend_15m: Dict, config: HybridConfig) ->
             entry_score += 2
             reasons.append("5분봉: MACD 상승 모멘텀")
         elif macd_line < macd_signal and macd_hist < prev_macd_hist:
-            entry_score += 0
+            entry_score += 0.5  # 0 → 0.5로 조정 (SELL 신호 증가)
             reasons.append("5분봉: MACD 하락 모멘텀")
         elif macd_line > macd_signal:
             entry_score += 1.5
             reasons.append("5분봉: MACD 상승 신호")
         elif macd_line < macd_signal:
-            entry_score += 0.5
+            entry_score += 1.0  # 0.5 → 1.0으로 조정 (SELL 신호 증가)
             reasons.append("5분봉: MACD 하락 신호")
         else:
             entry_score += 1.0
@@ -246,13 +248,13 @@ def analyze_5m_entry(df: pd.DataFrame, trend_15m: Dict, config: HybridConfig) ->
         entry_score += 2
         reasons.append("5분봉: StochRSI 과매도 (BUY 유리)")
     elif stoch_k > 80 and stoch_d > 80:
-        entry_score += 0
+        entry_score += 0.5  # 0 → 0.5로 조정 (SELL 신호 증가)
         reasons.append("5분봉: StochRSI 과매수 (SELL 유리)")
     elif stoch_k < 30 and stoch_d < 30:
         entry_score += 1.5
         reasons.append("5분봉: StochRSI 약한 과매도")
     elif stoch_k > 70 and stoch_d > 70:
-        entry_score += 0.5
+        entry_score += 1.0  # 0.5 → 1.0으로 조정 (SELL 신호 증가)
         reasons.append("5분봉: StochRSI 약한 과매수")
     else:
         entry_score += 1.0
@@ -281,7 +283,7 @@ def analyze_5m_entry(df: pd.DataFrame, trend_15m: Dict, config: HybridConfig) ->
         entry_score += 1
         reasons.append("5분봉: 상승 모멘텀")
     elif price_change_5 < -0.3 and price_change_1 < -0.05:
-        entry_score += 0
+        entry_score += 0.5  # 0 → 0.5로 조정 (SELL 신호 증가)
         reasons.append("5분봉: 하락 모멘텀")
     elif abs(price_change_5) < 0.1:
         entry_score += 0.5
@@ -294,12 +296,12 @@ def analyze_5m_entry(df: pd.DataFrame, trend_15m: Dict, config: HybridConfig) ->
     entry_strength = entry_score / max_score if max_score > 0 else 0.0
     
     # 진입 액션 결정 (BUY/SELL 균형) - 더 공격적
-    if entry_strength > 0.4:  # 0.5 → 0.4로 더 완화
+    if entry_strength > 0.6:  # 0.4 → 0.6으로 상향 조정 (BUY 신호 감소)
         action = "BUY"
-    elif entry_strength < 0.4:  # 0.5 → 0.4로 더 완화 (SELL 신호 증가)
+    elif entry_strength < 0.4:  # 0.4 유지 (SELL 신호 증가)
         action = "SELL"
     else:
-        action = "WAIT"
+        action = "NEUTRAL"  # 0.4-0.6 구간은 중립
     
     # 횡보장 감지 및 대응
     volatility = df['volatility'].iloc[-1]

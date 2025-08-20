@@ -6,6 +6,10 @@ def ma(series: pd.Series, length: int, mode: str = "ema") -> pd.Series:
         return series.rolling(length).mean()
     return series.ewm(span=length, adjust=False).mean()
 
+def calculate_ema(series: pd.Series, length: int) -> pd.Series:
+    """EMA 계산 함수"""
+    return series.ewm(span=length, adjust=False).mean()
+
 def add_mas(df: pd.DataFrame, cfg_ma=("ema",50), cfg_ma2=("ema",200)) -> pd.DataFrame:
     mode1, L1 = cfg_ma
     mode2, L2 = cfg_ma2

@@ -4,11 +4,21 @@
 """
 
 import threading
+import pandas as pd
 from typing import Dict, Any
 from data.binance_websocket import BinanceWebSocket
 from signals.integrated_strategy import IntegratedStrategy
 from signals.timing_strategy import TimingStrategy
 from config.integrated_config import IntegratedConfig
+from data.loader import build_df
+
+
+class DataLoader:
+    """데이터 로더 클래스"""
+    
+    def load_klines(self, symbol: str, interval: str, limit: int) -> pd.DataFrame:
+        """K라인 데이터 로드"""
+        return build_df(symbol, interval, limit)
 
 
 class TraderCore:
@@ -29,6 +39,7 @@ class TraderCore:
         self.websocket = BinanceWebSocket(self.config.symbol)
         self.integrated_strategy = IntegratedStrategy(self.config)
         self.timing_strategy = TimingStrategy(self.integrated_strategy.timing_cfg)
+        self.data_loader = DataLoader()
     
     def _init_threads(self):
         """스레드 초기화"""
@@ -54,3 +65,7 @@ class TraderCore:
     def get_timing_strategy(self) -> TimingStrategy:
         """타이밍 전략 인스턴스 반환"""
         return self.timing_strategy
+    
+    def get_data_loader(self) -> DataLoader:
+        """데이터 로더 인스턴스 반환"""
+        return self.data_loader

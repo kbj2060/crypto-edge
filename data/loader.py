@@ -33,7 +33,7 @@ def calculate_atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
 def build_df(
     symbol: str,
     interval: str = "5m",
-    limit: int = 500,
+    limit: int = 1500,
     atr_len: int = 14,
     market: Literal["spot", "futures"] = "futures",
     price_source: Literal["last", "mark"] = "last",
@@ -93,7 +93,7 @@ def build_df(
 def get_latest_data(
     symbol: str,
     interval: str = "5m",
-    limit: int = 100,
+    limit: int = 200,
     market: Literal["spot", "futures"] = "futures"
 ) -> pd.DataFrame:
     """

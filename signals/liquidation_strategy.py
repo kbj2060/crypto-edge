@@ -20,13 +20,13 @@ class LiquidationConfig:
     sell_liquidation_ratio: float = 0.7  # SELL 청산 비율 임계값
     volume_spike_threshold: float = 2.0  # 거래량 급증 임계값
     
-    # 리스크 관리
+    # 리스크 관리 (ATR 대신 고정 비율 사용)
     max_position_size: float = 0.1  # 최대 포지션 크기 (10%)
-    stop_loss_atr: float = 2.0  # ATR 기반 손절
-    take_profit_atr: float = 3.0  # ATR 기반 익절
+    stop_loss_percent: float = 0.02  # 고정 손절 비율 (2%)
+    take_profit_percent: float = 0.04  # 고정 익절 비율 (4%)
 
 class LiquidationStrategy:
-    """청산 데이터 기반 신호 전략"""
+    """청산 데이터 기반 신호 전략 (기술적 지표 제거)"""
     
     def __init__(self, config: LiquidationConfig):
         self.config = config
@@ -36,9 +36,8 @@ class LiquidationStrategy:
     def analyze_liquidation_signal(self, 
                                     liquidation_stats: Dict, 
                                     volume_analysis: Dict,
-                                    current_price: float,
-                                    atr: float) -> Optional[Dict]:
-        """청산 데이터 기반 신호 분석"""
+                                    current_price: float) -> Optional[Dict]:
+        """청산 데이터 기반 신호 분석 (ATR 제거)"""
         
         # 신호 쿨다운 체크
         if (self.last_signal_time and 
@@ -50,7 +49,7 @@ class LiquidationStrategy:
             return None
         
         # 신호 생성
-        signal = self._generate_signal(liquidation_stats, volume_analysis, current_price, atr)
+        signal = self._generate_signal(liquidation_stats, volume_analysis, current_price)
         
         if signal:
             self.last_signal_time = datetime.now()
@@ -76,9 +75,8 @@ class LiquidationStrategy:
     def _generate_signal(self, 
                         liquidation_stats: Dict, 
                         volume_analysis: Dict,
-                        current_price: float,
-                        atr: float) -> Optional[Dict]:
-        """신호 생성"""
+                        current_price: float) -> Optional[Dict]:
+        """신호 생성 (ATR 제거)"""
         
         buy_ratio = liquidation_stats['buy_ratio']
         sell_ratio = liquidation_stats['sell_ratio']
@@ -88,7 +86,7 @@ class LiquidationStrategy:
         # 신뢰도 계산
         confidence = self._calculate_confidence(liquidation_stats, volume_analysis)
         
-        # 최소 신뢰도 체크 (추가)
+        # 최소 신뢰도 체크
         if confidence < 0.3:  # 기본 최소 신뢰도 30%
             return None
         
@@ -97,7 +95,7 @@ class LiquidationStrategy:
             total_count >= self.config.min_liquidation_count):
             
             signal = self._create_buy_signal(
-                current_price, atr, confidence, liquidation_stats, volume_analysis
+                current_price, confidence, liquidation_stats, volume_analysis
             )
             return signal
         
@@ -106,42 +104,41 @@ class LiquidationStrategy:
               total_count >= self.config.min_liquidation_count):
             
             signal = self._create_sell_signal(
-                current_price, atr, confidence, liquidation_stats, volume_analysis
+                current_price, confidence, liquidation_stats, volume_analysis
             )
             return signal
         
         return None
     
     def _calculate_confidence(self, liquidation_stats: Dict, volume_analysis: Dict) -> float:
-        """신뢰도 계산"""
+        """신뢰도 계산 (청산 데이터와 거래량에만 집중)"""
         confidence = 0.0
         
-        # 청산 강도 (0-0.4)
+        # 청산 강도 (0-0.5)
         liquidation_intensity = min(liquidation_stats['total_count'] / 10.0, 1.0)
-        confidence += liquidation_intensity * 0.4
+        confidence += liquidation_intensity * 0.5
         
         # 거래량 급증 강도 (0-0.3)
         volume_intensity = min(volume_analysis['volume_ratio'] / 3.0, 1.0)
         confidence += volume_intensity * 0.3
         
-        # 청산 가치 강도 (0-0.3)
+        # 청산 가치 강도 (0-0.2)
         value_intensity = min(liquidation_stats['total_value'] / 1000000.0, 1.0)
-        confidence += value_intensity * 0.3
+        confidence += value_intensity * 0.2
         
         return min(confidence, 1.0)
     
     def _create_buy_signal(self, 
                           current_price: float, 
-                          atr: float, 
                           confidence: float,
                           liquidation_stats: Dict,
                           volume_analysis: Dict) -> Dict:
-        """BUY 신호 생성"""
+        """BUY 신호 생성 (고정 비율 사용)"""
         
-        # 리스크 관리 레벨 계산
-        stop_loss = current_price - (atr * self.config.stop_loss_atr)
-        take_profit1 = current_price + (atr * self.config.take_profit_atr)
-        take_profit2 = current_price + (atr * self.config.take_profit_atr * 1.5)
+        # 고정 비율 기반 리스크 관리
+        stop_loss = current_price * (1 - self.config.stop_loss_percent)
+        take_profit1 = current_price * (1 + self.config.take_profit_percent)
+        take_profit2 = current_price * (1 + self.config.take_profit_percent * 1.5)
         
         # 리스크/보상 비율
         risk = current_price - stop_loss
@@ -158,25 +155,23 @@ class LiquidationStrategy:
             'take_profit2': take_profit2,
             'confidence': confidence,
             'risk_reward': risk_reward,
-            'atr': atr,
-            'signal_type': 'liquidation',
+            'signal_type': 'ENHANCED_LIQUIDATION',
             'liquidation_stats': liquidation_stats,
             'volume_analysis': volume_analysis,
-            'reason': f"BUY 청산 급증: {liquidation_stats['buy_count']}/{liquidation_stats['total_count']} | 거래량: {volume_analysis['volume_ratio']:.1f}x"
+            'reason': f"BUY 청산 급증: {liquidation_stats['buy_count']}/{liquidation_stats['total_count']} | 거래량: {volume_analysis['volume_ratio']:.1f}x | 청산가치: ${liquidation_stats['total_value']:,.0f}"
         }
     
     def _create_sell_signal(self, 
                            current_price: float, 
-                           atr: float, 
                            confidence: float,
                            liquidation_stats: Dict,
                            volume_analysis: Dict) -> Dict:
-        """SELL 신호 생성"""
+        """SELL 신호 생성 (고정 비율 사용)"""
         
-        # 리스크 관리 레벨 계산
-        stop_loss = current_price + (atr * self.config.stop_loss_atr)
-        take_profit1 = current_price - (atr * self.config.take_profit_atr)
-        take_profit2 = current_price - (atr * self.config.take_profit_atr * 1.5)
+        # 고정 비율 기반 리스크 관리
+        stop_loss = current_price * (1 + self.config.stop_loss_percent)
+        take_profit1 = current_price * (1 - self.config.take_profit_percent)
+        take_profit2 = current_price * (1 - self.config.take_profit_percent * 1.5)
         
         # 리스크/보상 비율
         risk = stop_loss - current_price
@@ -193,15 +188,14 @@ class LiquidationStrategy:
             'take_profit2': take_profit2,
             'confidence': confidence,
             'risk_reward': risk_reward,
-            'atr': atr,
-            'signal_type': 'liquidation',
+            'signal_type': 'ENHANCED_LIQUIDATION',
             'liquidation_stats': liquidation_stats,
             'volume_analysis': volume_analysis,
-            'reason': f"SELL 청산 급증: {liquidation_stats['sell_count']}/{liquidation_stats['total_count']} | 거래량: {volume_analysis['volume_ratio']:.1f}x"
+            'reason': f"SELL 청산 급증: {liquidation_stats['sell_count']}/{liquidation_stats['total_count']} | 거래량: {volume_analysis['volume_ratio']:.1f}x | 청산가치: ${liquidation_stats['total_value']:,.0f}"
         }
     
     def get_market_sentiment(self, liquidation_stats: Dict, volume_analysis: Dict) -> Dict:
-        """시장 심리 분석"""
+        """시장 심리 분석 (청산 데이터와 거래량에만 집중)"""
         
         buy_ratio = liquidation_stats['buy_ratio']
         sell_ratio = liquidation_stats['sell_ratio']
@@ -235,5 +229,7 @@ class LiquidationStrategy:
             'overall_sentiment': overall_sentiment,
             'buy_ratio': buy_ratio,
             'sell_ratio': sell_ratio,
-            'volume_trend': volume_trend
+            'volume_trend': volume_trend,
+            'liquidation_intensity': liquidation_stats['total_count'],
+            'volume_intensity': volume_analysis['volume_ratio']
         }

@@ -4,7 +4,7 @@ from dataclasses import dataclass
 class RunConfig:
     symbol: str = "ETHUSDT"
     interval: str = "15m"
-    limit: int = 1000
+    limit: int = 1500
     vpvr_bins: int = 50
     vpvr_lookback: int = 300
 
