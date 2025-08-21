@@ -131,3 +131,8 @@ class IntegratedConfig:
         self.adv_liq_post_spike_decay_ratio = 0.8
         self.adv_liq_stop_atr = 0.35
         self.adv_liq_tp2_sigma = 0.5
+        
+        # 외부 서버 설정
+        self.external_server_url = "http://158.180.82.65"  # 외부 서버 URL (단순 엔드포인트 /liquidations)
+        self.external_api_key = None  # 외부 서버 API 키 (필요시 설정)
+        self.initial_data_hours = 24  # 초기 데이터 로딩 시 몇 시간 전까지 가져올지

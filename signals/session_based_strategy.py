@@ -1388,11 +1388,11 @@ class SessionBasedStrategy:
             session_type = self._get_session_type(session_start)
             print(f"🔍 세션: {session_start.strftime('%H:%M')} UTC ({session_type})")
             
-            # --- OR 로그 (간단하게) ---
-            if or_info:
-                print(f"🎯 OR: {or_info['range']:.1f} ({or_info['timeframe']})")
-            else:
-                print("ℹ️ OR 없음")
+            # # --- OR 로그 (간단하게) ---
+            # if or_info:
+            #     print(f"🎯 OR: {or_info['range']:.1f} ({or_info['timeframe']})")
+            # else:
+            #     print("ℹ️ OR 없음")
             
             # ATR 계산
             atr = calculate_atr(df_s, self.config.atr_len)
