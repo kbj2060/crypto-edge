@@ -8,10 +8,15 @@
 
 import pandas as pd
 import numpy as np
-from typing import Dict, List, Any, Optional, Tuple, Literal
+from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import pytz
+try:
+    from zoneinfo import ZoneInfo
+except ImportError:
+    # Python < 3.9 fallback
+    from backports.zoneinfo import ZoneInfo
 from indicators.vpvr import vpvr_key_levels
 from indicators.moving_averages import calculate_ema
 from indicators.atr import calculate_atr
@@ -35,42 +40,41 @@ class SessionConfig:
     atr_len: int = 14
     trend_filter_ma: int = 50
     
-    # 플레이북 A: 오프닝 드라이브 풀백
-    min_drive_return_R: float = 0.8  # OR 돌파 후 최소 0.8R 이상 진행 (ORH와 EMA/VWAP/ATR 기반)
-    pullback_depth_atr: Tuple[float, float] = (0.6, 1.4)  # 풀백 깊이(ATR배) 허용 범위
+    # 플레이북 A: 오프닝 드라이브 풀백 (임계값 완화)
+    min_drive_return_R: float = 0.6  # OR 돌파 후 최소 0.6R 이상 진행 (0.8 → 0.6)
+    pullback_depth_atr: Tuple[float, float] = (0.5, 1.6)  # 풀백 깊이(ATR배) 허용 범위 확대
     trigger_type: str = "close_reject"  # 'close_reject' 또는 'wick_touch'
-    stop_atr_mult: float = 1.1  # 스탑 = 엔트리 기준 무효화/스윙 아래 + 1.1×ATR
-    tp1_R: float = 1.5  # 1차 청산 R
+    stop_atr_mult: float = 1.0  # 스탑 = 엔트리 기준 무효화/스윙 아래 + 1.0×ATR (1.1 → 1.0)
+    tp1_R: float = 1.2  # 1차 청산 R (1.5 → 1.2)
     tp2_to_level: str = "OR_ext|PrevHigh|VWAP"  # 2차 목표 우선순위
     partial_out: float = 0.5  # 1차에서 절반 청산
     max_hold_min: int = 60  # 최대 보유시간(분)
-    max_slippage_pct: float = 0.02  # 허용 슬리피지(%) 초과 시 신호 무효
+    max_slippage_pct: float = 0.03  # 허용 슬리피지(%) 초과 시 신호 무효 (0.02 → 0.03)
     
-    # 플레이북 B: 유동성 스윕 & 리클레임
-    sweep_depth_atr_min: float = 0.3  # 레벨 하회/상회 최소 깊이(ATR배)
+    # 플레이북 B: 유동성 스윕 & 리클레임 (임계값 완화)
+    sweep_depth_atr_min: float = 0.2  # 레벨 하회/상회 최소 깊이(ATR배) (0.3 → 0.2)
     reclaim_close_rule: str = "close_above_level"  # 롱: 레벨 위 종가 마감
-    confirm_next_bar: bool = True  # 다음 봉이 레벨 위에서 지속 확인
-    stop_buffer_atr: float = 0.6  # 스탑 버퍼
-    tp1_to: str = "VWAP"  # 1차 목표
-    tp2_to: str = "opposite_range_edge"  # 2차 목표
+    stop_buffer_atr: float = 0.5  # 스탑 버퍼 (0.6 → 0.5)
+    tp1_to_b: str = "VWAP"  # 1차 목표 (Play B용)
+    tp2_to_b: str = "opposite_range_edge"  # 2차 목표 (Play B용)
     
-    # 플레이북 C: VWAP 리버전(평균회귀) 페이드
-    sd_k_enter: float = 2.0  # 진입 트리거: 봉 종가가 ±2σ 밖에서 마감
-    sd_k_reenter: float = 1.5  # 그 다음 봉 종가가 ±1.5σ 안쪽으로 재진입
-    stop_outside_sd_k: float = 2.5  # 스탑: ±2.5σ 바깥
-    tp1_to: str = "VWAP"  # 1차 목표: VWAP 터치
-    tp2_to_band: float = 0.5  # 2차: 반대측 0.5σ
+    # 플레이북 C: VWAP 리버전(평균회귀) 페이드 (임계값 완화)
+    sd_k_enter: float = 1.8  # 진입 트리거: 봉 종가가 ±1.8σ 밖에서 마감 (2.0 → 1.8)
+    sd_k_reenter: float = 1.3  # 그 다음 봉 종가가 ±1.3σ 안쪽으로 재진입 (1.5 → 1.3)
+    stop_outside_sd_k: float = 2.2  # 스탑: ±2.2σ 바깥 (2.5 → 2.2)
+    tp1_to_c: str = "VWAP"  # 1차 목표: VWAP 터치 (Play C용)
+    tp2_to_c: float = 0.4  # 2차: 반대측 0.4σ (0.5 → 0.4)
     trend_filter_slope: float = 0.0  # SMA50 기울기 > 0.0이면 숏페이드 보수적
     
-    # 단계형 신호 설정
-    entry_thresh: float = 0.70  # Entry 임계점
-    setup_thresh: float = 0.50  # Setup 임계점
-    headsup_thresh: float = 0.35  # Heads-up 임계점
+    # 단계형 신호 설정 (임계값 완화로 시그널 생성 증가)
+    entry_thresh: float = 0.60  # Entry 임계점 (0.70 → 0.60)
+    setup_thresh: float = 0.40  # Setup 임계점 (0.50 → 0.40)
+    headsup_thresh: float = 0.25  # Heads-up 임계점 (0.35 → 0.25)
     
-    # Gate 설정
-    min_sweep_depth_atr: float = 0.2  # 최소 스윕 깊이 (Play B)
-    max_slippage_gate: float = 0.03  # 최대 허용 슬리피지 (Gate)
-    min_volume_ratio: float = 0.7  # 최소 거래량 비율 (Gate)
+    # Gate 설정 (임계값 완화로 게이트 통과 증가)
+    min_sweep_depth_atr: float = 0.15  # 최소 스윕 깊이 (0.2 → 0.15)
+    max_slippage_gate: float = 0.05  # 최대 허용 슬리피지 (0.03 → 0.05)
+    min_volume_ratio: float = 0.5  # 최소 거래량 비율 (0.7 → 0.5)
     
     # Score 가중치
     weight_direction: float = 0.25  # 방향 정렬
@@ -81,10 +85,10 @@ class SessionConfig:
     weight_orderflow: float = 0.20  # 오더플로우
     weight_risk: float = 0.10  # 리스크 적정성
     
-    # --- 설정 추가 ---
-    strict_or: bool = True        # True면 OR 확정 전 Play A 완전 비활성
-    min_or_bars: int = 15          # 부분 OR 최소 봉 수
-    partial_or_tier_cap: str = "SETUP"  # 부분 OR일 때 최대 티어: "HEADSUP"|"SETUP"|"ENTRY"
+    # --- 설정 추가 --- (임계값 완화)
+    strict_or: bool = False       # False로 변경하여 OR 확정 전에도 Play A 활성화
+    min_or_bars: int = 6          # 부분 OR 최소 봉 수 (8 → 6)
+    partial_or_tier_cap: str = "ENTRY"  # 부분 OR일 때 최대 티어를 ENTRY로 상향 (SETUP → ENTRY)
 
 
 class SessionBasedStrategy:
@@ -106,7 +110,7 @@ class SessionBasedStrategy:
         if df.empty:
             return np.nan, np.nan
         # 안전장치: tz-aware & 정렬
-        assert df.index.tzinfo is not None, "df.index must be tz-aware(UTC)"
+        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
         df = df.sort_index()
 
         # 세션 구간 반개구간으로 슬라이스 (다음 세션 첫 봉 중복 방지)
@@ -126,16 +130,37 @@ class SessionBasedStrategy:
         std = float(price.expanding().std(ddof=0).iloc[-1])
         return vwap, std
     
+    def _next_session_start(self, session_start_utc: datetime) -> datetime:
+        """session_start 기준, '다음' 런던/뉴욕 오픈 중 가장 이른 UTC 시각"""
+        assert session_start_utc.tzinfo is not None
+        day_utc = session_start_utc
+
+        def local_open_utc(d, tz, h, m):
+            return datetime(d.year, d.month, d.day, h, m, tzinfo=ZoneInfo(tz)).astimezone(ZoneInfo("UTC"))
+
+        # 후보: 같은 날/다음 날의 런던 08:00, 뉴욕 09:30 (현지 기준, DST 자동)
+        cands = []
+        for off in (0, 1):
+            d_ny = (day_utc + timedelta(days=off)).astimezone(ZoneInfo("America/New_York")).date()
+            d_ln = (day_utc + timedelta(days=off)).astimezone(ZoneInfo("Europe/London")).date()
+            cands += [
+                local_open_utc(d_ln, "Europe/London", 8, 0),
+                local_open_utc(d_ny, "America/New_York", 9, 30),
+            ]
+        # session_start보다 이후인 것 중 최솟값
+        nxt = min(t for t in cands if t > session_start_utc)
+        return nxt
+
     def _session_slice(self, df: pd.DataFrame, session_start: datetime) -> pd.DataFrame:
-        """세션 시작부터 현재까지의 데이터 슬라이스"""
+        """세션 시작부터 다음 세션 시작 전까지의 데이터 슬라이스 (세션 경계 정확)"""
         if df.empty:
             return df
-        assert df.index.tzinfo is not None, "df.index must be tz-aware(UTC)"
+        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
         df = df.sort_index()
         
-        # 세션 시작부터 현재까지의 데이터만 필터링
-        mask = df.index >= session_start
-        return df.loc[mask]
+        session_end = self._next_session_start(session_start)
+        # [start, end) 반개구간
+        return df.loc[(df.index >= session_start) & (df.index < session_end)]
     
     def process_liquidation_stream(self, liquidation_events: List[Dict], 
                                     current_time: datetime) -> Dict[str, Any]:
@@ -183,7 +208,7 @@ class SessionBasedStrategy:
     
     def check_gates(self, df: pd.DataFrame, session_vwap: float, 
                     opening_range: Dict[str, float], atr: float, 
-                    playbook: str, side: str) -> Tuple[bool, Dict[str, Any]]:
+                    playbook: str, side: str, key_levels: Dict[str, float] = None) -> Tuple[bool, Dict[str, Any]]:
         """Gate(필수 최소 조건) 확인"""
         try:
             # DataFrame이 비어있거나 인덱싱이 불가능한 경우 체크
@@ -212,7 +237,11 @@ class SessionBasedStrategy:
                 direction_gate_a = ema_fast.iloc[-1] < ema_slow.iloc[-1]
                 direction_gate_b = current_price < session_vwap
             
-            direction_gate = direction_gate_a or direction_gate_b
+            # A 플레이북도 OR 조건으로 완화 (시그널 생성 증가)
+            if playbook == 'A':
+                direction_gate = direction_gate_a or direction_gate_b
+            else:
+                direction_gate = direction_gate_a or direction_gate_b
             gate_results['direction'] = direction_gate
             
             # === 구조 게이트 ===
@@ -227,22 +256,50 @@ class SessionBasedStrategy:
                     else:
                         structure_gate = current_low < opening_range['low']
             elif playbook == 'B':  # 유동성 스윕 & 리클레임
-                # opening_range가 유효한지 확인
-                if not opening_range or 'high' not in opening_range or 'low' not in opening_range:
+                # 키 레벨 스윕 확인 (OR이 아닌 prev_day_high/low 등)
+                pdh = (key_levels or {}).get('prev_day_high')
+                pdl = (key_levels or {}).get('prev_day_low')
+                sweep_depth = 0.0
+                
+                if side == 'LONG' and pdl is not None:
+                    sweep_depth = max(0.0, (pdl - current_low) / atr) if atr > 0 else 0.0
+                    # 스윕 깊이 조건
+                    sweep_condition = sweep_depth >= self.config.min_sweep_depth_atr
+                    
+                    # 리클레임 확증: 현재 저가가 레벨 근처 (더 관대하게)
+                    reclaim_condition = current_low >= (pdl - atr * 0.5)  # 레벨에서 0.5ATR 이내
+                    
+                    structure_gate = sweep_condition and reclaim_condition
+                    
+                elif side == 'SHORT' and pdh is not None:
+                    sweep_depth = max(0.0, (current_high - pdh) / atr) if atr > 0 else 0.0
+                    # 스윕 깊이 조건
+                    sweep_condition = sweep_depth >= self.config.min_sweep_depth_atr
+                    
+                    # 리클레임 확증: 현재 고가가 레벨 근처 (더 관대하게)
+                    reclaim_condition = current_high <= (pdh + atr * 0.5)  # 레벨에서 0.5ATR 이내
+                    
+                    structure_gate = sweep_condition and reclaim_condition
+                    
+                else:
                     structure_gate = False
-                else:
-                    # 키 레벨 스윕 확인 (간단한 구현)
+                
+                gate_results['sweep_atr'] = max(0.0, sweep_depth)
+                gate_results['reclaim_confirmed'] = structure_gate  # 리클레임 확증 상태 저장
+            elif playbook == 'C':  # VWAP 리버전 페이드 (임계값 완화)
+                if self.session_std is not None and self.session_std > 0:
                     if side == 'LONG':
-                        sweep_depth = (opening_range['low'] - current_low) / atr if atr > 0 else 0
-                        structure_gate = sweep_depth >= self.config.min_sweep_depth_atr
+                        # -2σ → -1.8σ로 완화 (설정값 사용)
+                        structure_gate = current_price < (session_vwap - self.config.sd_k_enter * self.session_std)
                     else:
-                        sweep_depth = (current_high - opening_range['high']) / atr if atr > 0 else 0
-                        structure_gate = sweep_depth >= self.config.min_sweep_depth_atr
-            elif playbook == 'C':  # VWAP 리버전 페이드
-                if side == 'LONG':
-                    structure_gate = current_price < (session_vwap - 2 * self.session_std)
+                        # +2σ → +1.8σ로 완화 (설정값 사용)
+                        structure_gate = current_price > (session_vwap + self.config.sd_k_enter * self.session_std)
                 else:
-                    structure_gate = current_price > (session_vwap + 2 * self.session_std)
+                    # session_std가 없을 때는 VWAP 기준으로만 판단 (더 관대하게)
+                    if side == 'LONG':
+                        structure_gate = current_price < session_vwap * 0.998  # VWAP 대비 0.2% 하락 (0.5% → 0.2%)
+                    else:
+                        structure_gate = current_price > session_vwap * 1.002  # VWAP 대비 0.2% 상승 (0.5% → 0.2%)
             
             gate_results['structure'] = structure_gate
             
@@ -289,7 +346,8 @@ class SessionBasedStrategy:
     
     def calculate_score(self, df: pd.DataFrame, session_vwap: float,
                         opening_range: Dict[str, float], atr: float,
-                        playbook: str, side: str, gate_results: Dict[str, Any]) -> float:
+                        playbook: str, side: str, gate_results: Dict[str, Any], 
+                        current_time: datetime, key_levels: Dict[str, float] = None) -> float:
         """Score(가중치 합산) 계산"""
         try:
             current_price = df['close'].iloc[-1]
@@ -320,17 +378,80 @@ class SessionBasedStrategy:
                     breakout_strength = (opening_range['low'] - current_low) / atr if atr > 0 else 0
                 breakout_score = min(breakout_strength, 1.0) * self.config.weight_breakout_sweep
             elif playbook == 'B':  # 스윕
-                sweep_depth = gate_results.get('slippage_value', 0) * 100  # %를 ATR로 변환
-                breakout_score = min(sweep_depth / atr, 1.0) * self.config.weight_breakout_sweep if atr > 0 else 0
+                # 스윕 깊이를 gate_results에서 가져와서 사용
+                sweep_atr = float(gate_results.get('sweep_atr', 0.0))
+                breakout_score = min(sweep_atr, 1.0) * self.config.weight_breakout_sweep
             else:  # Play C
-                breakout_score = 0.15 * self.config.weight_breakout_sweep  # 기본값
+                # VWAP 리버전 강도 계산 (VWAP에서의 거리 기반)
+                if side == 'LONG':
+                    # 롱: VWAP 아래에서의 거리 (음수일 때 더 강한 리버전)
+                    vwap_distance = (current_price - session_vwap) / session_vwap if session_vwap > 0 else 0
+                    # VWAP 아래에 있을 때 가점 (0.2% 이하)
+                    if vwap_distance < -0.002:
+                        breakout_score = min(abs(vwap_distance) * 50, 1.0) * self.config.weight_breakout_sweep
+                    else:
+                        breakout_score = 0.1 * self.config.weight_breakout_sweep
+                else:
+                    # 숏: VWAP 위에서의 거리 (양수일 때 더 강한 리버전)
+                    vwap_distance = (current_price - session_vwap) / session_vwap if session_vwap > 0 else 0
+                    # VWAP 위에 있을 때 가점 (0.2% 이상)
+                    if vwap_distance > 0.002:
+                        breakout_score = min(vwap_distance * 50, 1.0) * self.config.weight_breakout_sweep
+                    else:
+                        breakout_score = 0.1 * self.config.weight_breakout_sweep
             
             score += breakout_score
             
             # === 풀백 품질 (0.15) ===
             if playbook == 'A':
-                # 풀백 깊이 계산 (간단한 구현)
-                pullback_depth = 0.8  # 기본값, 실제로는 계산 필요
+                # 풀백 깊이 계산 (실제 값 사용)
+                if side == 'LONG' and 'high' in opening_range:
+                    # 롱: OR 돌파 후 고점에서 풀백까지의 깊이
+                    or_breakout_mask = df['high'] > opening_range['high']
+                    if or_breakout_mask.any():
+                        post_breakout_df = df[or_breakout_mask]
+                        if not post_breakout_df.empty:
+                            drive_high = post_breakout_df['high'].max()
+                            drive_high_idx = post_breakout_df['high'].idxmax()
+                            post_high_mask = df.index > drive_high_idx
+                            if post_high_mask.any():
+                                post_high_df = df[post_high_mask]
+                                pullback_low = post_high_df['low'].min()
+                                if not pd.isna(pullback_low):
+                                    pullback_depth = (drive_high - pullback_low) / atr
+                                else:
+                                    pullback_depth = 0.8  # 기본값
+                            else:
+                                pullback_depth = 0.8  # 기본값
+                        else:
+                            pullback_depth = 0.8  # 기본값
+                    else:
+                        pullback_depth = 0.8  # 기본값
+                elif side == 'SHORT' and 'low' in opening_range:
+                    # 숏: OR 이탈 후 저점에서 풀백까지의 깊이
+                    or_breakdown_mask = df['low'] < opening_range['low']
+                    if or_breakdown_mask.any():
+                        post_breakdown_df = df[or_breakdown_mask]
+                        if not post_breakdown_df.empty:
+                            drive_low = post_breakdown_df['low'].min()
+                            drive_low_idx = post_breakdown_df['low'].idxmin()
+                            post_low_mask = df.index > drive_low_idx
+                            if post_low_mask.any():
+                                post_low_df = df[post_low_mask]
+                                pullback_high = post_low_df['high'].max()
+                                if not pd.isna(pullback_high):
+                                    pullback_depth = (pullback_high - drive_low) / atr
+                                else:
+                                    pullback_depth = 0.8  # 기본값
+                            else:
+                                pullback_depth = 0.8  # 기본값
+                        else:
+                            pullback_depth = 0.8  # 기본값
+                    else:
+                        pullback_depth = 0.8  # 기본값
+                else:
+                    pullback_depth = 0.8  # 기본값
+                
                 # 가우시안 스코어: 0.4~1.6×ATR 범위에 가까울수록 가점
                 optimal_depth = 1.0
                 depth_score = np.exp(-((pullback_depth - optimal_depth) ** 2) / 0.5)
@@ -341,34 +462,132 @@ class SessionBasedStrategy:
             score += pullback_score
             
             # === 기준선 근접/복귀 (0.10) ===
+            baseline_score = 0.0
+            
             if side == 'LONG':
+                # 롱: 저가가 기준선에 근접하는지 확인
                 ema_touch = abs(current_low - ema_slow.iloc[-1]) <= atr * 0.3
                 vwap_touch = abs(current_low - session_vwap) <= atr * 0.3
+                
+                # 추가: 종가가 기준선 위에 있는지 확인
+                ema_above = current_price > ema_slow.iloc[-1]
+                vwap_above = current_price > session_vwap
+                
+                baseline_score = ((ema_touch or vwap_touch) and (ema_above or vwap_above)) * self.config.weight_baseline
             else:
+                # 숏: 고가가 기준선에 근접하는지 확인
                 ema_touch = abs(current_high - ema_slow.iloc[-1]) <= atr * 0.3
                 vwap_touch = abs(current_high - session_vwap) <= atr * 0.3
+                
+                # 추가: 종가가 기준선 아래에 있는지 확인
+                ema_below = current_price < ema_slow.iloc[-1]
+                vwap_below = current_price < session_vwap
+                
+                baseline_score = ((ema_touch or vwap_touch) and (ema_below or vwap_below)) * self.config.weight_baseline
             
-            baseline_score = (ema_touch or vwap_touch) * self.config.weight_baseline
             score += baseline_score
             
             # === 세션 타이밍 (0.10) ===
-            # 간단한 구현: 현재 시간이 세션 시작 ±90분 내인지 확인
-            timing_score = 0.4  # 기본값, 실제로는 계산 필요
+            # 세션 시작 시간과의 거리로 계산
+            if getattr(self, 'session_start_time', None):
+                now_ts = current_time or (df.index[-1] if hasattr(df.index, 'tz') else datetime.utcnow().replace(tzinfo=pytz.UTC))
+                time_diff = abs((now_ts - self.session_start_time).total_seconds() / 60)  # 분 단위
+                # 세션 시작 ±90분 내: 최고점, ±180분 내: 중간점, 그 외: 낮은 점수
+                if time_diff <= 90:
+                    timing_score = 1.0
+                elif time_diff <= 180:
+                    timing_score = 0.6
+                else:
+                    timing_score = 0.2
+            else:
+                timing_score = 0.4  # 기본값
             score += timing_score * self.config.weight_timing
             
             # === 오더플로우 (0.20) ===
-            # 간단한 구현: 기본값 사용
-            orderflow_score = 0.15 * self.config.weight_orderflow
+            # 실제 거래량과 청산 데이터 기반 계산
+            orderflow_score = 0.0
+            
+            # 거래량 급증 확인
+            if len(df) >= 20:
+                recent_volume = df['volume'].iloc[-1]
+                avg_volume = df['volume'].iloc[-20:].mean()
+                if avg_volume > 0:
+                    volume_surge = recent_volume / avg_volume
+                    if volume_surge >= 2.0:
+                        orderflow_score += 0.1  # 거래량 급증
+                    elif volume_surge >= 1.5:
+                        orderflow_score += 0.05  # 거래량 증가
+            
+            # 청산 데이터 활용 (key_levels에서 가져오거나 기본값 사용)
+            liquidation_data = (key_levels or {}).get('liquidation_data', {})
+            if liquidation_data:
+                # 롱/숏 청산량 비율 계산
+                long_vol = liquidation_data.get('long_volume', 0)
+                short_vol = liquidation_data.get('short_volume', 0)
+                total_vol = long_vol + short_vol
+                
+                if total_vol > 0:
+                    if side == 'LONG' and short_vol > long_vol:
+                        # 롱 신호에서 숏 청산이 많으면 가점
+                        orderflow_score += 0.1
+                    elif side == 'SHORT' and long_vol > short_vol:
+                        # 숏 신호에서 롱 청산이 많으면 가점
+                        orderflow_score += 0.1
+                    
+                    # 청산 강도 점수
+                    if side == 'LONG':
+                        intensity = liquidation_data.get('short_intensity', 0)
+                    else:
+                        intensity = liquidation_data.get('long_intensity', 0)
+                    
+                    if intensity > 0:
+                        # 청산 강도 캘리브레이션: 실제 분포 기반 Z-스코어
+                        # 기본값: 0.5 (중간), 1.0 (높음), 2.0 (매우 높음)
+                        if intensity >= 2.0:
+                            intensity_score = 0.1  # 매우 높은 청산 강도
+                        elif intensity >= 1.5:
+                            intensity_score = 0.08  # 높은 청산 강도
+                        elif intensity >= 1.0:
+                            intensity_score = 0.06  # 중간 이상 청산 강도
+                        elif intensity >= 0.5:
+                            intensity_score = 0.04  # 기본 청산 강도
+                        else:
+                            intensity_score = 0.02  # 낮은 청산 강도
+                        
+                        orderflow_score += intensity_score
+            else:
+                # 청산 데이터가 없는 경우 기본값
+                orderflow_score += 0.1
+            
+            orderflow_score = min(orderflow_score, 0.2)  # 최대 0.2
             score += orderflow_score
             
             # === 리스크 적정성 (0.10) ===
-            # 스탑 거리 계산 (간단한 구현)
-            stop_distance = atr * 1.0  # 기본값
+            # 실제 스탑 거리 계산
+            if side == 'LONG':
+                # 롱: 현재가에서 스탑까지의 거리
+                if 'entry_price' in locals() and 'stop_loss' in locals():
+                    stop_distance = entry_price - stop_loss
+                else:
+                    # 기본 스탑 거리 (ATR 기반)
+                    stop_distance = atr * 1.0
+            else:
+                # 숏: 스탑에서 현재가까지의 거리
+                if 'entry_price' in locals() and 'stop_loss' in locals():
+                    stop_distance = stop_loss - entry_price
+                else:
+                    # 기본 스탑 거리 (ATR 기반)
+                    stop_distance = atr * 1.0
+            
             risk_score = 0.0
-            if 0.6 <= stop_distance / atr <= 1.6:
-                risk_score = 1.0
-            elif 0.4 <= stop_distance / atr <= 2.0:
-                risk_score = 0.5
+            if atr > 0:
+                stop_atr_ratio = stop_distance / atr
+                if 0.6 <= stop_atr_ratio <= 1.6:
+                    risk_score = 1.0
+                elif 0.4 <= stop_atr_ratio <= 2.0:
+                    risk_score = 0.5
+                else:
+                    risk_score = 0.2
             
             risk_score *= self.config.weight_risk
             score += risk_score
@@ -380,13 +599,18 @@ class SessionBasedStrategy:
             return 0.0
     
     def analyze_staged_signal(self, df: pd.DataFrame, session_vwap: float,
-                             opening_range: Dict[str, float], atr: float,
-                             playbook: str, side: str) -> Optional[Dict[str, Any]]:
+                                opening_range: Dict[str, float], atr: float,
+                                playbook: str, side: str, key_levels: Dict[str, float] = None,
+                                current_time: datetime = None) -> Optional[Dict[str, Any]]:
         """단계형 신호 분석: Gate → Score → 등급/행동"""
         try:
+            # current_time이 없으면 현재 시간 사용
+            if current_time is None:
+                current_time = datetime.now().replace(tzinfo=pytz.UTC)
+            
             # === Gate 확인 ===
             gates_passed, gate_results = self.check_gates(
-                df, session_vwap, opening_range, atr, playbook, side
+                df, session_vwap, opening_range, atr, playbook, side, key_levels
             )
             
             if not gates_passed:
@@ -394,7 +618,7 @@ class SessionBasedStrategy:
             
             # === Score 계산 ===
             score = self.calculate_score(
-                df, session_vwap, opening_range, atr, playbook, side, gate_results
+                df, session_vwap, opening_range, atr, playbook, side, gate_results, current_time, key_levels
             )
             
             # === 등급/행동 결정 ===
@@ -502,27 +726,30 @@ class SessionBasedStrategy:
         
         if not completed_ors:
             # 완성된 OR가 없으면 어제 뉴욕 세션 반환
-            print(f" 세션 시작 시간: {yesterday_ny.strftime('%Y-%m-%d %H:%M:%S')} UTC (어제 뉴욕 - 기본값)")
             return yesterday_ny
         
         # 가장 최근에 완성된 OR의 세션 시작 시간 반환
         latest_completion, latest_start, latest_name = max(completed_ors, key=lambda x: x[0])
         
-        print(f" 세션 시작 시간: {latest_start.strftime('%Y-%m-%d %H:%M:%S')} UTC ({latest_name})")
-        print(f"   OR 완성 시간: {latest_completion.strftime('%Y-%m-%d %H:%M:%S')} UTC")
-        
         return latest_start
     
     def _get_session_type(self, session_start: datetime) -> str:
         """세션 시작 시간으로부터 세션 타입 식별"""
-        ny_session_time = datetime.strptime('13:30', '%H:%M').time()
-        london_session_time = datetime.strptime('07:00', '%H:%M').time()
+        # UTC 시간을 뉴욕/런던 현지시간으로 변환하여 판별
+        ny_tz = pytz.timezone('America/New_York')
+        london_tz = pytz.timezone('Europe/London')
         
-        session_time = session_start.time()
+        # UTC를 현지시간으로 변환
+        ny_local = session_start.astimezone(ny_tz)
+        london_local = session_start.astimezone(london_tz)
         
-        if session_time == ny_session_time:
+        # 현지시간 기준으로 세션 타입 판별
+        ny_session_hour = 9  # 뉴욕 9:30 AM
+        london_session_hour = 8  # 런던 8:00 AM
+        
+        if abs(ny_local.hour - ny_session_hour) <= 1:  # ±1시간 범위
             return "뉴욕"
-        elif session_time == london_session_time:
+        elif abs(london_local.hour - london_session_hour) <= 1:  # ±1시간 범위
             return "런던"
         else:
             return "알 수 없음"
@@ -533,7 +760,7 @@ class SessionBasedStrategy:
         """세션 구간 오프닝 레인지 계산 (반개구간, 정확히 OR 분만)"""
         if df.empty:
             return {}
-        assert df.index.tzinfo is not None, "df.index must be tz-aware(UTC)"
+        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
         df = df.sort_index()
 
         or_end = session_start + timedelta(minutes=self.config.or_minutes)
@@ -551,12 +778,19 @@ class SessionBasedStrategy:
             print(f"❌ OR 계산 오류: 유효하지 않은 high/low 값 - high: {h}, low: {l}")
             return {}
         
-        ready = (bars >= self.config.or_minutes)     # 완전 OR 확보?
-        partial = (not ready) and (bars >= self.config.min_or_bars)
+        # 타임프레임을 고려한 봉 수 계산
+        tf_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60}
+        tf_min = tf_map.get(self.config.timeframe, 1)
+        need_bars = max(1, int(np.ceil(self.config.or_minutes / tf_min)))
+        min_bars = max(1, int(np.ceil(self.config.min_or_bars / tf_min)))
+        
+        ready = (bars >= need_bars)     # 완전 OR 확보?
+        partial = (not ready) and (bars >= min_bars)
 
         return {
             "high": h, "low": l, "center": (h + l) / 2.0, "range": h - l,
-            "bars": bars, "ready": ready, "partial": partial
+            "bars": bars, "ready": ready, "partial": partial,
+            "need_bars": need_bars, "min_bars": min_bars, "timeframe": self.config.timeframe
         }
     
     def analyze_playbook_a_opening_drive_pullback(self, df: pd.DataFrame, 
@@ -583,7 +817,7 @@ class SessionBasedStrategy:
             if or_breakout_long:
                 # 추세 조건 확인 (롱)
                 trend_bullish = (ema_fast.iloc[-1] > ema_slow.iloc[-1] and 
-                               current_price > session_vwap)
+                                current_price > session_vwap)
                 
                 print(f"   🔍 롱 신호 분석: OR 돌파 ✅, 추세조건 {'✅' if trend_bullish else '❌'}")
                 
@@ -604,7 +838,7 @@ class SessionBasedStrategy:
             if or_breakdown_short:
                 # 추세 조건 확인 (숏)
                 trend_bearish = (ema_fast.iloc[-1] < ema_slow.iloc[-1] and 
-                               current_price < session_vwap)
+                                current_price < session_vwap)
                 
                 if trend_bearish:
                     # 숏 신호 로직
@@ -626,12 +860,19 @@ class SessionBasedStrategy:
             current_price = df['close'].iloc[-1]
             current_high = df['high'].iloc[-1]
             
-            # 최근 고점 찾기 (OR 돌파 이후)
-            recent_highs = df[df['high'] > opening_range['high']]['high']
-            if recent_highs.empty:
+            # OR 돌파 이후의 고점 찾기 (정확한 구간 산정)
+            or_breakout_mask = df['high'] > opening_range['high']
+            if not or_breakout_mask.any():
                 return None
             
-            drive_high = recent_highs.max()
+            # OR 돌파 이후 데이터만 필터링
+            post_breakout_df = df[or_breakout_mask]
+            if post_breakout_df.empty:
+                return None
+            
+            # OR 돌파 이후의 최고점
+            drive_high = post_breakout_df['high'].max()
+            drive_high_idx = post_breakout_df['high'].idxmax()
             
             # drive_R 재정의: ORH와 EMA/VWAP/ATR 기반
             orh = opening_range['high']
@@ -652,8 +893,14 @@ class SessionBasedStrategy:
                 print(f"      ❌ 최소 진행거리 부족")
                 return None
             
-            # 풀백 확인
-            pullback_low = df[df['high'] >= drive_high]['low'].min()
+            # 풀백 확인: 고점 이후의 저점 찾기
+            post_high_mask = df.index > drive_high_idx
+            if not post_high_mask.any():
+                return None
+            
+            post_high_df = df[post_high_mask]
+            pullback_low = post_high_df['low'].min()
+            
             if pd.isna(pullback_low):
                 print(f"      ❌ 풀백 데이터 없음")
                 return None
@@ -746,20 +993,34 @@ class SessionBasedStrategy:
             current_price = df['close'].iloc[-1]
             current_low = df['low'].iloc[-1]
             
-            # 최근 저점 찾기 (OR 이탈 이후)
-            recent_lows = df[df['low'] < opening_range['low']]['low']
-            if recent_lows.empty:
+            # OR 이탈 이후의 저점 찾기 (정확한 구간 산정)
+            or_breakdown_mask = df['low'] < opening_range['low']
+            if not or_breakdown_mask.any():
                 return None
             
-            drive_low = recent_lows.min()
+            # OR 이탈 이후 데이터만 필터링
+            post_breakdown_df = df[or_breakdown_mask]
+            if post_breakdown_df.empty:
+                return None
+            
+            # OR 이탈 이후의 최저점
+            drive_low = post_breakdown_df['low'].min()
+            drive_low_idx = post_breakdown_df['low'].idxmin()
+            
             drive_return = (opening_range['low'] - drive_low) / atr
             
             # 최소 진행 확인
             if drive_return < self.config.min_drive_return_R:
                 return None
             
-            # 되돌림 확인
-            pullback_high = df[df['low'] <= drive_low]['high'].max()
+            # 되돌림 확인: 저점 이후의 고점 찾기
+            post_low_mask = df.index > drive_low_idx
+            if not post_low_mask.any():
+                return None
+            
+            post_low_df = df[post_low_mask]
+            pullback_high = post_low_df['high'].max()
+            
             if pd.isna(pullback_high):
                 return None
             
@@ -811,7 +1072,7 @@ class SessionBasedStrategy:
             elif "PrevLow" in self.config.tp2_to_level:
                 tp2 = drive_low
             else:  # VWAP
-                tp2 = session_vwap
+                tp2 = entry_price - risk * 2.5 # 기본값
             
             return {
                 'signal_type': 'OPENING_DRIVE_PULLBACK_SHORT',
@@ -834,8 +1095,8 @@ class SessionBasedStrategy:
             return None
     
     def analyze_playbook_b_liquidity_sweep_reclaim(self, df: pd.DataFrame,
-                                                   key_levels: Dict[str, float],
-                                                   atr: float) -> Optional[Dict]:
+                                                    key_levels: Dict[str, float],
+                                                    atr: float) -> Optional[Dict]:
         """플레이북 B: 유동성 스윕 & 리클레임 분석 (롱/숏)"""
         if len(df) < 10:
             return None
@@ -858,13 +1119,13 @@ class SessionBasedStrategy:
                     reclaim_long = current_price > prev_day_low
                     
                     if reclaim_long:
-                        # 다음 봉 확인 (옵션)
-                        if self.config.confirm_next_bar and len(df) >= 2:
+                        # 리클레임 확증: 다음 봉도 레벨 위에서 지속
+                        if len(df) >= 2:
                             next_bar_low = df['low'].iloc[-2]
-                            next_bar_high = df['high'].iloc[-2]
-                            confirm = (next_bar_low > prev_day_low and next_bar_high > prev_day_low)
+                            next_bar_close = df['close'].iloc[-2]
+                            reclaim_confirmed = (next_bar_low >= prev_day_low and next_bar_close >= prev_day_low)
                             
-                            if not confirm:
+                            if not reclaim_confirmed:
                                 return None
                         
                         # 롱 신호 생성
@@ -873,13 +1134,13 @@ class SessionBasedStrategy:
                         risk = entry_price - stop_loss
                         
                         # 1차 목표 (VWAP)
-                        if self.config.tp1_to == "VWAP":
+                        if self.config.tp1_to_b == "VWAP":
                             tp1 = self.session_vwap if self.session_vwap else entry_price + risk * 1.5
                         else:
                             tp1 = entry_price + risk * 1.5
                         
                         # 2차 목표
-                        if self.config.tp2_to == "opposite_range_edge":
+                        if self.config.tp2_to_b == "opposite_range_edge":
                             prev_day_high = key_levels.get('prev_day_high', 0)
                             if prev_day_high > 0:
                                 tp2 = prev_day_high
@@ -917,13 +1178,13 @@ class SessionBasedStrategy:
                     reclaim_short = current_price < prev_day_high
                     
                     if reclaim_short:
-                        # 다음 봉 확인 (옵션)
-                        if self.config.confirm_next_bar and len(df) >= 2:
+                        # 리클레임 확증: 다음 봉도 레벨 아래에서 지속
+                        if len(df) >= 2:
                             next_bar_low = df['low'].iloc[-2]
-                            next_bar_high = df['high'].iloc[-2]
-                            confirm = (next_bar_low < prev_day_high and next_bar_high < prev_day_high)
+                            next_bar_close = df['close'].iloc[-2]
+                            reclaim_confirmed = (next_bar_low <= prev_day_high and next_bar_close <= prev_day_high)
                             
-                            if not confirm:
+                            if not reclaim_confirmed:
                                 return None
                         
                         # 숏 신호 생성
@@ -932,13 +1193,13 @@ class SessionBasedStrategy:
                         risk = stop_loss - entry_price
                         
                         # 1차 목표 (VWAP)
-                        if self.config.tp1_to == "VWAP":
+                        if self.config.tp1_to_b == "VWAP":
                             tp1 = self.session_vwap if self.session_vwap else entry_price - risk * 1.5
                         else:
                             tp1 = entry_price - risk * 1.5
                         
                         # 2차 목표
-                        if self.config.tp2_to == "opposite_range_edge":
+                        if self.config.tp2_to_b == "opposite_range_edge":
                             prev_day_low = key_levels.get('prev_day_low', 0)
                             if prev_day_low > 0:
                                 tp2 = prev_day_low
@@ -970,9 +1231,9 @@ class SessionBasedStrategy:
             return None
     
     def analyze_playbook_c_vwap_reversion_fade(self, df: pd.DataFrame,
-                                               session_vwap: float,
-                                               session_std: float,
-                                               atr: float) -> Optional[Dict]:
+                                                session_vwap: float,
+                                                session_std: float,
+                                                atr: float) -> Optional[Dict]:
         """플레이북 C: VWAP 리버전(평균회귀) 페이드 분석 (롱/숏)"""
         if len(df) < 3 or session_std == 0:
             return None
@@ -1012,10 +1273,13 @@ class SessionBasedStrategy:
                     risk = entry_price - stop_loss
                     
                     # 1차 목표: VWAP 터치
-                    tp1 = session_vwap
+                    if self.config.tp1_to_c == "VWAP":
+                        tp1 = session_vwap
+                    else:
+                        tp1 = entry_price + risk * 1.2  # 기본값
                     
                     # 2차 목표: 반대측 +0.5σ
-                    tp2 = session_vwap + self.config.tp2_to_band * session_std
+                    tp2 = session_vwap + self.config.tp2_to_c * session_std
                     
                     return {
                         'signal_type': 'VWAP_REVERSION_FADE_LONG',
@@ -1067,10 +1331,13 @@ class SessionBasedStrategy:
                     risk = stop_loss - entry_price
                     
                     # 1차 목표: VWAP 터치
-                    tp1 = session_vwap
+                    if self.config.tp1_to_c == "VWAP":
+                        tp1 = session_vwap
+                    else:
+                        tp1 = entry_price - risk * 1.2  # 기본값
                     
                     # 2차 목표: 반대측 -0.5σ
-                    tp2 = session_vwap - self.config.tp2_to_band * session_std
+                    tp2 = session_vwap - self.config.tp2_to_c * session_std
                     
                     return {
                         'signal_type': 'VWAP_REVERSION_FADE_SHORT',
@@ -1106,18 +1373,26 @@ class SessionBasedStrategy:
             # 세션 시작 시간 확인 (이미 UTC tz-aware)
             session_start = self.get_session_start_time(current_time)
             
-            # 세션 데이터 슬라이스 및 VWAP/OR 계산
+            # 세션 데이터 슬라이스 및 VWAP/OR 계산 (매 호출마다 재계산)
             df_s = self._session_slice(df, session_start)
-            self.session_vwap, self.session_std = self.calculate_session_vwap(df_s, session_start, current_time)
+            session_vwap, session_std = self.calculate_session_vwap(df_s, session_start, current_time)
             or_info = self.calculate_opening_range(df_s, session_start)
+            
+            # 인스턴스 변수 업데이트
+            self.session_vwap = session_vwap
+            self.session_std = session_std
             self.opening_range = or_info if or_info and (or_info.get("ready") or or_info.get("partial")) else None
+            self.session_start_time = session_start  # 세션 시작 시간 저장
 
-            # --- OR 로그 ---
-            if not or_info:
-                print("ℹ️ OR 없음: 세션 시작 직후이거나 데이터 부족 → Play A 건너뜀, B/C만 평가")
+            # --- 세션 정보 출력 (간단하게) ---
+            session_type = self._get_session_type(session_start)
+            print(f"🔍 세션: {session_start.strftime('%H:%M')} UTC ({session_type})")
+            
+            # --- OR 로그 (간단하게) ---
+            if or_info:
+                print(f"🎯 OR: {or_info['range']:.1f} ({or_info['timeframe']})")
             else:
-                print(f"🎯 OR bars={or_info['bars']} ready={or_info['ready']} partial={or_info['partial']} "
-                        f"range={or_info['range']:.2f}")
+                print("ℹ️ OR 없음")
             
             # ATR 계산
             atr = calculate_atr(df_s, self.config.atr_len)
@@ -1133,7 +1408,7 @@ class SessionBasedStrategy:
             # A: OR가 없거나(strict) 준비 안 됐으면 스킵 또는 티어 제한
             if or_info and (or_info.get("ready") or (not self.config.strict_or and or_info.get("partial"))):
                 for side in ["LONG","SHORT"]:
-                    sig = self.analyze_staged_signal(df_s, self.session_vwap, or_info, atr, 'A', side)
+                    sig = self.analyze_staged_signal(df_s, session_vwap, or_info, atr, 'A', side, key_levels, current_time)
                     # 부분 OR이면 티어 캡 적용
                     if sig and or_info.get("partial"):
                         tier_cap = self.config.partial_or_tier_cap.upper()
@@ -1144,35 +1419,23 @@ class SessionBasedStrategy:
                     if sig and sig["score"] > best_score:
                         best_signal, best_score = sig, sig["score"]
             else:
-                print("⏭️ Play A 스킵 (OR 미확정)")
+                print("⏭️ Play A 스킵")
             
             # B/C는 OR 없어도 정상 동작
             for side in ["LONG","SHORT"]:
-                sig = self.analyze_staged_signal(df_s, self.session_vwap, or_info or {}, atr, 'B', side)
+                sig = self.analyze_staged_signal(df_s, session_vwap, or_info or {}, atr, 'B', side, key_levels, current_time)
                 if sig and sig["score"] > best_score:
                     best_signal, best_score = sig, sig["score"]
 
-            if np.isfinite(self.session_vwap) and np.isfinite(self.session_std) and self.session_std > 0:
+            if np.isfinite(session_vwap) and np.isfinite(session_std) and session_std > 0:
                 for side in ["LONG","SHORT"]:
-                    sig = self.analyze_staged_signal(df_s, self.session_vwap, or_info or {}, atr, 'C', side)
+                    sig = self.analyze_staged_signal(df_s, session_vwap, or_info or {}, atr, 'C', side, key_levels, current_time)
                     if sig and sig["score"] > best_score:
                         best_signal, best_score = sig, sig["score"]
             
-            # 최고 점수 신호 반환
+            # 최고 점수 신호 반환 (간단하게)
             if best_signal:
-                print(f"�� 단계형 신호 생성: {best_signal['stage']} (점수: {best_signal['score']:.3f})")
-                print(f"   �� 플레이북: {best_signal['playbook']}, 방향: {best_signal['side']}")
-                print(f"   �� 액션: {best_signal['action']}, 신뢰도: {best_signal['confidence']:.1%}")
-                
-                # Gate 결과 출력
-                gate_results = best_signal.get('gate_results', {})
-                if gate_results:
-                    print(f"   🔒 Gate 결과:")
-                    print(f"      방향: {'✅' if gate_results.get('direction') else '❌'}")
-                    print(f"      구조: {'✅' if gate_results.get('structure') else '❌'}")
-                    print(f"      슬리피지: {'✅' if gate_results.get('slippage') else '❌'}")
-                    print(f"      거래량: {'✅' if gate_results.get('volume') else '❌'}")
-                
+                print(f"🎯 신호: {best_signal['playbook']} {best_signal['side']} | {best_signal['stage']} | {best_signal['confidence']:.0%}")
                 return best_signal
             
             return None
@@ -1183,25 +1446,24 @@ class SessionBasedStrategy:
 
 
 def make_session_trade_plan(df: pd.DataFrame, 
-                           key_levels: Dict[str, float],
-                           config: SessionConfig,
-                           current_time: datetime) -> Optional[Dict]:
+                            key_levels: Dict[str, float],
+                            config: SessionConfig,
+                            current_time: datetime) -> Optional[Dict]:
     """세션 기반 거래 계획 생성"""
     try:
         strategy = SessionBasedStrategy(config)
         signal = strategy.analyze_session_strategy(df, key_levels, current_time)
         
         if signal:
-            # 포지션 사이징 계산 (예시)
-            risk_percent = 0.4  # 계좌 리스크 0.4%
-            equity = 10000  # 예시 자본금
-            risk_dollar = equity * risk_percent / 100
-            
-            stop_distance = abs(signal['entry_price'] - signal['stop_loss'])
-            position_size = risk_dollar / stop_distance if stop_distance > 0 else 0
-            
-            signal['position_size'] = position_size
-            signal['risk_dollar'] = risk_dollar
+            # ENTRY에만 포지션 사이징 적용
+            if signal.get("stage") == "ENTRY" and {"entry_price", "stop_loss"} <= signal.keys():
+                risk_percent = 0.4   # 계좌 리스크 0.4%
+                equity = 10000       # 예시 자본
+                risk_dollar = equity * risk_percent / 100
+                stop_distance = abs(signal["entry_price"] - signal["stop_loss"])
+                position_size = risk_dollar / stop_distance if stop_distance > 0 else 0
+                signal["position_size"] = position_size
+                signal["risk_dollar"] = risk_dollar
             
             return signal
         

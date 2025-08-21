@@ -37,6 +37,11 @@ class IntegratedSmartTrader:
         self.websocket_handler = WebSocketHandler(self.core.get_websocket())
         self.display_handler = DisplayHandler(self.core.get_websocket())
         
+        # 상태 관리
+        self.running = False
+        self.last_analysis_time = None
+        self.last_liquidation_analysis = None
+        
         # 상태 및 통계 초기화
         self._init_state_and_stats()
         
@@ -45,14 +50,6 @@ class IntegratedSmartTrader:
     
     def _init_state_and_stats(self):
         """상태 및 통계 초기화"""
-        # 신호 관련
-        self.signal_count = 0
-        self.last_signal_time = None
-        self.last_5min_analysis = None
-        
-        # 신호 관련 통계
-        self.last_signal_time = None
-        
         # 거래량 급증 집계
         self.volume_spike_buffer = []
         self.last_volume_summary = None
@@ -61,11 +58,7 @@ class IntegratedSmartTrader:
     def _setup_callbacks(self):
         """웹소켓 콜백 설정"""
         callbacks = {
-            'liquidation': lambda data: self.websocket_handler.on_liquidation(
-                data, 
-                self.display_handler.print_current_liquidation_density,
-                self._analyze_realtime_liquidation
-            ),
+            'liquidation': lambda data: self._handle_liquidation_event(data),
             'volume': lambda data: self._handle_volume_spike(data),
             'price': lambda data: self.websocket_handler.on_price_update(
                 data, 
@@ -77,6 +70,64 @@ class IntegratedSmartTrader:
             )
         }
         self.websocket_handler.setup_callbacks(callbacks)
+        
+        # 실제 바이낸스 청산 스트림 연결 활성화
+        self._enable_real_liquidation_stream()
+        
+    def _enable_real_liquidation_stream(self):
+        """실제 바이낸스 청산 스트림 연결 활성화"""
+        try:
+            websocket = self.core.get_websocket()
+            if websocket:
+                # 청산 스트림 시작
+                websocket.start_liquidation_stream()
+                print(f"✅ 바이낸스 청산 스트림 연결됨: {self.config.symbol}")
+            else:
+                print(f"❌ 웹소켓 연결 실패")
+        except Exception as e:
+            print(f"❌ 청산 스트림 연결 오류: {e}")
+    
+    def _handle_liquidation_event(self, data: Dict):
+        """청산 이벤트 처리 및 AdvancedLiquidationStrategy에 전달"""
+        try:
+            # 기본 청산 분석 실행
+            self._analyze_realtime_liquidation(data)
+            
+            # AdvancedLiquidationStrategy에 청산 이벤트 전달
+            if not hasattr(self, '_adv_liquidation_strategy'):
+                # 새로 생성
+                from signals.advanced_liquidation_strategy import AdvancedLiquidationStrategy, AdvancedLiquidationConfig
+                adv_config = AdvancedLiquidationConfig()
+                self._adv_liquidation_strategy = AdvancedLiquidationStrategy(adv_config)
+            
+            strategy = self._adv_liquidation_strategy
+            
+            # 바이낸스 청산 데이터 형식에 맞게 처리
+            if 'side' in data and 'qty_usd' in data:
+                # 바이낸스 청산 데이터 형식: BUY=숏청산, SELL=롱청산
+                # BUY: 숏 포지션이 강제 청산됨 (숏 청산)
+                # SELL: 롱 포지션이 강제 청산됨 (롱 청산)
+                side = 'short' if data['side'] == 'BUY' else 'long'
+                
+                # 청산 이벤트를 딕셔너리로 구성
+                liquidation_event = {
+                    'ts': int(data.get('timestamp', datetime.datetime.now(datetime.timezone.utc)).timestamp()),
+                    'side': side,
+                    'qty_usd': data['qty_usd']
+                }
+                
+                strategy.process_liquidation_event(liquidation_event)
+                
+                # 실시간 청산 정보 출력 (더 명확하게)
+                if data['side'] == 'BUY':
+                    print(f"🔥 실시간 청산: SHORT ${data['qty_usd']:,.0f} @ ${data.get('price', 0):.2f} (숏 포지션 강제 청산)")
+                else:
+                    print(f"🔥 실시간 청산: LONG ${data['qty_usd']:,.0f} @ ${data.get('price', 0):.2f} (롱 포지션 강제 청산)")
+                
+        except Exception as e:
+            print(f"❌ 청산 이벤트 처리 오류: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _handle_volume_spike(self, volume_data: Dict):
         """거래량 급증 처리"""
@@ -97,24 +148,24 @@ class IntegratedSmartTrader:
             
             # 세션 기반 전략 분석
             session_signal = self._analyze_session_strategy(websocket)
+            if session_signal:
+                # 세션 전략 신호 직접 처리
+                self._process_integrated_signal({
+                    'session_signal': session_signal
+                })
             
             # 고급 청산 전략 분석
             advanced_liquidation_signal = self._analyze_advanced_liquidation_strategy(websocket)
-            
-            # 통합 신호 생성
-            if session_signal or advanced_liquidation_signal:
-                final_signal = self.core.get_integrated_strategy().get_integrated_signal(
-                    session_signal=session_signal,
-                    advanced_liquidation_signal=advanced_liquidation_signal
-                )
-                
-                if final_signal:
-                    self._process_integrated_signal(final_signal)
+            if advanced_liquidation_signal:
+                # 고급 청산 전략 신호 직접 처리
+                self._process_integrated_signal({
+                    'advanced_liquidation_signal': advanced_liquidation_signal
+                })
                 
         except Exception as e:
             print(f"❌ 실시간 기술적 분석 오류: {e}")
     
-    def _analyze_realtime_liquidation(self):
+    def _analyze_realtime_liquidation(self, data=None):
         """실시간 통합 청산 신호 분석 (ENHANCED_LIQUIDATION + Prediction 통합)"""
         try:
             # 현재 가격 가져오기
@@ -168,10 +219,6 @@ class IntegratedSmartTrader:
             from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
             session_config = SessionConfig()  # 기본 설정으로 생성
             session_strategy = SessionBasedStrategy(session_config)
-            
-            # 디버깅: 세션 시작 시간 직접 확인
-            session_start = session_strategy.get_session_start_time(current_time)
-            print(f"🔍 디버깅: 세션 시작 시간: {session_start}")
             
             session_signal = session_strategy.analyze_session_strategy(
                 df_1m, key_levels, current_time
@@ -245,18 +292,102 @@ class IntegratedSmartTrader:
             # VWAP 및 표준편차 계산
             vwap, vwap_std = self._calculate_vwap_and_std(df_1m)
             
-            # 최근 청산 이벤트 가져오기 (웹소켓에서)
-            liquidation_events = websocket.get_recent_liquidations(5)  # 최근 5분
+            # ATR 계산
+            from indicators.atr import calculate_atr
+            atr = calculate_atr(df_1m, 14)
+            if pd.isna(atr):
+                atr = df_1m['close'].iloc[-1] * 0.02  # 기본값
             
-            # 고급 청산 전략 분석
-            advanced_signal = self.core.get_integrated_strategy().analyze_advanced_liquidation_strategy(
-                df_1m, liquidation_events, key_levels, opening_range, vwap, vwap_std
+            # 기존에 생성된 AdvancedLiquidationStrategy 인스턴스 사용
+            if hasattr(self, '_adv_liquidation_strategy'):
+                adv_strategy = self._adv_liquidation_strategy
+            else:
+                # 새로 생성
+                from signals.advanced_liquidation_strategy import AdvancedLiquidationStrategy, AdvancedLiquidationConfig
+                adv_config = AdvancedLiquidationConfig()
+                self._adv_liquidation_strategy = AdvancedLiquidationStrategy(adv_config)
+                adv_strategy = self._adv_liquidation_strategy
+            
+            # 워밍업 상태 및 청산 데이터 상태 확인
+            warmup_status = adv_strategy.get_warmup_status()
+            print(f"   🔥 워밍업 상태: SETUP={warmup_status['can_setup']}, ENTRY={warmup_status['can_entry']}")
+            print(f"   📊 청산 샘플: 롱={warmup_status['long_samples']}, 숏={warmup_status['short_samples']}")
+            
+            # 현재 청산 메트릭 확인
+            try:
+                metrics = adv_strategy.get_current_liquidation_metrics()
+                if metrics:
+                    print(f"   📈 청산 지표: 롱 Z={metrics['z_long']:.2f}, 숏 Z={metrics['z_short']:.2f}, LPI={metrics['lpi']:.3f}")
+                    
+                    # 청산 데이터 방향성 확인
+                    if warmup_status['long_samples'] > 0 or warmup_status['short_samples'] > 0:
+                        print(f"   📊 청산 데이터 방향성:")
+                        print(f"      - 롱 샘플: {warmup_status['long_samples']}개 (롱 포지션 강제 청산)")
+                        print(f"      - 숏 샘플: {warmup_status['short_samples']}개 (숏 포지션 강제 청산)")
+                        
+                        # 최근 청산 이벤트 확인
+                        if hasattr(adv_strategy, 'long_bins') and adv_strategy.long_bins:
+                            recent_long = list(adv_strategy.long_bins)[-1] if adv_strategy.long_bins else None
+                            if recent_long:
+                                print(f"      - 최근 롱 청산: ${recent_long[1]:,.0f}")
+                        
+                        if hasattr(adv_strategy, 'short_bins') and adv_strategy.short_bins:
+                            recent_short = list(adv_strategy.short_bins)[-1] if adv_strategy.short_bins else None
+                            if recent_short:
+                                print(f"      - 최근 숏 청산: ${recent_short[1]:,.0f}")
+            except Exception as e:
+                print(f"   ❌ 청산 메트릭 확인 실패: {e}")
+            
+            # 현재 가격
+            current_price = df_1m['close'].iloc[-1]
+            
+            # 고급 청산 전략 분석 실행
+            advanced_signal = adv_strategy.analyze_all_strategies(
+                df_1m, key_levels, opening_range, vwap, vwap_std, atr
             )
+            
+            # 디버깅 정보 추가
+            if advanced_signal:
+                print(f"   📊 분석 완료: {advanced_signal.get('action', 'UNKNOWN')} | {advanced_signal.get('tier', 'UNKNOWN')} | 점수: {advanced_signal.get('total_score', 0.00):.3f}")
+            else:
+                print(f"   📊 분석 완료: 신호 없음")
+                
+            # 전략별 분석 결과 디버깅
+            print(f"   🔍 전략별 분석 디버깅:")
+            try:
+                # 전략 A: 스윕&리클레임
+                signal_a = adv_strategy.analyze_strategy_a_sweep_reclaim(
+                    adv_strategy.get_current_liquidation_metrics(), df_1m, key_levels, atr
+                )
+                print(f"      - 전략 A: {'신호 있음' if signal_a else '신호 없음'}")
+                if signal_a:
+                    print(f"        액션: {signal_a.get('action')}, 점수: {signal_a.get('total_score', 0):.3f}")
+                
+                # 전략 B: 스퀴즈 추세지속
+                signal_b = adv_strategy.analyze_strategy_b_squeeze_trend_continuation(
+                    adv_strategy.get_current_liquidation_metrics(), df_1m, opening_range, atr
+                )
+                print(f"      - 전략 B: {'신호 있음' if signal_b else '신호 없음'}")
+                if signal_b:
+                    print(f"        액션: {signal_b.get('action')}, 점수: {signal_b.get('total_score', 0):.3f}")
+                
+                # 전략 C: 과열-소멸 페이드
+                signal_c = adv_strategy.analyze_strategy_c_overheat_extinction_fade(
+                    adv_strategy.get_current_liquidation_metrics(), df_1m, vwap, vwap_std, atr
+                )
+                print(f"      - 전략 C: {'신호 있음' if signal_c else '신호 없음'}")
+                if signal_c:
+                    print(f"        액션: {signal_c.get('action')}, 점수: {signal_c.get('total_score', 0):.3f}")
+                    
+            except Exception as e:
+                print(f"      ❌ 전략별 분석 디버깅 실패: {e}")
             
             return advanced_signal
             
         except Exception as e:
             print(f"❌ 고급 청산 전략 분석 오류: {e}")
+            import traceback
+            traceback.print_exc()
             return None
     
     def _calculate_opening_range(self, df: pd.DataFrame) -> Dict[str, float]:
@@ -300,6 +431,8 @@ class IntegratedSmartTrader:
         except Exception as e:
             print(f"❌ VWAP 및 표준편차 계산 오류: {e}")
             return 0.0, 0.0
+    
+
     
     def _analyze_integrated_liquidation(self, liquidation_stats: Dict, volume_analysis: Dict, current_price: float, websocket) -> Optional[Dict]:
         """통합 청산 신호 분석 (ENHANCED_LIQUIDATION + Prediction)"""
@@ -470,16 +603,12 @@ class IntegratedSmartTrader:
                             'advanced_liquidation_signal': advanced_liquidation_signal
                         })
                     else:
-                        # 신호가 없어도 분석 상태 출력
+                        # 신호가 없어도 분석 상태 출력 (간단하게)
                         current_price = websocket.price_history[-1]['price'] if websocket.price_history else 0
-                        print(f"📊 주기적 분석 완료 - 신호 없음")
-                        print(f"   💰 현재가: ${current_price:.2f}")
-                        print(f"   📈 세션 전략: {'활성' if self.config.enable_session_strategy else '비활성'}")
-                        print(f"   ⚡ 고급 청산 전략: {'활성' if self.config.enable_advanced_liquidation else '비활성'}")
-                        print(f"   ⏰ 다음 분석: {(next_candle + datetime.timedelta(minutes=5)).strftime('%H:%M:%S')}")
+                        print(f"📊 분석 완료 | ${current_price:.2f} | 다음: {(next_candle + datetime.timedelta(minutes=5)).strftime('%H:%M')}")
                     
                     self.last_5min_analysis = now
-                    print(f"✅ {now.strftime('%H:%M:%S')} - 5분봉 분석 완료")
+                    print(f"✅ {now.strftime('%H:%M')} - 5분봉 분석 완료")
                 
                     # 다음 5분봉까지 대기 (더 짧은 간격으로 체크)
                     time.sleep(30)  # 30초마다 체크
@@ -492,12 +621,11 @@ class IntegratedSmartTrader:
                 time.sleep(10)
     
     def _process_integrated_signal(self, signal: Dict):
-        """통합 신호 처리 - 깔끔하게 정리"""
+        """개별 전략 신호 처리 - 깔끔하게 정리"""
         try:
             # 세션 신호와 고급 청산 신호 처리
             session_signal = signal.get('session_signal')
             advanced_liquidation_signal = signal.get('advanced_liquidation_signal')
-            
             now = datetime.datetime.now()
             
             # 세션 신호 처리
@@ -516,66 +644,41 @@ class IntegratedSmartTrader:
             print(f"❌ 신호 처리 오류: {e}")
     
     def _print_session_signal(self, signal: Dict, now: datetime.datetime):
-        """세션 신호 출력"""
+        """세션 신호 출력 - 간단하게"""
         try:
             action = signal.get('action', 'NEUTRAL')
             confidence = signal.get('confidence', 0)
-            entry_price = signal.get('entry_price', 0)
-            stop_loss = signal.get('stop_loss', 0)
-            take_profit = signal.get('take_profit', 0)
+            signal_type = signal.get('signal_type', 'N/A')
             
-            print(f"\n📊 SESSION 전략: {action} | {now.strftime('%H:%M:%S')}")
-            print(f"💰 ${entry_price:.2f} | 🎯 {confidence:.0%}")
-            print(f"🛑 ${stop_loss:.2f} | 🎯 ${take_profit:.2f}")
+            print(f"📊 세션 전략: {action} | {signal_type} | {confidence:.0%}")
             
-            reason = signal.get('reason', '')
-            if reason:
-                print(f"📝 {reason}")
-                
         except Exception as e:
             print(f"❌ 세션 신호 출력 오류: {e}")
     
     def _print_advanced_liquidation_signal(self, signal: Dict, now: datetime.datetime):
-        """고급 청산 신호 출력"""
+        """고급 청산 신호 출력 - 간단하게"""
         try:
             action = signal.get('action', 'NEUTRAL')
-            confidence = signal.get('confidence', 0)
-            entry_price = signal.get('entry_price', 0)
-            stop_loss = signal.get('stop_loss', 0)
-            take_profit = signal.get('take_profit', 0)
+            playbook = signal.get('playbook', 'N/A')
+            tier = signal.get('tier', 'N/A')
+            total_score = signal.get('total_score', 0)
             
-            print(f"\n⚡ 고급 청산 전략: {action} | {now.strftime('%H:%M:%S')}")
-            print(f"💰 ${entry_price:.2f} | 🎯 {confidence:.0%}")
-            print(f"🛑 ${stop_loss:.2f} | 🎯 ${take_profit:.2f}")
+            print(f"⚡ 고급 청산: {action} | {playbook} | {tier} | {total_score:.2f}")
             
-            reason = signal.get('reason', '')
-            if reason:
-                print(f"📝 {reason}")
-                
         except Exception as e:
             print(f"❌ 고급 청산 신호 출력 오류: {e}")
     
     def _print_integrated_signal(self, signal: Dict, now: datetime.datetime):
-        """통합 신호 출력"""
+        """통합 신호 출력 - 간단하게"""
         try:
             signal_type = signal.get('signal_type', 'UNKNOWN')
             action = signal.get('action', 'NEUTRAL')
-            confidence = signal.get('confidence', 0)
-            entry_price = signal.get('entry_price', 0)
-            stop_loss = signal.get('stop_loss', 0)
-            take_profit = signal.get('take_profit', 0)
             
             signal_icon = self._get_signal_icon(signal_type)
             signal_name = self._get_signal_name(signal_type)
             
-            print(f"\n{signal_icon} {signal_name}: {action} | {now.strftime('%H:%M:%S')}")
-            print(f"💰 ${entry_price:.2f} | 🎯 {confidence:.0%}")
-            print(f"🛑 ${stop_loss:.2f} | 🎯 ${take_profit:.2f}")
+            print(f"{signal_icon} {signal_name}: {action}")
             
-            reason = signal.get('reason', '')
-            if reason:
-                print(f"📝 {reason}")
-                
         except Exception as e:
             print(f"❌ 통합 신호 출력 오류: {e}")
     
@@ -584,7 +687,7 @@ class IntegratedSmartTrader:
         icons = {
             'SESSION': '📊',
             'ADVANCED_LIQUIDATION': '⚡',
-            'INTEGRATED_LIQUIDATION': '🔥',
+            'INTEGRATED_LIQUIDATION': '🎯',
             'INTEGRATED': '🎯',
             'UNKNOWN': '❓'
         }
@@ -601,23 +704,6 @@ class IntegratedSmartTrader:
         }
         return names.get(signal_type, 'UNKNOWN')
     
-    def _print_status(self):
-        """상태 출력 - 간단하게"""
-        websocket = self.core.get_websocket()
-        liquidation_stats = websocket.get_liquidation_stats(5)
-        volume_analysis = websocket.get_volume_analysis(3)
-        
-        print(f"\n📊 통합 상태 | {datetime.datetime.now().strftime('%H:%M:%S')}")
-        print(f"🔥 청산: {liquidation_stats['total_count']}개 (${liquidation_stats['total_value']:,.0f})")
-        print(f"📈 거래량: {volume_analysis['volume_trend']} ({volume_analysis['volume_ratio']:.1f}x)")
-        print(f"🎯 신호: {self.signal_count}개")
-        print(f"📊 세션 전략: {'활성' if self.config.enable_session_strategy else '비활성'}")
-        print(f"⚡ 고급 청산 전략: {'활성' if self.config.enable_advanced_liquidation else '비활성'}")
-        
-        if self.last_signal_time:
-            time_since = datetime.datetime.now() - self.last_signal_time
-            print(f"⏰ 마지막 신호: {format_time_delta(time_since)} 전")
-    
     def start(self):
         """트레이더 시작"""
         self._print_startup_info()
@@ -626,6 +712,9 @@ class IntegratedSmartTrader:
         
         # 웹소켓 백그라운드 시작
         self.core.start_websocket()
+        
+        # 웹소켓 시작 후 콜백 설정
+        self._setup_callbacks()
         
         # 주기적 분석 스레드 (옵션)
         if self.config.use_periodic_hybrid:
@@ -637,33 +726,18 @@ class IntegratedSmartTrader:
     
     def _print_startup_info(self):
         """시작 정보 출력"""
-        print(f"🚀 {self.config.symbol} 통합 스마트 자동 트레이더 시작! (리팩토링 버전)")
-        print(f"📊 세션 전략: {'활성' if self.config.enable_session_strategy else '비활성'}")
-        print(f"⚡ 고급 청산 전략: {'활성' if self.config.enable_advanced_liquidation else '비활성'}")
-        print(f"🔥 청산 전략: {'활성' if self.config.enable_liquidation_strategy else '비활성'}")
+        print(f"🚀 {self.config.symbol} 통합 스마트 트레이더 시작!")
+        print(f"📊 세션: {'활성' if self.config.enable_session_strategy else '비활성'}")
         print(f"⏰ 모드: {'주기(5m)' if self.config.use_periodic_hybrid else '실시간'}")
-        print(f"📈 신호 민감도: 높음")
-        print(f"📊 주기적 분석: 5분봉 기반 (세션 + 고급 청산)")
-        print(f"📊 실시간 분석: 정각 1분마다 (세션 + 고급 청산)")
-        print(f"📊 거래량 급증 집계: 30초마다 요약 출력")
-        print(f"💰 가격 변동 감지: 0.1% 이상 (스캘핑용)")
-        print(f"🛡️ API 제한 보호: 분당 최대 1200회 (제한 도달 시 5초 대기)")
-        print(f"🔥 청산 임계값: {self.config.liquidation_min_count}개, ${self.config.liquidation_min_value:,.0f}")
         print("=" * 60)
         print("💡 실시간 분석 중... 신호가 나올 때만 알림을 표시합니다.")
-        print("💡 거래량 급증은 3.0x 이상일 때만 감지됩니다 (노이즈 감소).")
-        print("💡 거래량 급증은 30초마다 요약해서 표시됩니다.")
-        print("💡 실시간 분석: 0.1% 가격 변동 감지, 정각 1분마다 전략 분석")
-        print("💡 주기적 분석: 5분봉 기반 자동 실행")
-        print("💡 청산 밀도 분석: 1분마다 자동 출력")
-        print("💡 API 제한 보호: 분당 1200회 초과 시 자동으로 5초 대기")
         print("=" * 60)
     
     def _run_main_loop(self):
         """메인 실행 루프"""
         try:
             last_technical_analysis = None
-            last_status_output = datetime.datetime.now()
+            last_advanced_liquidation_analysis = None
             api_call_count = 0
             last_api_reset = datetime.datetime.now()
             max_api_calls_per_minute = 2400
@@ -687,22 +761,45 @@ class IntegratedSmartTrader:
                         self._analyze_realtime_technical()
                         last_technical_analysis = now
                         api_call_count += 1
-                        print(f"📊 정각 1분 분석 실행: {now.strftime('%H:%M:%S')}")
+                        # print(f"📊 정각 1분 분석: {now.strftime('%H:%M')}")  # 조용한 모드
                     else:
                         # API 제한 도달 시 5초 대기
                         if not last_technical_analysis or (now - last_technical_analysis).total_seconds() > 5:
-                            print(f"⚠️ API 호출 제한 도달, 5초 대기 중... ({api_call_count}/분)")
+                            print(f"⚠️ API 제한 도달, 5초 대기...")
                             self._analyze_realtime_technical()
                             last_technical_analysis = now
                             api_call_count += 1
                 
+                # 고급 청산 전략을 30초마다 실행 (더 자주 분석)
+                if (not last_advanced_liquidation_analysis or 
+                    (now - last_advanced_liquidation_analysis).total_seconds() >= 30):
+                    
+                    if api_call_count < max_api_calls_per_minute:
+                        websocket = self.core.get_websocket()
+                        if websocket and websocket.price_history:
+                            # 고급 청산 전략 분석 실행
+                            advanced_signal = self._analyze_advanced_liquidation_strategy(websocket)
+                            
+                            # 분석 결과 출력 (디버깅 정보 포함)
+                            if advanced_signal:
+                                print(f"🔍 고급 청산 분석 결과: {now.strftime('%H:%M:%S')}")
+                                print(f"   - 신호: {advanced_signal.get('action', 'UNKNOWN')}")
+                                print(f"   - 등급: {advanced_signal.get('tier', 'UNKNOWN')}")
+                                print(f"   - 전략: {advanced_signal.get('playbook', 'UNKNOWN')}")
+                                print(f"   - 점수: {advanced_signal.get('total_score', 0.00):.3f}")
+                                print(f"   - 이유: {advanced_signal.get('reason', 'N/A')}")
+                                
+                                # 중요 신호인 경우 강조 표시
+                                if advanced_signal.get('tier') in ['ENTRY', 'SETUP']:
+                                    print(f"⚡ ⚡ ⚡ 중요 신호 감지! ⚡ ⚡ ⚡")
+                            else:
+                                print(f"🔍 고급 청산 분석: {now.strftime('%H:%M:%S')} - 신호 없음")
+                            
+                            last_advanced_liquidation_analysis = now
+                            api_call_count += 1
+                
                 # 웹소켓 콜백으로 인한 자동 분석은 별도로 처리 (가격 변동, 청산 등)
                 # 여기서는 정각 1분마다만 분석 실행
-                
-                # 통계 출력 (1분마다)
-                if (now - last_status_output).total_seconds() >= 60:
-                    self._print_status()
-                    last_status_output = now
                 
                 time.sleep(1)  # 1초마다 체크
                     

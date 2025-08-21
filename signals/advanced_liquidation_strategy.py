@@ -11,7 +11,7 @@ import pandas as pd
 import numpy as np
 from typing import Dict, List, Any, Optional, Tuple, Literal
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from collections import deque
 import pytz
 from indicators.moving_averages import calculate_ema
@@ -29,43 +29,77 @@ class AdvancedLiquidationConfig:
     agg_window_sec: int = 30  # 30초 집계 윈도우
     background_window_min: int = 60  # 백그라운드 평균 윈도우 (분)
     
+    # 최소 워밍업 요구사항
+    min_warmup_samples: int = 10  # 최소 10개 샘플(초) 확보 전 ENTRY 금지 (30 → 10으로 대폭 완화)
+    min_warmup_samples_setup: int = 5  # SETUP 허용을 위한 최소 샘플 (15 → 5로 대폭 완화)
+    
     # 스파이크 판정 설정
-    z_spike: float = 3.0  # 기본 스파이크 임계값
-    z_strong: float = 4.0  # 강한 스파이크 임계값
-    lpi_bias: float = 0.4  # LPI 바이어스 임계값
+    z_spike: float = 1.0  # 기본 스파이크 임계값 (2.0 → 1.0으로 대폭 완화)
+    z_strong: float = 2.5  # 강한 스파이크 임계값 (3.2 → 2.5로 완화)
+    z_medium: float = 2.0  # 중간 스파이크 임계값 (3.0 → 2.0으로 완화)
+    lpi_bias: float = 0.2      # LPI 바이어스 임계값 (0.2 → 0.15로 더 완화)
     
-    # 캐스케이드 설정
-    cascade_seconds: int = 10  # 지난 10초 안에
-    cascade_count: int = 3  # 3회 이상
-    cascade_z: float = 3.0  # z >= 3
+    # 캐스케이드 설정 (완화)
+    cascade_seconds: int = 15  # 지난 15초 안에 (10초 → 15초로 완화)
+    cascade_count: int = 4  # 4회 이상 (3회 → 4회로 완화)
+    cascade_z: float = 3.5  # z >= 3.5 (3.0 → 3.5로 완화)
     
-    # 쿨다운 설정
-    cooldown_after_strong_sec: int = 30  # 강한 스파이크 후 30초 쿨다운
+    # 쿨다운 설정 (단계별, 더 완화)
+    cooldown_after_strong_sec: int = 6  # 강한 스파이크 후 6초 쿨다운 (8초 → 6초로 완화)
+    cooldown_after_medium_sec: int = 3  # 중간 스파이크 후 3초 쿨다운 (4초 → 3초로 완화)
     
-    # 리스크 설정
+    # 리스크 설정 (초기 튜닝용으로 완화)
     risk_pct: float = 0.4  # 1트레이드 계좌대비 위험
-    slippage_max_pct: float = 0.02  # 최대 슬리피지
+    slippage_max_pct: float = 0.03  # 최대 슬리피지 (2% → 3%로 완화)
     
     # 레벨 설정
     or_minutes: int = 15  # 오프닝 레인지 분
     atr_len: int = 14  # ATR 기간
     vwap_sd_enter: float = 2.0  # VWAP ±2σ 진입
+    vwap_sd_enter_cascade: float = 1.8  # 캐스케이드 시 VWAP ±1.8σ 진입 (완화)
     vwap_sd_stop: float = 2.5  # VWAP ±2.5σ 스탑
     
     # 전략 A: 스윕&리클레임
     sweep_buffer_atr: float = 0.3  # 스윕 버퍼 ATR
-    tp1_R: float = 1.2  # 1차 목표 R
+    reclaim_atr_tolerance: float = 0.25  # 리클레임 ATR 허용치 (0.2~0.3 ATR)
+    opposite_liquidation_boost: float = 0.1  # 반대측 청산 시 신뢰도 부스트
+    tp1_R_a: float = 1.2  # 전략 A 1차 목표 R
     tp2: str = "VWAP_or_range_edge"  # 2차 목표
     
     # 전략 B: 스퀴즈 추세지속
-    retest_atr_tol: float = 0.4  # 리테스트 ATR 허용치
-    tp1_R: float = 1.5  # 1차 목표 R
+    retest_atr_tol: float = 0.55  # 리테스트 ATR 허용치 (0.4 → 0.55로 확대)
+    retest_atr_tol_or_extension: float = 0.7  # OR 확장 시 리테스트 ATR 허용치 (추가 완화)
+    tp1_R_b: float = 1.5  # 전략 B 1차 목표 R
     or_extension: bool = True  # OR 확장 사용
     
     # 전략 C: 과열-소멸 페이드
-    post_spike_decay_ratio: float = 0.8  # 스파이크 후 감소 비율
+    post_spike_decay_ratio: float = 0.9  # 스파이크 후 감소 비율 (0.8 → 0.9로 완화)
+    post_spike_decay_ratio_cascade: float = 0.95  # 캐스케이드 시 감소 비율 (더 완화)
+    z_extreme: float = 3.5  # 극단 스파이크 임계값 (다중 경로 트리거)
+    lpi_extreme: float = 0.5  # LPI 극단 임계값
+    vwap_sd_extreme: float = 1.8  # 극단 스파이크 시 VWAP ±1.8σ 진입
+    vwap_sd_reenter: float = 1.5  # VWAP ±1.5σ 재진입 (SETUP 허용)
     stop_atr: float = 0.35  # 스탑 ATR
     tp2_sigma: float = 0.5  # 2차 목표 시그마
+    tp1_R_c: float = 1.2  # 전략 C 1차 목표 R
+    
+    # 단계형 스코어링 설정
+    # 가중치 구성 (합계 1.00)
+    weight_orderflow: float = 0.30  # 오더플로우(청산)
+    weight_structure: float = 0.20  # 구조 품질(플레이북별)
+    weight_decay_cascade: float = 0.15  # 소멸/연쇄
+    weight_trend_context: float = 0.10  # 추세/컨텍스트
+    weight_location_baseline: float = 0.10  # 로케이션/기준선
+    weight_risk_appropriateness: float = 0.10  # 리스크 적정성
+    weight_data_quality: float = 0.05  # 데이터 품질
+    
+    # Tier 임계값 (실전 첫 주용으로 완화)
+    tier_entry_threshold: float = 0.55  # ENTRY ≥ 0.55 (0.60 → 0.55로 완화)
+    tier_setup_threshold: float = 0.35  # SETUP ≥ 0.35 (0.40 → 0.35로 완화)
+    tier_heads_up_threshold: float = 0.20  # HEADS-UP ≥ 0.20 (0.25 → 0.20으로 완화)
+    
+    # 동시양방향 충돌 회피 (완화)
+    conflict_threshold: float = 0.02  # 점수 차 < 0.02면 관망 (0.05 → 0.02로 완화)
 
 
 class AdvancedLiquidationStrategy:
@@ -90,9 +124,10 @@ class AdvancedLiquidationStrategy:
         self.cascade_detected = False
         self.cascade_start_time = None
         
-        # 세션 필터
+        # 세션 필터 (감점형)
         self.session_active = False
         self.session_start_time = None
+        self.session_score_penalty = 0.15  # 세션 외 신뢰도 감점
         
     def process_liquidation_event(self, event: Dict) -> None:
         """청산 이벤트 처리"""
@@ -104,8 +139,8 @@ class AdvancedLiquidationStrategy:
             if qty_usd <= 0:
                 return
             
-            # 현재 시간 계산
-            current_time = datetime.fromtimestamp(timestamp)
+            # UTC 시간으로 통일 (timezone-aware)
+            current_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
             
             # 세션 상태 확인
             self._check_session_status(current_time)
@@ -113,10 +148,16 @@ class AdvancedLiquidationStrategy:
             # 1초 bin에 추가
             bin_key = int(timestamp)
             
-            if side.lower() == 'long':
-                self._add_to_bin(self.long_bins, bin_key, qty_usd)
-            elif side.lower() == 'short':
+            # 거래소 표준 side 매핑 (BUY/SELL ↔ long/short)
+            if side.lower() in ['long', 'buy']:
+                # BUY = 롱 포지션 청산 = short 청산
                 self._add_to_bin(self.short_bins, bin_key, qty_usd)
+            elif side.lower() in ['short', 'sell']:
+                # SELL = 숏 포지션 청산 = long 청산
+                self._add_to_bin(self.long_bins, bin_key, qty_usd)
+            else:
+                print(f"⚠️ 알 수 없는 side: {side}, 이벤트 무시")
+                return
             
             # 청산 bin에도 추가
             self._add_to_bin(self.liquidation_bins, bin_key, qty_usd)
@@ -148,33 +189,50 @@ class AdvancedLiquidationStrategy:
             if long_values:
                 self.mu_long = np.mean(long_values)
                 self.sigma_long = max(np.std(long_values), 1e-9)
+            else:
+                # 초기값 설정 (데이터가 없을 때)
+                self.mu_long = 1000.0  # 기본 청산 금액
+                self.sigma_long = 500.0  # 기본 표준편차
             
             # 숏 청산 통계
             short_values = [val for _, val in self.short_bins]
             if short_values:
                 self.mu_short = np.mean(short_values)
                 self.sigma_short = max(np.std(short_values), 1e-9)
+            else:
+                # 초기값 설정 (데이터가 없을 때)
+                self.mu_short = 1000.0  # 기본 청산 금액
+                self.sigma_short = 500.0  # 기본 표준편차
                 
         except Exception as e:
             print(f"❌ 백그라운드 통계 업데이트 오류: {e}")
     
+    # _cleanup_old_bins 메서드 제거 - deque maxlen이 자동으로 처리
+    
     def _check_session_status(self, current_time: datetime) -> None:
-        """세션 상태 확인 (런던/NYSE 오픈 ±90분)"""
+        """세션 상태 확인 (DST 자동 반영)"""
         try:
-            # 런던 오픈 (UTC 08:00)
-            london_open = current_time.replace(hour=8, minute=0, second=0, microsecond=0)
+            # UTC 시간을 각 시간대로 변환 (DST 자동 반영)
+            london_tz = pytz.timezone('Europe/London')
+            ny_tz = pytz.timezone('America/New_York')
+            
+            london_local = current_time.astimezone(london_tz)
+            ny_local = current_time.astimezone(ny_tz)
+            
+            # 각 시간대의 오픈 시간 (현지 시간 기준)
+            london_open = london_local.replace(hour=8, minute=0, second=0, microsecond=0)
+            ny_open = ny_local.replace(hour=9, minute=30, second=0, microsecond=0)
+            
+            # ±90분 윈도우
             london_start = london_open - timedelta(minutes=90)
             london_end = london_open + timedelta(minutes=90)
-            
-            # NYSE 오픈 (UTC 13:30)
-            nyse_open = current_time.replace(hour=13, minute=30, second=0, microsecond=0)
-            nyse_start = nyse_open - timedelta(minutes=90)
-            nyse_end = nyse_open + timedelta(minutes=90)
+            ny_start = ny_open - timedelta(minutes=90)
+            ny_end = ny_open + timedelta(minutes=90)
             
             # 세션 활성 상태 확인
             self.session_active = (
-                (london_start <= current_time <= london_end) or
-                (nyse_start <= current_time <= nyse_end)
+                (london_start <= london_local <= london_end) or
+                (ny_start <= ny_local <= ny_end)
             )
             
             # 세션 시작 시간 기록
@@ -186,10 +244,838 @@ class AdvancedLiquidationStrategy:
         except Exception as e:
             print(f"❌ 세션 상태 확인 오류: {e}")
     
+    def get_session_score(self) -> float:
+        """세션 점수 계산 (감점형)"""
+        if self.session_active:
+            return 1.0  # 세션 내: 만점
+        else:
+            return 1.0 - self.session_score_penalty  # 세션 외: 감점
+    
+    def get_session_core_status(self) -> Dict[str, Any]:
+        """세션 코어 상태 확인 (거래량/변동성 급증 시간대)"""
+        try:
+            current_time = datetime.now(timezone.utc)
+            
+            # 런던/뉴욕 세션 코어 시간 (오픈 후 ±30분)
+            london_tz = pytz.timezone('Europe/London')
+            ny_tz = pytz.timezone('America/New_York')
+            
+            london_local = current_time.astimezone(london_tz)
+            ny_local = current_time.astimezone(ny_tz)
+            
+            # 런던 코어: 8:00-8:30 (현지시간)
+            london_core_start = london_local.replace(hour=8, minute=0, second=0, microsecond=0)
+            london_core_end = london_local.replace(hour=8, minute=30, second=0, microsecond=0)
+            
+            # 뉴욕 코어: 9:30-10:00 (현지시간)
+            ny_core_start = ny_local.replace(hour=9, minute=30, second=0, microsecond=0)
+            ny_core_end = ny_local.replace(hour=10, minute=0, second=0, microsecond=0)
+            
+            # 코어 세션 확인
+            london_core = london_core_start <= london_local <= london_core_end
+            ny_core = ny_core_start <= ny_local <= ny_core_end
+            is_core_session = london_core or ny_core
+            
+            # 임계값 조정 계수 (백테스트용으로 1.0 고정)
+            # threshold_multiplier = 1.1 if is_core_session else 0.95  # 코어: +10%, 한산: -5%
+            threshold_multiplier = 1.0  # 백테스트용으로 세션 영향 제거
+            
+            return {
+                'is_core_session': is_core_session,
+                'london_core': london_core,
+                'ny_core': ny_core,
+                'threshold_multiplier': threshold_multiplier
+            }
+            
+        except Exception as e:
+            print(f"❌ 세션 코어 상태 확인 오류: {e}")
+            return {
+                'is_core_session': False,
+                'london_core': False,
+                'ny_core': False,
+                'threshold_multiplier': 1.0
+            }
+    
+    def check_slippage_and_risk(self, entry_price: float, stop_loss: float, 
+                                current_price: float, atr: float) -> Dict[str, Any]:
+        """슬리피지 및 리스크 체크"""
+        try:
+            # 슬리피지 계산
+            slippage_pct = abs(entry_price - current_price) / current_price
+            
+            # 스탑 거리 계산
+            stop_distance = abs(entry_price - stop_loss)
+            stop_distance_atr = stop_distance / atr if atr > 0 else 0
+            
+            # 슬리피지 체크
+            slippage_ok = slippage_pct <= self.config.slippage_max_pct
+            
+            # 스탑 거리 체크 (초기 튜닝용으로 허용폭 확대)
+            stop_distance_ok = 0.05 <= stop_distance_atr <= 4.0  # 0.05~4.0 ATR 범위 (0.1~3.0 → 0.05~4.0으로 확대)
+            
+            # 전체 체크 결과
+            all_checks_passed = slippage_ok and stop_distance_ok
+            
+            # 신호 등급 결정
+            if all_checks_passed:
+                signal_grade = 'ENTRY'
+            elif slippage_ok and not stop_distance_ok:
+                signal_grade = 'SETUP'  # 슬리피지는 OK, 스탑 거리 문제
+            else:
+                signal_grade = 'HEADS_UP'  # 슬리피지 초과
+            
+            return {
+                'slippage_ok': slippage_ok,
+                'stop_distance_ok': stop_distance_ok,
+                'all_checks_passed': all_checks_passed,
+                'signal_grade': signal_grade,
+                'slippage_pct': slippage_pct,
+                'stop_distance_atr': stop_distance_atr,
+                'slippage_limit': self.config.slippage_max_pct
+            }
+            
+        except Exception as e:
+            print(f"❌ 슬리피지 및 리스크 체크 오류: {e}")
+            return {
+                'slippage_ok': False,
+                'stop_distance_ok': False,
+                'all_checks_passed': False,
+                'signal_grade': 'HEADS_UP',
+                'slippage_pct': 0.0,
+                'stop_distance_atr': 0.0,
+                'slippage_limit': self.config.slippage_max_pct
+            }
+    
+    def check_gate_conditions(self, price_data: pd.DataFrame, atr: float, 
+                                current_price: float) -> Dict[str, Any]:
+        """Gate(최소 위생 조건) 확인"""
+        try:
+            # 1. 데이터 준비 확인
+            warmup_status = self.get_warmup_status()
+            data_ready = warmup_status['basic_warmup']  # 최소 60초 워밍업
+            
+            # 2. 실행 가능 조건 확인
+            atr_valid = atr > 0
+            price_valid = current_price > 0
+            
+            # 3. 기본 위생 조건
+            basic_hygiene = (data_ready and atr_valid and price_valid)
+            
+            # 4. 하드 블록 조건 (완전 차단)
+            hard_blocked = False
+            block_reason = None
+            
+            # 워밍업 부족
+            if not warmup_status['basic_warmup']:
+                hard_blocked = True
+                block_reason = f"워밍업 부족 (필요: {self.config.min_warmup_samples_setup}개, 현재: {warmup_status['total_samples']}개)"
+                # print(f"🚪 Gate 블록: {block_reason}")
+            # ATR 무효
+            elif not atr_valid:
+                hard_blocked = True
+                block_reason = f"ATR 무효 (ATR={atr:.2f})"
+                # print(f"🚪 Gate 블록: {block_reason}")
+            # 가격 무효
+            elif not price_valid:
+                hard_blocked = True
+                block_reason = f"가격 무효 (가격={current_price:.2f})"
+                # print(f"🚪 Gate 블록: {block_reason}")
+            
+            return {
+                'gate_passed': basic_hygiene and not hard_blocked,
+                'basic_hygiene': basic_hygiene,
+                'hard_blocked': hard_blocked,
+                'block_reason': block_reason,
+                'warmup_status': warmup_status,
+                'atr_valid': atr_valid,
+                'price_valid': price_valid
+            }
+            
+        except Exception as e:
+            print(f"❌ Gate 조건 확인 오류: {e}")
+            return {
+                'gate_passed': False,
+                'basic_hygiene': False,
+                'hard_blocked': True,
+                'block_reason': f"오류: {e}",
+                'warmup_status': {},
+                'atr_valid': False,
+                'price_valid': False
+            }
+    
+    def calculate_orderflow_score(self, metrics: Dict[str, Any], signal_side: str) -> float:
+        """오더플로우 점수 계산 (청산 지분·강도)"""
+        try:
+            z_long = metrics.get('z_long', 0)
+            z_short = metrics.get('z_short', 0)
+            lpi = metrics.get('lpi', 0)
+            
+            # 롱 신호: '숏 청산' 지분·강도↑ 가점 / '롱 청산'↑ 감점
+            if signal_side == 'BUY':
+                # 숏 청산 스파이크 가점 (z_short ≥ 2.0)
+                short_liquidation_bonus = min(z_short / 4.0, 1.0) if z_short >= 2.0 else 0.0
+                
+                # 롱 청산 스파이크 감점 (z_long ≥ 2.0)
+                long_liquidation_penalty = min(z_long / 4.0, 0.5) if z_long >= 2.0 else 0.0
+                
+                # LPI 바이어스 (숏 청산 편향)
+                lpi_bonus = max(lpi, 0) if lpi > 0 else 0.0
+                
+                score = short_liquidation_bonus + lpi_bonus - long_liquidation_penalty
+                
+            # 숏 신호: '롱 청산' 지분·강도↑ 가점 / '숏 청산'↑ 감점
+            else:  # SELL
+                # 롱 청산 스파이크 가점 (z_long ≥ 2.0)
+                long_liquidation_bonus = min(z_long / 4.0, 1.0) if z_long >= 2.0 else 0.0
+                
+                # 숏 청산 스파이크 감점 (z_short ≥ 2.0)
+                short_liquidation_penalty = min(z_short / 4.0, 0.5) if z_short >= 2.0 else 0.0
+                
+                # LPI 바이어스 (롱 청산 편향)
+                lpi_bonus = max(-lpi, 0) if lpi < 0 else 0.0
+                
+                score = long_liquidation_bonus + lpi_bonus - short_liquidation_penalty
+            
+            # 점수 정규화 (0.0 ~ 1.0)
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 오더플로우 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_structure_score(self, strategy_name: str, price_data: pd.DataFrame, 
+                                key_levels: Dict[str, float], opening_range: Dict[str, float],
+                                atr: float, metrics: Dict[str, Any]) -> float:
+        """구조 품질 점수 계산 (플레이북별)"""
+        try:
+            if strategy_name == 'A':  # 스윕&리클레임
+                return self._calculate_strategy_a_structure_score(price_data, key_levels, atr)
+            elif strategy_name == 'B':  # 스퀴즈 지속
+                return self._calculate_strategy_b_structure_score(price_data, opening_range, atr, metrics)
+            elif strategy_name == 'C':  # VWAP 페이드
+                return self._calculate_strategy_c_structure_score(price_data, key_levels, atr, metrics)
+            else:
+                return 0.0
+                
+        except Exception as e:
+            print(f"❌ 구조 품질 점수 계산 오류: {e}")
+            return 0.0
+    
+    def _calculate_strategy_a_structure_score(self, price_data: pd.DataFrame, 
+                                            key_levels: Dict[str, float], atr: float) -> float:
+        """전략 A 구조 품질 점수"""
+        try:
+            if len(price_data) < 3:
+                return 0.0
+            
+            score = 0.0
+            current_price = price_data['close'].iloc[-1]
+            prev_day_low = key_levels.get('prev_day_low', 0)
+            prev_day_high = key_levels.get('prev_day_high', 0)
+            
+            # 스윕 깊이 (ATR 기준)
+            if prev_day_low > 0 and current_price < prev_day_low:
+                sweep_depth = (prev_day_low - current_price) / atr if atr > 0 else 0
+                if sweep_depth >= 0.25:  # min_sweep_atr
+                    score += 0.4
+            
+            # 리클레임 품질
+            if len(price_data) >= 2:
+                prev_close = price_data['close'].iloc[-2]
+                current_close = price_data['close'].iloc[-1]
+                
+                # 종가 리클로즈 (완전 복귀)
+                if prev_day_low > 0 and prev_close < prev_day_low and current_close > prev_day_low:
+                    score += 0.4
+                # 근접 리클레임 (±0.5ATR)
+                elif prev_day_low > 0 and prev_close < prev_day_low:
+                    atr_buffer = atr * 0.5
+                    if current_close > prev_day_low - atr_buffer:
+                        score += 0.2
+                
+                # 상단 스윕&리클레임도 동일하게
+                if prev_day_high > 0 and prev_close > prev_day_high and current_close < prev_day_high:
+                    score += 0.4
+                elif prev_day_high > 0 and prev_close > prev_day_high:
+                    atr_buffer = atr * 0.5
+                    if current_close < prev_day_high + atr_buffer:
+                        score += 0.2
+            
+            # 스윕 최근성 (≤15봉)
+            bars_since_sweep = 0
+            for i in range(1, min(16, len(price_data))):
+                if prev_day_low > 0 and price_data['low'].iloc[-i] < prev_day_low:
+                    bars_since_sweep = i
+                    break
+                if prev_day_high > 0 and price_data['high'].iloc[-i] > prev_day_high:
+                    bars_since_sweep = i
+                    break
+            
+            if bars_since_sweep <= 15:
+                score += 0.2
+            elif bars_since_sweep > 15:
+                score -= 0.1  # 패널티
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 전략 A 구조 점수 계산 오류: {e}")
+            return 0.0
+    
+    def _calculate_strategy_b_structure_score(self, price_data: pd.DataFrame, 
+                                            opening_range: Dict[str, float], atr: float,
+                                            metrics: Dict[str, Any]) -> float:
+        """전략 B 구조 품질 점수"""
+        try:
+            if len(price_data) < 4:
+                return 0.0
+            
+            score = 0.0
+            current_price = price_data['close'].iloc[-1]
+            or_high = opening_range.get('high', 0)
+            or_low = opening_range.get('low', 0)
+            
+            # 브레이크 확인
+            if or_high > 0 and current_price > or_high:  # 상단 돌파
+                score += 0.3
+            elif or_low > 0 and current_price < or_low:  # 하단 이탈
+                score += 0.3
+            
+            # 리테스트 거리 (≤0.5~0.6ATR 가점)
+            retest_distance = 0.0
+            if or_high > 0 and current_price > or_high:  # 롱 신호
+                for i in range(1, min(5, len(price_data))):
+                    low_price = price_data['low'].iloc[-i]
+                    if low_price < or_high:
+                        retest_distance = (or_high - low_price) / atr if atr > 0 else 0
+                        break
+            elif or_low > 0 and current_price < or_low:  # 숏 신호
+                for i in range(1, min(5, len(price_data))):
+                    high_price = price_data['high'].iloc[-i]
+                    if high_price > or_low:
+                        retest_distance = (high_price - or_low) / atr if atr > 0 else 0
+                        break
+            
+            if retest_distance <= 0.6:
+                score += 0.4
+            elif retest_distance <= 1.0:
+                score += 0.2
+            
+            # 추가 반대편 청산 확인 가점
+            if self._check_additional_long_liquidation():
+                score += 0.3
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 전략 B 구조 점수 계산 오류: {e}")
+            return 0.0
+    
+    def _calculate_strategy_c_structure_score(self, price_data: pd.DataFrame, 
+                                            key_levels: Dict[str, float], atr: float,
+                                            metrics: Dict[str, Any]) -> float:
+        """전략 C 구조 품질 점수"""
+        try:
+            score = 0.0
+            current_price = price_data['close'].iloc[-1]
+            vwap = key_levels.get('vwap', current_price)
+            vwap_std = key_levels.get('vwap_std', current_price * 0.02)
+            
+            # ±σ 이탈 정도 (2σ 기준)
+            vwap_distance = abs(current_price - vwap) / vwap_std if vwap_std > 0 else 0
+            
+            if vwap_distance >= 2.0:
+                score += 0.5
+            elif vwap_distance >= 1.8:
+                score += 0.3
+            
+            # 극단 스파이크 확인
+            z_long = metrics.get('z_long', 0)
+            z_short = metrics.get('z_short', 0)
+            lpi = metrics.get('lpi', 0)
+            
+            extreme_spike = (max(z_long, z_short) >= self.config.z_extreme and 
+                           abs(lpi) >= self.config.lpi_extreme)
+            
+            if extreme_spike:
+                score += 0.3
+            
+            # 재진입 확인 (±1.5σ)
+            if vwap_distance <= 1.5:
+                score += 0.2
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 전략 C 구조 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_decay_cascade_score(self, metrics: Dict[str, Any], side: str) -> float:
+        """소멸/연쇄 점수 계산 (peak→decay & cascade)"""
+        try:
+            score = 0.0
+            
+            # 1. 감소 확인 (현재 10s ≤ 피크 10s × ratio)
+            decay_ok = self._check_post_spike_decay(metrics, side)
+            if decay_ok:
+                score += 0.6
+            else:
+                score -= 0.3  # 감점
+            
+            # 2. 같은 방향 캐스케이드 감점
+            is_cascade = metrics.get('is_cascade', False)
+            if is_cascade:
+                # 캐스케이드 지분 확인 (최근 20~30초)
+                current_time = datetime.now(timezone.utc)
+                window_start = int(current_time.timestamp()) - 25  # 25초 윈도우
+                
+                if side == 'long':
+                    cascade_liquidation = sum(val for ts, val in self.long_bins if ts >= window_start)
+                    total_liquidation = sum(val for ts, val in self.liquidation_bins if ts >= window_start)
+                else:  # short
+                    cascade_liquidation = sum(val for ts, val in self.short_bins if ts >= window_start)
+                    total_liquidation = sum(val for ts, val in self.liquidation_bins if ts >= window_start)
+                
+                cascade_ratio = cascade_liquidation / (total_liquidation + 1e-9)
+                
+                # 지분 ≥ 0.85 & 이벤트 ≥ 2회면 감점
+                if cascade_ratio >= 0.85:
+                    score -= 0.4
+                elif cascade_ratio >= 0.7:
+                    score -= 0.2
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 소멸/연쇄 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_trend_context_score(self, price_data: pd.DataFrame, 
+                                    key_levels: Dict[str, float], metrics: Dict[str, Any]) -> float:
+        """추세/컨텍스트 점수 계산"""
+        try:
+            score = 0.0
+            current_price = price_data['close'].iloc[-1]
+            
+            # 1. 가격↔VWAP 관계
+            vwap = key_levels.get('vwap', current_price)
+            if vwap > 0:
+                vwap_distance = abs(current_price - vwap) / current_price
+                if vwap_distance <= 0.01:  # ±1% 이내
+                    score += 0.3
+                elif vwap_distance <= 0.02:  # ±2% 이내
+                    score += 0.1
+            
+            # 2. 세션 위상 보정
+            session_core = self.get_session_core_status()
+            if session_core['is_core_session']:
+                score += 0.05  # MID +0.05
+            else:
+                score -= 0.05  # OPEN -0.05
+            
+            # 3. EMA 정렬 (간단한 추세 확인)
+            if len(price_data) >= 20:
+                ema_20 = price_data['close'].rolling(20).mean().iloc[-1]
+                ema_10 = price_data['close'].rolling(10).mean().iloc[-1]
+                
+                if current_price > ema_10 > ema_20:  # 상승 추세
+                    score += 0.2
+                elif current_price < ema_10 < ema_20:  # 하락 추세
+                    score += 0.2
+                else:  # 혼조
+                    score += 0.1
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 추세/컨텍스트 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_location_baseline_score(self, price_data: pd.DataFrame, 
+                                        key_levels: Dict[str, float], 
+                                        opening_range: Dict[str, float], atr: float) -> float:
+        """로케이션/기준선 점수 계산"""
+        try:
+            score = 0.0
+            current_price = price_data['close'].iloc[-1]
+            
+            # 1. 키레벨 근접/복귀
+            prev_day_low = key_levels.get('prev_day_low', 0)
+            prev_day_high = key_levels.get('prev_day_high', 0)
+            
+            if prev_day_low > 0:
+                low_distance = abs(current_price - prev_day_low) / atr if atr > 0 else 0
+                if low_distance <= 0.5:
+                    score += 0.3
+                elif low_distance <= 1.0:
+                    score += 0.1
+            
+            if prev_day_high > 0:
+                high_distance = abs(current_price - prev_day_high) / atr if atr > 0 else 0
+                if high_distance <= 0.5:
+                    score += 0.3
+                elif high_distance <= 1.0:
+                    score += 0.1
+            
+            # 2. OR 확장 여지
+            or_high = opening_range.get('high', 0)
+            or_low = opening_range.get('low', 0)
+            
+            if or_high > 0 and or_low > 0:
+                or_range = or_high - or_low
+                current_range = max(price_data['high'].iloc[-20:]) - min(price_data['low'].iloc[-20:])
+                
+                if current_range < or_range * 1.5:  # 확장 여지 있음
+                    score += 0.2
+            
+            # 3. VWAP 근접
+            vwap = key_levels.get('vwap', current_price)
+            if vwap > 0:
+                vwap_distance = abs(current_price - vwap) / current_price
+                if vwap_distance <= 0.005:  # ±0.5% 이내
+                    score += 0.2
+                elif vwap_distance <= 0.01:  # ±1% 이내
+                    score += 0.1
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 로케이션/기준선 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_risk_appropriateness_score(self, entry_price: float, stop_loss: float, 
+                                           take_profit1: float, atr: float) -> float:
+        """리스크 적정성 점수 계산"""
+        try:
+            score = 0.0
+            
+            # 1. 스탑 거리/ATR 적합 (0.6~1.6R 가점)
+            stop_distance = abs(entry_price - stop_loss)
+            stop_distance_atr = stop_distance / atr if atr > 0 else 0
+            
+            if 0.6 <= stop_distance_atr <= 1.6:
+                score += 0.5
+            elif 0.4 <= stop_distance_atr <= 2.0:
+                score += 0.3
+            elif stop_distance_atr < 0.2 or stop_distance_atr > 3.0:
+                score -= 0.3  # 패널티
+            
+            # 2. R-multiple 목표 가능성
+            risk = stop_distance
+            if risk > 0:
+                tp1_distance = abs(take_profit1 - entry_price)
+                r_multiple = tp1_distance / risk
+                
+                if r_multiple >= 1.5:
+                    score += 0.3
+                elif r_multiple >= 1.2:
+                    score += 0.2
+                elif r_multiple < 1.0:
+                    score -= 0.2  # 패널티
+            
+            # 3. 슬리피지 체크
+            slippage_check = self.check_slippage_and_risk(entry_price, stop_loss, entry_price, atr)
+            if slippage_check['slippage_ok']:
+                score += 0.2
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 리스크 적정성 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_data_quality_score(self) -> float:
+        """데이터 품질 점수 계산"""
+        try:
+            score = 0.0
+            
+            # 1. 결측/빈 bin 비율
+            total_bins = len(self.liquidation_bins)
+            if total_bins > 0:
+                # 최근 60초 내 빈 bin 확인
+                current_time = datetime.now(timezone.utc)
+                window_start = int(current_time.timestamp()) - 60
+                
+                filled_bins = sum(1 for ts, val in self.liquidation_bins if ts >= window_start and val > 0)
+                total_recent_bins = sum(1 for ts, _ in self.liquidation_bins if ts >= window_start)
+                
+                if total_recent_bins > 0:
+                    fill_ratio = filled_bins / total_recent_bins
+                    if fill_ratio >= 0.8:
+                        score += 0.3
+                    elif fill_ratio >= 0.6:
+                        score += 0.2
+                    elif fill_ratio < 0.4:
+                        score -= 0.2
+            
+            # 2. 이벤트 밀도
+            if total_bins >= 120:  # 최소 워밍업
+                score += 0.4
+            elif total_bins >= 60:
+                score += 0.2
+            
+            # 3. μ·σ 안정성
+            if self.sigma_long > 0 and self.sigma_short > 0:
+                score += 0.3
+            
+            return max(0.0, min(1.0, score))
+            
+        except Exception as e:
+            print(f"❌ 데이터 품질 점수 계산 오류: {e}")
+            return 0.0
+    
+    def calculate_total_score(self, strategy_name: str, signal_side: str, 
+                            price_data: pd.DataFrame, key_levels: Dict[str, float],
+                            opening_range: Dict[str, float], atr: float, 
+                            entry_price: float, stop_loss: float, take_profit1: float,
+                            metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """통합 점수 계산 (가중 합산)"""
+        try:
+            # 각 구성 요소 점수 계산
+            orderflow_score = self.calculate_orderflow_score(metrics, signal_side)
+            structure_score = self.calculate_structure_score(strategy_name, price_data, key_levels, opening_range, atr, metrics)
+            decay_cascade_score = self.calculate_decay_cascade_score(metrics, 'long' if signal_side == 'BUY' else 'short')
+            trend_context_score = self.calculate_trend_context_score(price_data, key_levels, metrics)
+            location_baseline_score = self.calculate_location_baseline_score(price_data, key_levels, opening_range, atr)
+            risk_appropriateness_score = self.calculate_risk_appropriateness_score(entry_price, stop_loss, take_profit1, atr)
+            data_quality_score = self.calculate_data_quality_score()
+            
+            # 가중 합산
+            total_score = (
+                orderflow_score * self.config.weight_orderflow +
+                structure_score * self.config.weight_structure +
+                decay_cascade_score * self.config.weight_decay_cascade +
+                trend_context_score * self.config.weight_trend_context +
+                location_baseline_score * self.config.weight_location_baseline +
+                risk_appropriateness_score * self.config.weight_risk_appropriateness +
+                data_quality_score * self.config.weight_data_quality
+            )
+            
+            # 점수 정규화 (0.0 ~ 1.0)
+            total_score = max(0.0, min(1.0, total_score))
+            
+            return {
+                'total_score': total_score,
+                'component_scores': {
+                    'orderflow': orderflow_score,
+                    'structure': structure_score,
+                    'decay_cascade': decay_cascade_score,
+                    'trend_context': trend_context_score,
+                    'location_baseline': location_baseline_score,
+                    'risk_appropriateness': risk_appropriateness_score,
+                    'data_quality': data_quality_score
+                },
+                'weighted_contributions': {
+                    'orderflow': orderflow_score * self.config.weight_orderflow,
+                    'structure': structure_score * self.config.weight_structure,
+                    'decay_cascade': decay_cascade_score * self.config.weight_decay_cascade,
+                    'trend_context': trend_context_score * self.config.weight_trend_context,
+                    'location_baseline': location_baseline_score * self.config.weight_location_baseline,
+                    'risk_appropriateness': risk_appropriateness_score * self.config.weight_risk_appropriateness,
+                    'data_quality': data_quality_score * self.config.weight_data_quality
+                }
+            }
+            
+        except Exception as e:
+            print(f"❌ 통합 점수 계산 오류: {e}")
+            return {
+                'total_score': 0.0,
+                'component_scores': {},
+                'weighted_contributions': {}
+            }
+    
+    def determine_signal_tier(self, total_score: float, strategy_name: str,
+                            metrics: Dict[str, Any], atr: float) -> Dict[str, Any]:
+        """신호 Tier 결정 (ENTRY/SETUP/HEADS-UP)"""
+        try:
+            # 기본 Tier 결정
+            if total_score >= self.config.tier_entry_threshold:
+                base_tier = 'ENTRY'
+            elif total_score >= self.config.tier_setup_threshold:
+                base_tier = 'SETUP'
+            elif total_score >= self.config.tier_heads_up_threshold:
+                base_tier = 'HEADS_UP'
+            else:
+                base_tier = 'REJECT'
+            
+            # 전략별 특수 규칙 적용
+            final_tier = base_tier
+            tier_modification = None
+            
+            # 전략 C: 감소 미확인 시 ENTRY → SETUP 강등
+            if strategy_name == 'C' and base_tier == 'ENTRY':
+                # 감소 확인 필요
+                decay_ok = self._check_post_spike_decay(metrics, 'long')  # 기본값
+                if not decay_ok:
+                    final_tier = 'SETUP'
+                    tier_modification = "감소 미확인으로 강등"
+            
+            # 캐스케이드 감지 시: ENTRY → SETUP 강등
+            if base_tier == 'ENTRY' and metrics.get('is_cascade', False):
+                final_tier = 'SETUP'
+                tier_modification = "캐스케이드 감지로 강등"
+            
+            # 슬리피지 초과 시: ENTRY → HEADS_UP 강등
+            if base_tier == 'ENTRY':
+                # 슬리피지 체크 (간단한 버전)
+                current_price = metrics.get('current_price', 0)
+                if current_price > 0:
+                    slippage_pct = abs(entry_price - current_price) / current_price
+                    if slippage_pct > self.config.slippage_max_pct:
+                        final_tier = 'HEADS_UP'
+                        tier_modification = "슬리피지 초과로 강등"
+            
+            return {
+                'base_tier': base_tier,
+                'final_tier': final_tier,
+                'tier_modification': tier_modification,
+                'total_score': total_score,
+                'thresholds': {
+                    'entry': self.config.tier_entry_threshold,
+                    'setup': self.config.tier_setup_threshold,
+                    'heads_up': self.config.tier_heads_up_threshold
+                }
+            }
+            
+        except Exception as e:
+            print(f"❌ Tier 결정 오류: {e}")
+            return {
+                'base_tier': 'REJECT',
+                'final_tier': 'REJECT',
+                'tier_modification': f"오류: {e}",
+                'total_score': total_score,
+                'thresholds': {}
+            }
+    
+    def check_conflict_resolution(self, long_signal: Dict[str, Any], 
+                                short_signal: Dict[str, Any]) -> Dict[str, Any]:
+        """동시양방향 충돌 회피 확인"""
+        try:
+            if not long_signal or not short_signal:
+                return {'conflict': False, 'resolution': '단일 신호'}
+            
+            long_score = long_signal.get('total_score', 0)
+            short_score = short_signal.get('total_score', 0)
+            
+            score_diff = abs(long_score - short_score)
+            
+            if score_diff < self.config.conflict_threshold:
+                return {
+                    'conflict': True,
+                    'resolution': '관망 (점수 차 < 0.05)',
+                    'long_score': long_score,
+                    'short_score': short_score,
+                    'score_diff': score_diff
+                }
+            else:
+                # 높은 점수 신호 선택
+                winner = 'LONG' if long_score > short_score else 'SHORT'
+                return {
+                    'conflict': False,
+                    'resolution': f'{winner} 신호 선택',
+                    'winner_score': max(long_score, short_score),
+                    'loser_score': min(long_score, short_score),
+                    'score_diff': score_diff
+                }
+                
+        except Exception as e:
+            print(f"❌ 충돌 해결 확인 오류: {e}")
+            return {'conflict': True, 'resolution': f'오류: {e}'}
+    
+    def log_strategy_diagnosis(self, strategy_name: str, metrics: Dict[str, Any], 
+                                reason: str = None) -> None:
+        """전략별 진단 로그 - 비활성화됨"""
+        # 진단 로그 출력 비활성화
+        pass
+    
+    def log_scoring_results(self, strategy_name: str, signal_side: str, 
+                            scoring_result: Dict[str, Any], tier_result: Dict[str, Any]) -> None:
+        """스코어링 결과 로그 - 간소화된 버전"""
+        try:
+            total_score = scoring_result.get('total_score', 0)
+            final_tier = tier_result.get('final_tier', 'UNKNOWN')
+            
+            # print(f"   📊 {strategy_name} {signal_side}: {total_score:.3f} → {final_tier}")  # 조용한 모드
+                
+        except Exception as e:
+            print(f"❌ 스코어링 결과 로그 오류: {e}")
+    
+    def log_candidate_details(self, strategy_name: str, signal_side: str, 
+                            metrics: Dict[str, Any], price_data: pd.DataFrame,
+                            key_levels: Dict[str, float], atr: float) -> None:
+        """후보별 상세 로그 - 간소화된 버전"""
+        try:
+            # 핵심 지표만 간단히 출력
+            z_long = metrics.get('z_long', 0)
+            z_short = metrics.get('z_short', 0)
+            lpi = metrics.get('lpi', 0)
+            
+            # print(f"   📊 {strategy_name} {signal_side}: Z({z_long:.1f}/{z_short:.1f}), LPI({lpi:.2f})")  # 조용한 모드
+                
+        except Exception as e:
+            print(f"❌ 후보 상세 로그 오류: {e}")
+    
+    def get_warmup_status(self) -> Dict[str, Any]:
+        """워밍업 상태 확인"""
+        # 현재 시간 (UTC)
+        now = datetime.now(timezone.utc)
+        
+        # 1초 단위로 bin 정리 (deque maxlen이 자동으로 처리)
+        # self._cleanup_old_bins(now)  # 메서드가 제거됨
+        
+        # 롱/숏 청산 이벤트 수집
+        long_samples = len(self.long_bins)
+        short_samples = len(self.short_bins)
+        total_samples = long_samples + short_samples
+        
+        # 기본 워밍업 확인 (테스트용으로 완화)
+        basic_warmup = total_samples >= 2  # 10 → 2로 완화
+        
+        # 전략별 워밍업 확인 (테스트용으로 완화)
+        long_warmup = long_samples >= 1   # 5 → 1로 완화
+        short_warmup = short_samples >= 1  # 5 → 1로 완화
+        
+        # 전체 워밍업 확인
+        full_warmup = (basic_warmup and long_warmup and short_warmup)
+        
+        # μ·σ 안정성 확인 (상세 로깅 추가)
+        mu_long_valid = self.mu_long > 0
+        mu_short_valid = self.mu_short > 0
+        sigma_long_valid = self.sigma_long > 0
+        sigma_short_valid = self.sigma_short > 0
+        
+        mu_stable = (sigma_long_valid and sigma_short_valid and
+                    mu_long_valid and mu_short_valid)
+        
+        # 워밍업 상태는 필요시에만 로깅 (조용한 모드)
+        # print(f"🔥 워밍업 상태: 샘플={total_samples}/{self.config.min_warmup_samples}, 롱={long_samples}/{self.config.min_warmup_samples_setup}, 숏={short_samples}/{self.config.min_warmup_samples_setup}")
+        # print(f"🔥 모수 상태: 롱 μ={self.mu_long:.2f}({'✓' if mu_long_valid else '✗'}), σ={self.sigma_long:.2f}({'✓' if sigma_long_valid else '✗'})")
+        # print(f"🔥 모수 상태: 숏 μ={self.mu_short:.2f}({'✓' if mu_short_valid else '✗'}), σ={self.sigma_short:.2f}({'✓' if sigma_short_valid else '✗'})")
+        
+        # 전략별 실행 가능 여부
+        can_setup = basic_warmup and mu_stable
+        can_entry = full_warmup and mu_stable
+        
+        return {
+            'basic_warmup': basic_warmup,
+            'full_warmup': full_warmup,
+            'mu_stable': mu_stable,
+            'can_setup': can_setup,
+            'can_entry': can_entry,
+            'total_samples': total_samples,
+            'long_samples': long_samples,
+            'short_samples': short_samples,
+            'mu_long_valid': mu_long_valid,
+            'mu_short_valid': mu_short_valid,
+            'sigma_long_valid': sigma_long_valid,
+            'sigma_short_valid': sigma_short_valid
+        }
+    
     def get_current_liquidation_metrics(self) -> Dict[str, Any]:
         """현재 청산 지표 계산"""
         try:
-            current_time = datetime.now()
+            # UTC 시간으로 통일
+            current_time = datetime.now(timezone.utc)
             current_timestamp = int(current_time.timestamp())
             
             # 30초 윈도우 계산
@@ -201,19 +1087,50 @@ class AdvancedLiquidationStrategy:
             # 숏 청산 30초 합계
             l_short_30s = sum(val for ts, val in self.short_bins if ts >= window_start)
             
-            # Z점수 계산
-            z_long = (l_long_30s - self.mu_long) / max(self.sigma_long, 1e-9)
-            z_short = (l_short_30s - self.mu_short) / max(self.sigma_short, 1e-9)
+            # Z점수 계산 - 30초 합계에 맞게 스케일링
+            # 30초 합계의 경우: μ → 30×μ, σ → √30×σ
+            scale_factor = self.config.agg_window_sec  # 30
+            scale_sqrt = np.sqrt(scale_factor)  # √30
+            
+            mu_long_scaled = self.mu_long * scale_factor
+            sigma_long_scaled = self.sigma_long * scale_sqrt
+            mu_short_scaled = self.mu_short * scale_factor
+            sigma_short_scaled = self.sigma_short * scale_sqrt
+            
+            # 상대적 Z-score 계산 (백그라운드 대비 변화율 기반)
+            if mu_long_scaled > 0:
+                z_long = (l_long_30s - mu_long_scaled) / max(sigma_long_scaled, 1e-9)
+                # 절대값으로 변환하여 스파이크 감지
+                z_long_abs = abs(z_long)
+                z_long = z_long_abs if z_long_abs >= 1.0 else 0.0
+            else:
+                z_long = 0.0
+                
+            if mu_short_scaled > 0:
+                z_short = (l_short_30s - mu_short_scaled) / max(sigma_short_scaled, 1e-9)
+                # 절대값으로 변환하여 스파이크 감지
+                z_short_abs = abs(z_short)
+                z_short = z_short_abs if z_short_abs >= 1.0 else 0.0
+            else:
+                z_short = 0.0
             
             # LPI 계산
             total_liquidation = l_long_30s + l_short_30s
             lpi = (l_short_30s - l_long_30s) / (total_liquidation + 1e-9)
             
             # 캐스케이드 감지
-            is_cascade = self._detect_cascade(current_timestamp)
+            cascade_info = self._detect_cascade(current_timestamp)
+            is_cascade = cascade_info['total_cascade']
             
             # 쿨다운 상태 확인
             cooldown_active = self._is_cooldown_active(current_time)
+            
+            # 상세한 Z-score 스케일링 로깅
+            # 디버그 로그 제거 (조용한 모드)
+            # if total_liquidation > 0:
+            #     print(f"🔥 청산: 롱={l_long_30s:.0f}, 숏={l_short_30s:.0f} | Z: 롱={z_long:.1f}, 숏={z_short:.1f} | LPI={lpi:.2f}")
+            #     print(f"🔥 Z-score 스케일링: 롱 μ={self.mu_long:.0f}×30={mu_long_scaled:.0f}, σ={self.sigma_long:.0f}×√30={sigma_long_scaled:.0f}")
+            #     print(f"🔥 Z-score 스케일링: 숏 μ={self.mu_short:.0f}×30={mu_short_scaled:.0f}, σ={self.sigma_short:.0f}×√30={sigma_short_scaled:.0f}")
             
             return {
                 'timestamp': current_time,
@@ -229,7 +1146,11 @@ class AdvancedLiquidationStrategy:
                     'mu_long': self.mu_long,
                     'sigma_long': self.sigma_long,
                     'mu_short': self.mu_short,
-                    'sigma_short': self.sigma_short
+                    'sigma_short': self.sigma_short,
+                    'mu_long_scaled': mu_long_scaled,
+                    'sigma_long_scaled': sigma_long_scaled,
+                    'mu_short_scaled': mu_short_scaled,
+                    'sigma_short_scaled': sigma_short_scaled
                 }
             }
             
@@ -237,178 +1158,220 @@ class AdvancedLiquidationStrategy:
             print(f"❌ 청산 지표 계산 오류: {e}")
             return {}
     
-    def _detect_cascade(self, current_timestamp: int) -> bool:
-        """캐스케이드 조건 감지"""
+    def _detect_cascade(self, current_timestamp: int) -> Dict[str, bool]:
+        """캐스케이드 조건 감지 (방향별 분리)"""
         try:
             cascade_start = current_timestamp - self.config.cascade_seconds
-            cascade_count = 0
+            long_cascade_count = 0
+            short_cascade_count = 0
             
             # 롱 청산 캐스케이드 확인
             for ts, val in self.long_bins:
                 if ts >= cascade_start:
+                    # 1초 bin 값과 1초 스케일 통계 비교
                     z_score = (val - self.mu_long) / max(self.sigma_long, 1e-9)
                     if z_score >= self.config.cascade_z:
-                        cascade_count += 1
+                        long_cascade_count += 1
             
             # 숏 청산 캐스케이드 확인
             for ts, val in self.short_bins:
                 if ts >= cascade_start:
+                    # 1초 bin 값과 1초 스케일 통계 비교
                     z_score = (val - self.mu_short) / max(self.sigma_short, 1e-9)
                     if z_score >= self.config.cascade_z:
-                        cascade_count += 1
+                        short_cascade_count += 1
             
-            # 캐스케이드 상태 업데이트
-            if cascade_count >= self.config.cascade_count:
+            # 방향별 캐스케이드 상태 업데이트
+            long_cascade = long_cascade_count >= self.config.cascade_count
+            short_cascade = short_cascade_count >= self.config.cascade_count
+            
+            # 전체 캐스케이드 상태 (하위 호환성)
+            if long_cascade or short_cascade:
                 if not self.cascade_detected:
                     self.cascade_detected = True
-                    self.cascade_start_time = datetime.now()
-                return True
+                    self.cascade_start_time = datetime.now(timezone.utc)
             else:
                 # 캐스케이드 종료 확인 (30초 후)
                 if (self.cascade_detected and self.cascade_start_time and 
-                    (datetime.now() - self.cascade_start_time).total_seconds() > 30):
+                    (datetime.now(timezone.utc) - self.cascade_start_time).total_seconds() > 30):
                     self.cascade_detected = False
                     self.cascade_start_time = None
-                return False
+            
+            return {
+                'long_cascade': long_cascade,
+                'short_cascade': short_cascade,
+                'total_cascade': long_cascade or short_cascade
+            }
                 
         except Exception as e:
             print(f"❌ 캐스케이드 감지 오류: {e}")
-            return False
+            return {'long_cascade': False, 'short_cascade': False, 'total_cascade': False}
     
     def _is_cooldown_active(self, current_time: datetime) -> bool:
-        """쿨다운 상태 확인"""
+        """쿨다운 상태 확인 (단계별)"""
         if not self.last_strong_spike_time:
             return False
         
         time_since_spike = (current_time - self.last_strong_spike_time).total_seconds()
+        
+        # 강한 스파이크 (z >= 3.2) 쿨다운
+        if hasattr(self, 'last_spike_strength') and self.last_spike_strength >= self.config.z_strong:
+            return time_since_spike < self.config.cooldown_after_strong_sec
+        
+        # 중간 스파이크 (z >= 3.0) 쿨다운
+        elif hasattr(self, 'last_spike_strength') and self.last_spike_strength >= self.config.z_medium:
+            return time_since_spike < self.config.cooldown_after_medium_sec
+        
+        # 기본 쿨다운 (하위 호환성)
         return time_since_spike < self.config.cooldown_after_strong_sec
     
     def analyze_strategy_a_sweep_reclaim(self, 
-                                       metrics: Dict[str, Any],
-                                       price_data: pd.DataFrame,
-                                       key_levels: Dict[str, float],
-                                       atr: float) -> Optional[Dict]:
-        """전략 A: 스윕&리클레임 분석 (롱/숏)"""
+                                        metrics: Dict[str, Any],
+                                        price_data: pd.DataFrame,
+                                        key_levels: Dict[str, float],
+                                        atr: float) -> Optional[Dict]:
+        """전략 A: 스윕&리클레임 분석 (스코어링 방식)"""
         try:
-            if not self.session_active or metrics.get('cooldown_active', False):
+            # 1. Gate 조건 확인 (최소 위생)
+            gate_conditions = self.check_gate_conditions(price_data, atr, price_data['close'].iloc[-1])
+            if not gate_conditions['gate_passed']:
+                self.log_strategy_diagnosis('A', metrics, f"Gate 실패: {gate_conditions.get('block_reason', '알 수 없음')}")
                 return None
             
-            # 캐스케이드 중이면 페이드 금지
-            if metrics.get('is_cascade', False):
+            # 2. 기본 조건 확인 (하드 게이트 최소화)
+            if metrics.get('cooldown_active', False):
+                self.log_strategy_diagnosis('A', metrics, "쿨다운 중")
                 return None
             
             current_price = price_data['close'].iloc[-1]
             prev_day_low = key_levels.get('prev_day_low', 0)
             prev_day_high = key_levels.get('prev_day_high', 0)
             
-            # === 롱 신호 분석 ===
-            if prev_day_low > 0:
-                # 롱 진입 조건 확인
+            signals = []
+            
+            # === 롱 신호 후보 생성 ===
+            if prev_day_low > 0 and current_price < prev_day_low:
+                # 기본 조건 확인
                 z_long = metrics.get('z_long', 0)
                 lpi = metrics.get('lpi', 0)
                 
-                # 가격이 prev_day_low 하회하고 롱 청산 스파이크
-                price_below_level = current_price < prev_day_low
-                long_liquidation_spike = (z_long >= self.config.z_spike and 
-                                        lpi <= -self.config.lpi_bias)
-                
-                if price_below_level and long_liquidation_spike:
-                    # 레벨 재진입 확인 (1분 캔들)
-                    if len(price_data) >= 2:
-                        # 이전 봉이 레벨 아래, 현재 봉이 레벨 위
-                        prev_close = price_data['close'].iloc[-2]
-                        current_close = price_data['close'].iloc[-1]
-                        
-                        level_reentry = (prev_close < prev_day_low and 
-                                       current_close > prev_day_low)
-                        
-                        if level_reentry:
-                            # 롱 신호 생성
-                            entry_price = current_close
-                            stop_loss = min(prev_day_low, current_price) - atr * 0.3  # 0.3×ATR
-                            
-                            # 백업 스탑로스 (0.08%)
-                            backup_stop = current_price * 0.9992
-                            stop_loss = max(stop_loss, backup_stop)
-                            
-                            risk = entry_price - stop_loss
-                            tp1 = entry_price + risk * self.config.tp1_R
-                            
-                            # 2차 목표
-                            if "VWAP" in self.config.tp2:
-                                tp2 = key_levels.get('vwap', entry_price + risk * 2.0)
-                            else:
-                                tp2 = entry_price + risk * 2.0
-                            
-                            return {
-                                'signal_type': 'SWEEP_RECLAIM_LONG',
-                                'action': 'BUY',
-                                'confidence': 0.80,
-                                'entry_price': entry_price,
-                                'stop_loss': stop_loss,
-                                'take_profit1': tp1,
-                                'take_profit2': tp2,
-                                'risk_reward': self.config.tp1_R,
-                                'timestamp': datetime.now(),
-                                'reason': f"하단 스윕 + 롱청산스파이크 + 리클레임 | Z:{z_long:.1f}, LPI:{lpi:.2f}",
-                                'playbook': 'A',
-                                'liquidation_metrics': metrics
-                            }
+                if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:
+                    # 신호 생성
+                    entry_price = current_price
+                    stop_loss = min(prev_day_low, current_price) - atr * 0.3
+                    backup_stop = current_price * 0.9992
+                    stop_loss = min(stop_loss, backup_stop)
+                    
+                    risk = entry_price - stop_loss
+                    tp1 = entry_price + risk * self.config.tp1_R_a
+                    
+                    if "VWAP" in self.config.tp2:
+                        tp2 = key_levels.get('vwap', entry_price + risk * 2.0)
+                    else:
+                        tp2 = entry_price + risk * 2.0
+                    
+                    # 스코어링 및 Tier 결정
+                    scoring_result = self.calculate_total_score(
+                        'A', 'BUY', price_data, key_levels, {}, atr, 
+                        entry_price, stop_loss, tp1, metrics
+                    )
+                    
+                    tier_result = self.determine_signal_tier(
+                        scoring_result['total_score'], 'A', metrics, atr
+                    )
+                    
+                    # 후보 상세 로그
+                    self.log_candidate_details('A', 'BUY', metrics, price_data, key_levels, atr)
+                    
+                    # 스코어링 결과 로그
+                    self.log_scoring_results('A', 'BUY', scoring_result, tier_result)
+                    
+                    # 신호 생성
+                    signal = {
+                        'signal_type': 'SWEEP_RECLAIM_LONG',
+                        'action': 'BUY',
+                        'confidence': scoring_result['total_score'],
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit1': tp1,
+                        'take_profit2': tp2,
+                        'risk_reward': self.config.tp1_R_a,
+                        'timestamp': datetime.now(timezone.utc),
+                        'reason': f"하단 스윕 + 롱청산스파이크 | Z:{z_long:.1f}, LPI:{lpi:.2f}",
+                        'playbook': 'A',
+                        'liquidation_metrics': metrics,
+                        'total_score': scoring_result['total_score'],
+                        'tier': tier_result['final_tier'],
+                        'component_scores': scoring_result['component_scores']
+                    }
+                    
+                    signals.append(signal)
             
-            # === 숏 신호 분석 ===
-            if prev_day_high > 0:
-                # 숏 진입 조건 확인
+            # === 숏 신호 후보 생성 ===
+            if prev_day_high > 0 and current_price > prev_day_high:
+                # 기본 조건 확인
                 z_short = metrics.get('z_short', 0)
                 lpi = metrics.get('lpi', 0)
                 
-                # 가격이 prev_day_high 상회하고 숏 청산 스파이크
-                price_above_level = current_price > prev_day_high
-                short_liquidation_spike = (z_short >= self.config.z_spike and 
-                                         lpi >= self.config.lpi_bias)
-                
-                if price_above_level and short_liquidation_spike:
-                    # 레벨 재진입 확인 (1분 캔들)
-                    if len(price_data) >= 2:
-                        # 이전 봉이 레벨 위, 현재 봉이 레벨 아래
-                        prev_close = price_data['close'].iloc[-2]
-                        current_close = price_data['close'].iloc[-1]
-                        
-                        level_reentry = (prev_close > prev_day_high and 
-                                       current_close < prev_day_high)
-                        
-                        if level_reentry:
-                            # 숏 신호 생성
-                            entry_price = current_close
-                            stop_loss = max(prev_day_high, current_price) + atr * 0.3  # 0.3×ATR
-                            
-                            # 백업 스탑로스 (0.08%)
-                            backup_stop = current_price * 1.0008
-                            stop_loss = min(stop_loss, backup_stop)
-                            
-                            risk = stop_loss - entry_price
-                            tp1 = entry_price - risk * self.config.tp1_R
-                            
-                            # 2차 목표
-                            if "VWAP" in self.config.tp2:
-                                tp2 = key_levels.get('vwap', entry_price - risk * 2.0)
-                            else:
-                                tp2 = entry_price - risk * 2.0
-                            
-                            return {
-                                'signal_type': 'SWEEP_RECLAIM_SHORT',
-                                'action': 'SELL',
-                                'confidence': 0.80,
-                                'entry_price': entry_price,
-                                'stop_loss': stop_loss,
-                                'take_profit1': tp1,
-                                'take_profit2': tp2,
-                                'risk_reward': self.config.tp1_R,
-                                'timestamp': datetime.now(),
-                                'reason': f"상단 스윕 + 숏청산스파이크 + 리클레임 | Z:{z_short:.1f}, LPI:{lpi:.2f}",
-                                'playbook': 'A',
-                                'liquidation_metrics': metrics
-                            }
+                if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:
+                    # 신호 생성
+                    entry_price = current_price
+                    stop_loss = max(prev_day_high, current_price) + atr * 0.3
+                    backup_stop = current_price * 1.0008
+                    stop_loss = max(stop_loss, backup_stop)
+                    
+                    risk = stop_loss - entry_price
+                    tp1 = entry_price - risk * self.config.tp1_R_a
+                    
+                    if "VWAP" in self.config.tp2:
+                        tp2 = key_levels.get('vwap', entry_price - risk * 2.0)
+                    else:
+                        tp2 = entry_price - risk * 2.0
+                    
+                    # 스코어링 및 Tier 결정
+                    scoring_result = self.calculate_total_score(
+                        'A', 'SELL', price_data, key_levels, {}, atr, 
+                        entry_price, stop_loss, tp1, metrics
+                    )
+                    
+                    tier_result = self.determine_signal_tier(
+                        scoring_result['total_score'], 'A', metrics, atr
+                    )
+                    
+                    # 후보 상세 로그
+                    self.log_candidate_details('A', 'SELL', metrics, price_data, key_levels, atr)
+                    
+                    # 스코어링 결과 로그
+                    self.log_scoring_results('A', 'SELL', scoring_result, tier_result)
+                    
+                    # 신호 생성
+                    signal = {
+                        'signal_type': 'SWEEP_RECLAIM_SHORT',
+                        'action': 'SELL',
+                        'confidence': scoring_result['total_score'],
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit1': tp1,
+                        'take_profit2': tp2,
+                        'risk_reward': self.config.tp1_R_a,
+                        'timestamp': datetime.now(timezone.utc),
+                        'reason': f"상단 스윕 + 숏청산스파이크 | Z:{z_short:.1f}, LPI:{lpi:.2f}",
+                        'playbook': 'A',
+                        'liquidation_metrics': metrics,
+                        'total_score': scoring_result['total_score'],
+                        'tier': tier_result['final_tier'],
+                        'component_scores': scoring_result['component_scores']
+                    }
+                    
+                    signals.append(signal)
             
+            # 3. 신호 선택 (가장 높은 점수)
+            if signals:
+                best_signal = max(signals, key=lambda x: x['total_score'])
+                print(f"🎯 전략 A 최종 신호: {best_signal['action']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
+                return best_signal
+            
+            # print("🔄 전략 A: 신호 없음 (스윕&리클레임 조건 미충족)")
             return None
             
         except Exception as e:
@@ -420,139 +1383,183 @@ class AdvancedLiquidationStrategy:
                                                     price_data: pd.DataFrame,
                                                     opening_range: Dict[str, float],
                                                     atr: float) -> Optional[Dict]:
-        """전략 B: 스퀴즈 추세지속 분석 (롱/숏)"""
+        """전략 B: 스퀴즈 추세지속 분석 (스코어링 방식)"""
         try:
-            if not self.session_active or metrics.get('cooldown_active', False):
+            # 1. Gate 조건 확인 (최소 위생)
+            gate_conditions = self.check_gate_conditions(price_data, atr, price_data['close'].iloc[-1])
+            if not gate_conditions['gate_passed']:
+                self.log_strategy_diagnosis('B', metrics, f"Gate 실패: {gate_conditions.get('block_reason', '알 수 없음')}")
+                return None
+            
+            # 2. 기본 조건 확인 (하드 게이트 최소화)
+            if metrics.get('cooldown_active', False):
+                self.log_strategy_diagnosis('B', metrics, "쿨다운 중")
                 return None
             
             # 오프닝 레인지 필요
             if not opening_range:
+                self.log_strategy_diagnosis('B', metrics, "오프닝 레인지 없음")
                 return None
             
             current_price = price_data['close'].iloc[-1]
             or_high = opening_range.get('high', 0)
             or_low = opening_range.get('low', 0)
             
-            # === 롱 신호 분석 ===
-            if or_high > 0:
-                # 숏 청산 스파이크 확인
+            signals = []
+            
+            # === 롱 신호 후보 생성 ===
+            if or_high > 0 and current_price > or_high:  # 상단 돌파
+                # 기본 조건 확인
                 z_short = metrics.get('z_short', 0)
                 lpi = metrics.get('lpi', 0)
                 
-                short_squeeze_spike = (z_short >= self.config.z_spike and 
-                                     lpi >= self.config.lpi_bias)
-                
-                if short_squeeze_spike:
-                    # 돌파 확인 (OR 상단 돌파)
-                    breakout = current_price > or_high
+                if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:
+                    # 리테스트 확인
+                    retest_found = False
+                    retest_low = current_price
                     
-                    if breakout:
-                        # 리테스트 확인 (15-60초 내 되돌림)
-                        if len(price_data) >= 4:  # 최소 4봉 필요
-                            # 최근 4봉에서 리테스트 패턴 찾기
-                            retest_found = False
-                            retest_low = current_price
-                            
-                            for i in range(1, min(5, len(price_data))):
-                                low_price = price_data['low'].iloc[-i]
-                                if low_price < or_high and low_price >= or_high - atr * self.config.retest_atr_tol:
-                                    retest_found = True
-                                    retest_low = min(retest_low, low_price)
-                                    break
-                            
-                            if retest_found:
-                                # 추가 숏 청산 확인 (10초 누적)
-                                additional_short_liquidation = self._check_additional_short_liquidation()
-                                
-                                # 롱 신호 생성
-                                entry_price = current_price
-                                stop_loss = retest_low - atr * 0.5  # 0.5×ATR
-                                
-                                risk = entry_price - stop_loss
-                                tp1 = entry_price + risk * self.config.tp1_R
-                                
-                                # 2차 목표 (OR 확장)
-                                if self.config.or_extension:
-                                    or_range = or_high - or_low
-                                    tp2 = or_high + or_range
-                                else:
-                                    tp2 = entry_price + risk * 2.5
-                                
-                                return {
-                                    'signal_type': 'SQUEEZE_TREND_CONTINUATION_LONG',
-                                    'action': 'BUY',
-                                    'confidence': 0.85,
-                                    'entry_price': entry_price,
-                                    'stop_loss': stop_loss,
-                                    'take_profit1': tp1,
-                                    'take_profit2': tp2,
-                                    'risk_reward': self.config.tp1_R,
-                                    'timestamp': datetime.now(),
-                                    'reason': f"상단 돌파 + 숏청산스파이크 + 리테스트 롱 | Z:{z_short:.1f}, LPI:{lpi:.2f}",
-                                    'playbook': 'B',
-                                    'liquidation_metrics': metrics
-                                }
+                    if len(price_data) >= 4:
+                        retest_tolerance = (self.config.retest_atr_tol_or_extension if self.config.or_extension 
+                                          else self.config.retest_atr_tol)
+                        
+                        for i in range(1, min(5, len(price_data))):
+                            low_price = price_data['low'].iloc[-i]
+                            if low_price < or_high and low_price >= or_high - atr * retest_tolerance:
+                                retest_found = True
+                                retest_low = min(retest_low, low_price)
+                                break
+                    
+                    if retest_found:
+                        # 신호 생성
+                        entry_price = current_price
+                        stop_loss = retest_low - atr * 0.5
+                        
+                        risk = entry_price - stop_loss
+                        tp1 = entry_price + risk * self.config.tp1_R_b
+                        
+                        if self.config.or_extension:
+                            or_range = or_high - or_low
+                            tp2 = or_high + or_range
+                        else:
+                            tp2 = entry_price + risk * 2.5
+                        
+                        # 스코어링 및 Tier 결정
+                        scoring_result = self.calculate_total_score(
+                            'B', 'BUY', price_data, {}, opening_range, atr, 
+                            entry_price, stop_loss, tp1, metrics
+                        )
+                        
+                        tier_result = self.determine_signal_tier(
+                            scoring_result['total_score'], 'B', metrics, atr
+                        )
+                        
+                        # 후보 상세 로그
+                        self.log_candidate_details('B', 'BUY', metrics, price_data, {}, atr)
+                        
+                        # 스코어링 결과 로그
+                        self.log_scoring_results('B', 'BUY', scoring_result, tier_result)
+                        
+                        # 신호 생성
+                        signal = {
+                            'signal_type': 'SQUEEZE_TREND_CONTINUATION_LONG',
+                            'action': 'BUY',
+                            'confidence': scoring_result['total_score'],
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss,
+                            'take_profit1': tp1,
+                            'take_profit2': tp2,
+                            'risk_reward': self.config.tp1_R_b,
+                            'timestamp': datetime.now(timezone.utc),
+                            'reason': f"상단 돌파 + 숏청산스파이크 + 리테스트 | Z:{z_short:.1f}, LPI:{lpi:.2f}",
+                            'playbook': 'B',
+                            'liquidation_metrics': metrics,
+                            'total_score': scoring_result['total_score'],
+                            'tier': tier_result['final_tier'],
+                            'component_scores': scoring_result['component_scores']
+                        }
+                        
+                        signals.append(signal)
             
-            # === 숏 신호 분석 ===
-            if or_low > 0:
-                # 롱 청산 스파이크 확인
+            # === 숏 신호 후보 생성 ===
+            if or_low > 0 and current_price < or_low:  # 하단 이탈
+                # 기본 조건 확인
                 z_long = metrics.get('z_long', 0)
                 lpi = metrics.get('lpi', 0)
                 
-                long_squeeze_spike = (z_long >= self.config.z_spike and 
-                                    lpi <= -self.config.lpi_bias)
-                
-                if long_squeeze_spike:
-                    # 이탈 확인 (OR 하단 이탈)
-                    breakdown = current_price < or_low
+                if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:
+                    # 리테스트 확인
+                    retest_found = False
+                    retest_high = current_price
                     
-                    if breakdown:
-                        # 리테스트 확인 (15-60초 내 되돌림)
-                        if len(price_data) >= 4:  # 최소 4봉 필요
-                            # 최근 4봉에서 리테스트 패턴 찾기
-                            retest_found = False
-                            retest_high = current_price
-                            
-                            for i in range(1, min(5, len(price_data))):
-                                high_price = price_data['high'].iloc[-i]
-                                if high_price > or_low and high_price <= or_low + atr * self.config.retest_atr_tol:
-                                    retest_found = True
-                                    retest_high = max(retest_high, high_price)
-                                    break
-                            
-                            if retest_found:
-                                # 추가 롱 청산 확인 (10초 누적)
-                                additional_long_liquidation = self._check_additional_long_liquidation()
-                                
-                                # 숏 신호 생성
-                                entry_price = current_price
-                                stop_loss = retest_high + atr * 0.5  # 0.5×ATR
-                                
-                                risk = stop_loss - entry_price
-                                tp1 = entry_price - risk * self.config.tp1_R
-                                
-                                # 2차 목표 (OR 확장 아래)
-                                if self.config.or_extension:
-                                    or_range = or_high - or_low
-                                    tp2 = or_low - or_range
-                                else:
-                                    tp2 = entry_price - risk * 2.5
-                                
-                                return {
-                                    'signal_type': 'SQUEEZE_TREND_CONTINUATION_SHORT',
-                                    'action': 'SELL',
-                                    'confidence': 0.85,
-                                    'entry_price': entry_price,
-                                    'stop_loss': stop_loss,
-                                    'take_profit1': tp1,
-                                    'take_profit2': tp2,
-                                    'risk_reward': self.config.tp1_R,
-                                    'timestamp': datetime.now(),
-                                    'reason': f"하단 이탈 + 롱청산스파이크 + 리테스트 숏 | Z:{z_long:.1f}, LPI:{lpi:.2f}",
-                                    'playbook': 'B',
-                                    'liquidation_metrics': metrics
-                                }
+                    if len(price_data) >= 4:
+                        retest_tolerance = (self.config.retest_atr_tol_or_extension if self.config.or_extension 
+                                          else self.config.retest_atr_tol)
+                        
+                        for i in range(1, min(5, len(price_data))):
+                            high_price = price_data['high'].iloc[-i]
+                            if high_price > or_low and high_price <= or_low + atr * retest_tolerance:
+                                retest_found = True
+                                retest_high = max(retest_high, high_price)
+                                break
+                    
+                    if retest_found:
+                        # 신호 생성
+                        entry_price = current_price
+                        stop_loss = retest_high + atr * 0.5
+                        
+                        risk = stop_loss - entry_price
+                        tp1 = entry_price - risk * self.config.tp1_R_b
+                        
+                        if self.config.or_extension:
+                            or_range = or_high - or_low
+                            tp2 = or_low - or_range
+                        else:
+                            tp2 = entry_price - risk * 2.5
+                        
+                        # 스코어링 및 Tier 결정
+                        scoring_result = self.calculate_total_score(
+                            'B', 'SELL', price_data, {}, opening_range, atr, 
+                            entry_price, stop_loss, tp1, metrics
+                        )
+                        
+                        tier_result = self.determine_signal_tier(
+                            scoring_result['total_score'], 'B', metrics, atr
+                        )
+                        
+                        # 후보 상세 로그
+                        self.log_candidate_details('B', 'SELL', metrics, price_data, {}, atr)
+                        
+                        # 스코어링 결과 로그
+                        self.log_scoring_results('B', 'SELL', scoring_result, tier_result)
+                        
+                        # 신호 생성
+                        signal = {
+                            'signal_type': 'SQUEEZE_TREND_CONTINUATION_SHORT',
+                            'action': 'SELL',
+                            'confidence': scoring_result['total_score'],
+                            'entry_price': entry_price,
+                            'stop_loss': stop_loss,
+                            'take_profit1': tp1,
+                            'take_profit2': tp2,
+                            'risk_reward': self.config.tp1_R_b,
+                            'timestamp': datetime.now(timezone.utc),
+                            'reason': f"하단 이탈 + 롱청산스파이크 + 리테스트 | Z:{z_long:.1f}, LPI:{lpi:.2f}",
+                            'playbook': 'B',
+                            'liquidation_metrics': metrics,
+                            'total_score': scoring_result['total_score'],
+                            'tier': tier_result['final_tier'],
+                            'component_scores': scoring_result['component_scores']
+                        }
+                        
+                        signals.append(signal)
             
+            # 3. 신호 선택 (가장 높은 점수)
+            if signals:
+                best_signal = max(signals, key=lambda x: x['total_score'])
+                print(f"🎯 전략 B 최종 신호: {best_signal['action']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
+                return best_signal
+            
+            # print("🔄 전략 B: 신호 없음 (스퀴즈 추세지속 조건 미충족)")
             return None
             
         except Exception as e:
@@ -560,38 +1567,166 @@ class AdvancedLiquidationStrategy:
             return None
     
     def analyze_strategy_c_overheat_extinction_fade(self,
-                                                  metrics: Dict[str, Any],
-                                                  price_data: pd.DataFrame,
-                                                  vwap: float,
-                                                  vwap_std: float) -> Optional[Dict]:
-        """전략 C: 과열-소멸 페이드 분석"""
+                                                    metrics: Dict[str, Any],
+                                                    price_data: pd.DataFrame,
+                                                    vwap: float,
+                                                    vwap_std: float,
+                                                    atr: float) -> Optional[Dict]:
+        """전략 C: 과열-소멸 페이드 분석 (스코어링 방식)"""
         try:
-            if not self.session_active or metrics.get('cooldown_active', False):
+            # 1. Gate 조건 확인 (최소 위생)
+            gate_conditions = self.check_gate_conditions(price_data, atr, price_data['close'].iloc[-1])
+            if not gate_conditions['gate_passed']:
+                self.log_strategy_diagnosis('C', metrics, f"Gate 실패: {gate_conditions.get('block_reason', '알 수 없음')}")
                 return None
             
-            # 캐스케이드 중이면 페이드 금지
-            if metrics.get('is_cascade', False):
+            # 2. 기본 조건 확인 (하드 게이트 최소화)
+            if metrics.get('cooldown_active', False):
+                self.log_strategy_diagnosis('C', metrics, "쿨다운 중")
                 return None
             
             current_price = price_data['close'].iloc[-1]
             
-            # VWAP ±2σ 바깥 확인
-            vwap_lower = vwap - self.config.vwap_sd_enter * vwap_std
-            vwap_upper = vwap + self.config.vwap_sd_enter * vwap_std
+            # VWAP σ 임계 결정 (다중 경로: 극단 스파이크, 캐스케이드, 기본)
+            is_cascade = metrics.get('is_cascade', False)
+            z_long = metrics.get('z_long', 0)
+            z_short = metrics.get('z_short', 0)
+            lpi = metrics.get('lpi', 0)
+            
+            # 극단 스파이크 확인 (z≥3.5 & LPI 극단)
+            extreme_spike = (max(z_long, z_short) >= self.config.z_extreme and 
+                           abs(lpi) >= self.config.lpi_extreme)
+            
+            # σ 임계 결정 (우선순위: 극단 > 캐스케이드 > 기본)
+            if extreme_spike:
+                vwap_sd_threshold = self.config.vwap_sd_extreme
+            elif is_cascade:
+                vwap_sd_threshold = self.config.vwap_sd_enter_cascade
+            else:
+                vwap_sd_threshold = self.config.vwap_sd_enter
+            
+            # VWAP ±σ 바깥 확인
+            vwap_lower = vwap - vwap_sd_threshold * vwap_std
+            vwap_upper = vwap + vwap_sd_threshold * vwap_std
             
             price_outside_vwap = current_price < vwap_lower or current_price > vwap_upper
             
             if not price_outside_vwap:
                 return None
             
-            # 롱 페이드 (하락 과열)
-            if current_price < vwap_lower:
-                return self._analyze_long_fade(metrics, price_data, vwap, vwap_std)
+            signals = []
             
-            # 숏 페이드 (상승 과열)
-            elif current_price > vwap_upper:
-                return self._analyze_short_fade(metrics, price_data, vwap, vwap_std)
+            # === 롱 페이드 후보 생성 ===
+            if current_price < vwap_lower:  # 하락 과열
+                # 기본 조건 확인
+                if z_long >= self.config.z_spike:
+                    # 신호 생성
+                    entry_price = current_price
+                    stop_loss = max(
+                        current_price - atr * self.config.stop_atr,
+                        vwap - self.config.vwap_sd_stop * vwap_std
+                    )
+                    
+                    risk = entry_price - stop_loss
+                    tp1 = vwap  # VWAP 터치
+                    tp2 = vwap + self.config.tp2_sigma * vwap_std
+                    
+                    # 스코어링 및 Tier 결정
+                    scoring_result = self.calculate_total_score(
+                        'C', 'BUY', price_data, {'vwap': vwap, 'vwap_std': vwap_std}, {}, atr, 
+                        entry_price, stop_loss, tp1, metrics
+                    )
+                    
+                    tier_result = self.determine_signal_tier(
+                        scoring_result['total_score'], 'C', metrics, atr
+                    )
+                    
+                    # 후보 상세 로그
+                    self.log_candidate_details('C', 'BUY', metrics, price_data, {'vwap': vwap, 'vwap_std': vwap_std}, atr)
+                    
+                    # 스코어링 결과 로그
+                    self.log_scoring_results('C', 'BUY', scoring_result, tier_result)
+                    
+                    # 신호 생성
+                    signal = {
+                        'signal_type': 'OVERHEAT_EXTINCTION_FADE_LONG',
+                        'action': 'BUY',
+                        'confidence': scoring_result['total_score'],
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit1': tp1,
+                        'take_profit2': tp2,
+                        'risk_reward': self.config.tp1_R_c,
+                        'timestamp': datetime.now(timezone.utc),
+                        'reason': f"VWAP -{vwap_sd_threshold:.1f}σ + 롱청산스파이크 | Z:{z_long:.1f}",
+                        'playbook': 'C',
+                        'liquidation_metrics': metrics,
+                        'total_score': scoring_result['total_score'],
+                        'tier': tier_result['final_tier'],
+                        'component_scores': scoring_result['component_scores']
+                    }
+                    
+                    signals.append(signal)
             
+            # === 숏 페이드 후보 생성 ===
+            elif current_price > vwap_upper:  # 상승 과열
+                # 기본 조건 확인
+                if z_short >= self.config.z_spike:
+                    # 신호 생성
+                    entry_price = current_price
+                    stop_loss = min(
+                        current_price + atr * self.config.stop_atr,
+                        vwap + self.config.vwap_sd_stop * vwap_std
+                    )
+                    
+                    risk = stop_loss - entry_price
+                    tp1 = vwap  # VWAP 터치
+                    tp2 = vwap - self.config.tp2_sigma * vwap_std
+                    
+                    # 스코어링 및 Tier 결정
+                    scoring_result = self.calculate_total_score(
+                        'C', 'SELL', price_data, {'vwap': vwap, 'vwap_std': vwap_std}, {}, atr, 
+                        entry_price, stop_loss, tp1, metrics
+                    )
+                    
+                    tier_result = self.determine_signal_tier(
+                        scoring_result['total_score'], 'C', metrics, atr
+                    )
+                    
+                    # 후보 상세 로그
+                    self.log_candidate_details('C', 'SELL', metrics, price_data, {'vwap': vwap, 'vwap_std': vwap_std}, atr)
+                    
+                    # 스코어링 결과 로그
+                    self.log_scoring_results('C', 'SELL', scoring_result, tier_result)
+                    
+                    # 신호 생성
+                    signal = {
+                        'signal_type': 'OVERHEAT_EXTINCTION_FADE_SHORT',
+                        'action': 'SELL',
+                        'confidence': scoring_result['total_score'],
+                        'entry_price': entry_price,
+                        'stop_loss': stop_loss,
+                        'take_profit1': tp1,
+                        'take_profit2': tp2,
+                        'risk_reward': self.config.tp1_R_c,
+                        'timestamp': datetime.now(timezone.utc),
+                        'reason': f"VWAP +{vwap_sd_threshold:.1f}σ + 숏청산스파이크 | Z:{z_short:.1f}",
+                        'playbook': 'C',
+                        'liquidation_metrics': metrics,
+                        'total_score': scoring_result['total_score'],
+                        'tier': tier_result['final_tier'],
+                        'component_scores': scoring_result['component_scores']
+                    }
+                    
+                    signals.append(signal)
+            
+            # 3. 신호 선택 (가장 높은 점수)
+            if signals:
+                best_signal = max(signals, key=lambda x: x['total_score'])
+                print(f"🎯 전략 C 최종 신호: {best_signal['action']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
+                return best_signal
+            
+            # print("🔄 전략 C: 신호 없음 (과열-소멸 페이드 조건 미충족)")
             return None
             
         except Exception as e:
@@ -602,7 +1737,8 @@ class AdvancedLiquidationStrategy:
                           metrics: Dict[str, Any],
                           price_data: pd.DataFrame,
                           vwap: float,
-                          vwap_std: float) -> Optional[Dict]:
+                          vwap_std: float,
+                          atr: float) -> Optional[Dict]:
         """롱 페이드 분석 (하락 과열)"""
         try:
             # 롱 청산 스파이크 확인
@@ -650,8 +1786,8 @@ class AdvancedLiquidationStrategy:
                 'stop_loss': stop_loss,
                 'take_profit1': tp1,
                 'take_profit2': tp2,
-                'risk_reward': 1.2,
-                'timestamp': datetime.now(),
+                'risk_reward': self.config.tp1_R_c,
+                'timestamp': datetime.now(timezone.utc),
                 'reason': f"VWAP -2σ + 롱청산스파이크 + 감소 페이드 롱 | Z:{z_long:.1f}",
                 'playbook': 'C',
                 'liquidation_metrics': metrics
@@ -665,7 +1801,8 @@ class AdvancedLiquidationStrategy:
                            metrics: Dict[str, Any],
                            price_data: pd.DataFrame,
                            vwap: float,
-                           vwap_std: float) -> Optional[Dict]:
+                           vwap_std: float,
+                           atr: float) -> Optional[Dict]:
         """숏 페이드 분석 (상승 과열)"""
         try:
             # 숏 청산 스파이크 확인
@@ -713,8 +1850,8 @@ class AdvancedLiquidationStrategy:
                 'stop_loss': stop_loss,
                 'take_profit1': tp1,
                 'take_profit2': tp2,
-                'risk_reward': 1.2,
-                'timestamp': datetime.now(),
+                'risk_reward': self.config.tp1_R_c,
+                'timestamp': datetime.now(timezone.utc),
                 'reason': f"VWAP +2σ + 숏청산스파이크 + 감소 페이드 숏 | Z:{z_short:.1f}",
                 'playbook': 'C',
                 'liquidation_metrics': metrics
@@ -725,22 +1862,29 @@ class AdvancedLiquidationStrategy:
             return None
     
     def _check_post_spike_decay(self, metrics: Dict[str, Any], side: str) -> bool:
-        """스파이크 후 감소 확인"""
+        """스파이크 후 감소 확인 (캐스케이드 시 더 완화)"""
         try:
             # 10초 평균 청산 계산
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             window_start = int(current_time.timestamp()) - 10
             
             if side == 'long':
                 current_10s = sum(val for ts, val in self.long_bins if ts >= window_start)
-                mu_10s = self.mu_long
+                # 10초 기준으로 스케일링
+                mu_10s = self.mu_long * 10  # 1초 평균 × 10초
             else:  # short
                 current_10s = sum(val for ts, val in self.short_bins if ts >= window_start)
-                mu_10s = self.mu_short
+                # 10초 기준으로 스케일링
+                mu_10s = self.mu_short * 10  # 1초 평균 × 10초
+            
+            # 캐스케이드 상태에 따른 감소 기준 적용
+            is_cascade = metrics.get('is_cascade', False)
+            decay_threshold = (self.config.post_spike_decay_ratio_cascade if is_cascade 
+                             else self.config.post_spike_decay_ratio)
             
             # 스파이크 후 감소 확인
             decay_ratio = current_10s / (mu_10s + 1e-9)
-            return decay_ratio < self.config.post_spike_decay_ratio
+            return decay_ratio < decay_threshold
             
         except Exception as e:
             print(f"❌ 스파이크 후 감소 확인 오류: {e}")
@@ -749,14 +1893,20 @@ class AdvancedLiquidationStrategy:
     def _check_additional_long_liquidation(self) -> bool:
         """추가 롱 청산 확인 (10초 누적)"""
         try:
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             window_start = int(current_time.timestamp()) - 10
             
             # 10초 누적 롱 청산
             long_10s = sum(val for ts, val in self.long_bins if ts >= window_start)
             
-            # 기본선 + 2σ 확인
-            threshold = self.mu_long + 2 * self.sigma_long
+            # 10초 누적에 맞게 스케일링: μ → 10×μ, σ → √10×σ
+            scale_factor = 10
+            scale_sqrt = np.sqrt(scale_factor)
+            mu_scaled = self.mu_long * scale_factor
+            sigma_scaled = self.sigma_long * scale_sqrt
+            
+            # 기본선 + 2σ 확인 (스케일링된 값으로)
+            threshold = mu_scaled + 2 * sigma_scaled
             
             return long_10s >= threshold
             
@@ -767,14 +1917,21 @@ class AdvancedLiquidationStrategy:
     def _check_additional_short_liquidation(self) -> bool:
         """추가 숏 청산 확인 (10초 누적)"""
         try:
-            current_time = datetime.now()
+            current_time = datetime.now(timezone.utc)
             window_start = int(current_time.timestamp()) - 10
             
             # 10초 누적 숏 청산
             short_10s = sum(val for ts, val in self.short_bins if ts >= window_start)
             
-            # 기본선 + 2σ 확인
-            threshold = self.mu_short + 2 * self.sigma_short
+            # 10초 누적에 맞게 스케일링: μ → 10×μ, σ → √10×σ
+            scale_factor = 10
+            scale_sqrt = np.sqrt(scale_factor)
+            mu_scaled = self.mu_short * scale_factor
+            sigma_scaled = self.sigma_short * scale_sqrt
+            
+            # 기본선 + 2σ 확인 (스케일링된 값으로)
+            threshold = mu_scaled + 2 * sigma_scaled
+            
             return short_10s > threshold
             
         except Exception as e:
@@ -782,13 +1939,13 @@ class AdvancedLiquidationStrategy:
             return False
     
     def analyze_all_strategies(self,
-                             price_data: pd.DataFrame,
-                             key_levels: Dict[str, float],
-                             opening_range: Dict[str, float],
-                             vwap: float,
-                             vwap_std: float,
-                             atr: float) -> Optional[Dict]:
-        """모든 전략 분석"""
+                                price_data: pd.DataFrame,
+                                key_levels: Dict[str, float],
+                                opening_range: Dict[str, float],
+                                vwap: float,
+                                vwap_std: float,
+                                atr: float) -> Optional[Dict]:
+        """모든 전략 분석 (스코어링 + 충돌 해결)"""
         try:
             # 현재 청산 지표 가져오기
             metrics = self.get_current_liquidation_metrics()
@@ -798,30 +1955,78 @@ class AdvancedLiquidationStrategy:
             # 강한 스파이크 감지 시 쿨다운 시작
             z_long = metrics.get('z_long', 0)
             z_short = metrics.get('z_short', 0)
+            max_z = max(z_long, z_short)
             
-            if max(z_long, z_short) >= self.config.z_strong:
-                self.last_strong_spike_time = datetime.now()
+            if max_z >= self.config.z_medium:
+                self.last_strong_spike_time = datetime.now(timezone.utc)
+                self.last_spike_strength = max_z  # 스파이크 강도 기록
+            
+            # 모든 전략에서 신호 후보 수집
+            all_signals = []
             
             # 전략 A: 스윕&리클레임
             signal_a = self.analyze_strategy_a_sweep_reclaim(
                 metrics, price_data, key_levels, atr
             )
             if signal_a:
-                return signal_a
+                all_signals.append(signal_a)
             
             # 전략 B: 스퀴즈 추세지속
             signal_b = self.analyze_strategy_b_squeeze_trend_continuation(
                 metrics, price_data, opening_range, atr
             )
             if signal_b:
-                return signal_b
+                all_signals.append(signal_b)
             
             # 전략 C: 과열-소멸 페이드
             signal_c = self.analyze_strategy_c_overheat_extinction_fade(
-                metrics, price_data, vwap, vwap_std
+                metrics, price_data, vwap, vwap_std, atr
             )
             if signal_c:
-                return signal_c
+                all_signals.append(signal_c)
+            
+            # 신호가 없으면 중립 반환
+            if not all_signals:
+                return {
+                    'action': 'NEUTRAL',
+                    'playbook': 'NO_SIGNAL',
+                    'tier': 'NEUTRAL',
+                    'total_score': 0.0,
+                    'reason': '모든 전략에서 신호 없음',
+                    'timestamp': datetime.now(timezone.utc).isoformat()
+                }
+            
+            # 동시양방향 충돌 해결
+            long_signals = [s for s in all_signals if s['action'] == 'BUY']
+            short_signals = [s for s in all_signals if s['action'] == 'SELL']
+            
+            if long_signals and short_signals:
+                # 충돌 해결
+                best_long = max(long_signals, key=lambda x: x['total_score'])
+                best_short = max(short_signals, key=lambda x: x['total_score'])
+                
+                conflict_result = self.check_conflict_resolution(best_long, best_short)
+                
+                if conflict_result['conflict']:
+                    return {
+                        'action': 'NEUTRAL',
+                        'playbook': 'CONFLICT_RESOLUTION',
+                        'tier': 'NEUTRAL',
+                        'total_score': 0.0,
+                        'reason': f"동시양방향 충돌: {conflict_result['resolution']}",
+                        'timestamp': datetime.now(timezone.utc).isoformat(),
+                        'long_signal': best_long,
+                        'short_signal': best_short
+                    }
+                else:
+                    # 승자 신호 반환
+                    winner = best_long if best_long['total_score'] > best_short['total_score'] else best_short
+                    return winner
+            
+            # 단일 방향 신호들 중 최고 점수 선택
+            if all_signals:
+                best_signal = max(all_signals, key=lambda x: x['total_score'])
+                return best_signal
             
             return None
             
@@ -834,7 +2039,7 @@ class AdvancedLiquidationStrategy:
         return {
             'session_active': self.session_active,
             'cascade_detected': self.cascade_detected,
-            'cooldown_active': self._is_cooldown_active(datetime.now()),
+            'cooldown_active': self._is_cooldown_active(datetime.now(timezone.utc)),
             'background_stats': {
                 'mu_long': self.mu_long,
                 'sigma_long': self.sigma_long,
@@ -875,6 +2080,12 @@ def make_advanced_liquidation_plan(df: pd.DataFrame,
         )
         
         if signal:
+            # 중립 신호인 경우
+            if signal.get('action') == 'NEUTRAL':
+                print(f"🔄 중립 신호: {signal.get('reason', '알 수 없음')}")
+                print(f"   📋 세부사항: {signal.get('playbook', 'N/A')}")
+                return signal
+            
             # 포지션 사이징 계산
             risk_percent = config.risk_pct
             equity = 10000  # 예시 자본금
@@ -886,8 +2097,10 @@ def make_advanced_liquidation_plan(df: pd.DataFrame,
             signal['position_size'] = position_size
             signal['risk_dollar'] = risk_dollar
             
+            print(f"💰 포지션 사이징: {position_size:.2f} (리스크: ${risk_dollar:.2f})")
             return signal
         
+        print("❌ 모든 전략에서 신호 없음")
         return None
         
     except Exception as e:

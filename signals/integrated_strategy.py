@@ -77,20 +77,21 @@ class IntegratedStrategy:
             max_slippage_pct=config.session_max_slippage_pct,
             sweep_depth_atr_min=config.session_sweep_depth_atr_min,
             reclaim_close_rule=config.session_reclaim_close_rule,
-            confirm_next_bar=config.session_confirm_next_bar,
+
             stop_buffer_atr=config.session_stop_buffer_atr,
-            tp1_to=config.session_tp1_to,
-            tp2_to=config.session_tp2_to,
+            tp1_to_b=config.session_tp1_to,  # Play B용
+            tp1_to_c=config.session_tp1_to,  # Play C용
+            tp2_to_b=config.session_tp2_to,  # Play B용
+            tp2_to_c=config.session_tp2_to_band,  # Play C용
             sd_k_enter=config.session_sd_k_enter,
             sd_k_reenter=config.session_sd_k_reenter,
             stop_outside_sd_k=config.session_stop_outside_sd_k,
-            tp2_to_band=config.session_tp2_to_band,
             trend_filter_slope=config.session_trend_filter_slope
         )
         
         # 고급 청산 전략 설정
         self.adv_liquidation_cfg = AdvancedLiquidationConfig(
-            symbol=config.symbol,
+            symbol=config.adv_liq_symbol,
             bin_sec=config.adv_liq_bin_sec,
             agg_window_sec=config.adv_liq_agg_window_sec,
             background_window_min=config.adv_liq_background_window_min,
@@ -108,7 +109,9 @@ class IntegratedStrategy:
             vwap_sd_enter=config.adv_liq_vwap_sd_enter,
             vwap_sd_stop=config.adv_liq_vwap_sd_stop,
             sweep_buffer_atr=config.adv_liq_sweep_buffer_atr,
-            tp1_R=config.adv_liq_tp1_R,
+            tp1_R_a=config.adv_liq_tp1_R,  # 전략 A용
+            tp1_R_b=config.adv_liq_tp1_R,  # 전략 B용
+            tp1_R_c=config.adv_liq_tp1_R,  # 전략 C용
             tp2=config.adv_liq_tp2,
             retest_atr_tol=config.adv_liq_retest_atr_tol,
             or_extension=config.adv_liq_or_extension,

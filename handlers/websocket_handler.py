@@ -49,7 +49,7 @@ class WebSocketHandler:
         analyze_liquidation_func()
     
     def on_volume_spike(self, volume_data: Dict, volume_buffer: list, last_summary_time: datetime.datetime,
-                         summary_cooldown: int, print_summary_func, analyze_liquidation_func):
+                            summary_cooldown: int, print_summary_func, analyze_liquidation_func):
         """거래량 급증 콜백"""
         # 거래량 급증을 버퍼에 추가
         volume_buffer.append({

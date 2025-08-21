@@ -74,7 +74,7 @@ class IntegratedConfig:
         # 플레이북 B: 유동성 스윕 & 리클레임
         self.session_sweep_depth_atr_min = 0.3
         self.session_reclaim_close_rule = "close_above_level"
-        self.session_confirm_next_bar = True
+
         self.session_stop_buffer_atr = 0.6
         self.session_tp1_to = "VWAP"
         self.session_tp2_to = "opposite_range_edge"
@@ -89,14 +89,15 @@ class IntegratedConfig:
         
         # 고급 청산 전략 설정
         self.enable_advanced_liquidation = True
+        self.adv_liq_symbol = "ETHUSDT"  # 심볼 추가
         self.adv_liq_bin_sec = 1
         self.adv_liq_agg_window_sec = 30
         self.adv_liq_background_window_min = 60
         
         # 스파이크 판정 설정
-        self.adv_liq_z_spike = 3.0
-        self.adv_liq_z_strong = 4.0
-        self.adv_liq_lpi_bias = 0.4
+        self.adv_liq_z_spike = 2.0  # 3.0에서 2.0으로 수정 (더 민감하게)
+        self.adv_liq_z_strong = 3.0  # 4.0에서 3.0으로 수정 (더 민감하게)
+        self.adv_liq_lpi_bias = 0.3  # 0.4에서 0.3으로 수정 (더 민감하게)
         
         # 캐스케이드 설정
         self.adv_liq_cascade_seconds = 10
@@ -104,7 +105,7 @@ class IntegratedConfig:
         self.adv_liq_cascade_z = 3.0
         
         # 쿨다운 설정
-        self.adv_liq_cooldown_after_strong_sec = 30
+        self.adv_liq_cooldown_after_strong_sec = 10  # 30에서 10으로 수정 (더 빠른 재시작)
         
         # 리스크 설정
         self.adv_liq_risk_pct = 0.4

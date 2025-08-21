@@ -96,12 +96,16 @@ class BinanceWebSocket:
         """청산 데이터 처리"""
         try:
             if 'o' in data:  # 청산 이벤트
+                # qty_usd 계산 (수량 × 가격)
+                qty_usd = float(data['o']['q']) * float(data['o']['p'])
+                
                 liquidation = {
                     'timestamp': datetime.now(),
                     'symbol': data['o']['s'],
                     'side': data['o']['S'],  # BUY/SELL
                     'quantity': float(data['o']['q']),
                     'price': float(data['o']['p']),
+                    'qty_usd': qty_usd,  # USD 기준 청산 금액
                     'time': data['o']['T']
                 }
                 
@@ -427,3 +431,14 @@ class BinanceWebSocket:
         self.thread = threading.Thread(target=run_async, daemon=True)
         self.thread.start()
         self.logger.info("백그라운드 웹소켓 시작됨")
+    
+    def start_liquidation_stream(self):
+        """청산 스트림만 시작 (실시간 청산 데이터 수집)"""
+        def run_liquidation():
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            loop.run_until_complete(self.connect_liquidation_stream())
+        
+        self.liquidation_thread = threading.Thread(target=run_liquidation, daemon=True)
+        self.liquidation_thread.start()
+        self.logger.info("청산 스트림 시작됨")
