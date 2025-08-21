@@ -27,68 +27,68 @@ class SessionConfig:
     """세션 기반 전략 설정"""
     # 기본 설정
     symbol: str = "ETHUSDT"
-    timeframe: str = "1m"
+    timeframe: str = "3m"          # 그대로 사용(또는 "5m")
     
     # 세션 설정
     ses_vwap_start_utc: str = "13:30 UTC"  # NY Open (KST 22:30, DST중)
     london_session_start_utc: str = "07:00 UTC"  # London Open (KST 16:00)
-    or_minutes: int = 15  # 오프닝 레인지 분
+    or_minutes: int = 30           # 15 → 30 (OR 신뢰도↑)
     
     # 지표 설정
     ema_fast: int = 9
-    ema_slow: int = 20
+    ema_slow: int = 26             # 20 → 26 (추세필터 완만)
     atr_len: int = 14
-    trend_filter_ma: int = 50
+    trend_filter_ma: int = 100     # 50 → 100 (큰 흐름 우선)
     
-    # 플레이북 A: 오프닝 드라이브 풀백 (임계값 완화)
-    min_drive_return_R: float = 0.8  # OR 돌파 후 최소 0.8R 이상 진행 (0.6 → 0.8)
-    pullback_depth_atr: Tuple[float, float] = (0.6, 1.4)  # 풀백 깊이(ATR배) 허용 범위 (0.5~1.6 → 0.6~1.4)
+    # 플레이북 A: 오프닝 드라이브 풀백 (단타용 튜닝)
+    min_drive_return_R: float = 1.0            # 0.8 → 1.0
+    pullback_depth_atr: Tuple[float, float] = (0.7, 1.6)     # 범위 약간 넓혀 변동성 흡수
     trigger_type: str = "close_reject"  # 'close_reject' 또는 'wick_touch'
-    stop_atr_mult: float = 1.0  # 스탑 = 엔트리 기준 무효화/스윙 아래 + 1.0×ATR (1.1 → 1.0)
-    tp1_R: float = 1.2  # 1차 청산 R (1.5 → 1.2)
+    stop_atr_mult: float = 1.2                 # 1.0 → 1.2
+    tp1_R: float = 1.5                         # 1.2 → 1.5
     tp2_to_level: str = "OR_ext|PrevHigh|VWAP"  # 2차 목표 우선순위
-    partial_out: float = 0.5  # 1차에서 절반 청산
-    max_hold_min: int = 60  # 최대 보유시간(분)
-    max_slippage_pct: float = 0.025  # 허용 슬리피지(%) 초과 시 신호 무효 (0.03 → 0.025)
+    partial_out: float = 0.4                   # 0.5 → 0.4 (러너 더 보유)
+    max_hold_min: int = 180                  # 60 → 180
+    max_slippage_pct: float = 0.02             # 0.025 → 0.02
     
-    # 플레이북 B: 유동성 스윕 & 리클레임 (임계값 완화)
-    sweep_depth_atr_min: float = 0.25  # 레벨 하회/상회 최소 깊이(ATR배) (0.2 → 0.25)
+    # 플레이북 B: 유동성 스윕 & 리클레임 (단타용 튜닝)
+    sweep_depth_atr_min: float = 0.35          # 0.25 → 0.35
     reclaim_close_rule: str = "close_above_level"  # 롱: 레벨 위 종가 마감
-    stop_buffer_atr: float = 0.5  # 스탑 버퍼 (0.6 → 0.5)
+    stop_buffer_atr: float = 0.7               # 0.5 → 0.7
     tp1_to_b: str = "VWAP"  # 1차 목표 (Play B용)
     tp2_to_b: str = "opposite_range_edge"  # 2차 목표 (Play B용)
     
-    # 플레이북 C: VWAP 리버전(평균회귀) 페이드 (임계값 완화)
-    sd_k_enter: float = 1.8  # 진입 트리거: 봉 종가가 ±1.8σ 밖에서 마감 (1.8 → 1.8 유지)
-    sd_k_reenter: float = 1.5  # 그 다음 봉 종가가 ±1.5σ 안쪽으로 재진입 (1.3 → 1.5)
-    stop_outside_sd_k: float = 2.5  # 스탑: ±2.5σ 바깥 (2.2 → 2.5)
+    # 플레이북 C: VWAP 리버전(평균회귀) 페이드 (단타용 튜닝)
+    sd_k_enter: float = 2.0                    # 1.8 → 2.0 (더 보수적)
+    sd_k_reenter: float = 1.5
+    stop_outside_sd_k: float = 3.0             # 2.5 → 3.0
     tp1_to_c: str = "VWAP"  # 1차 목표: VWAP 터치 (Play C용)
-    tp2_to_c: float = 0.4  # 2차: 반대측 0.4σ (0.5 → 0.4)
-    trend_filter_slope: float = 0.0  # SMA50 기울기 > 0.0이면 숏페이드 보수적
+    tp2_to_c: float = 0.5                      # 0.4 → 0.5
+    trend_filter_slope: float = 0.0005         # 0.0 → 0.0005 (강추세 역추세 페이드 억제)
     
-    # 단계형 신호 설정 (임계값 완화로 시그널 생성 증가)
-    entry_thresh: float = 0.58  # Entry 임계점 (0.60 → 0.58)
-    setup_thresh: float = 0.38  # Setup 임계점 (0.40 → 0.38)
-    headsup_thresh: float = 0.25  # Heads-up 임계점 (0.35 → 0.25)
+    # 단계형 신호 설정 (ENTRY 소폭↑)
+    entry_thresh: float = 0.62
+    setup_thresh: float = 0.42
+    headsup_thresh: float = 0.30
     
-    # Gate 설정 (임계값 완화로 게이트 통과 증가)
-    min_sweep_depth_atr: float = 0.25  # 최소 스윕 깊이 (0.15 → 0.25)
-    max_slippage_gate: float = 0.025  # 최대 허용 슬리피지 (0.05 → 0.025)
-    min_volume_ratio: float = 0.5  # 최소 거래량 비율 (0.7 → 0.5)
+    # Gate 설정
+    min_sweep_depth_atr: float = 0.35
+    max_slippage_gate: float = 0.02
+    min_volume_ratio: float = 0.7              # 0.5 → 0.7 (체결 질 우선)
     
-    # Score 가중치
-    weight_direction: float = 0.25  # 방향 정렬
-    weight_breakout_sweep: float = 0.20  # 돌파/스윕 질
-    weight_pullback: float = 0.15  # 풀백 품질
-    weight_baseline: float = 0.10  # 기준선 근접/복귀
-    weight_timing: float = 0.10  # 세션 타이밍
-    weight_orderflow: float = 0.10  # 오더플로우 (0.20 → 0.10)
-    weight_risk: float = 0.10  # 리스크 적정성
+    # Score 가중치 (추세/구조 비중↑)
+    weight_direction: float = 0.30
+    weight_breakout_sweep: float = 0.22
+    weight_pullback: float = 0.12
+    weight_baseline: float = 0.08
+    weight_timing: float = 0.08
+    weight_orderflow: float = 0.08
+    weight_risk: float = 0.12
     
-    # --- 설정 추가 --- (임계값 완화)
-    strict_or: bool = False       # False로 변경하여 OR 확정 전에도 Play A 활성화
-    min_or_bars: int = 6          # 부분 OR 최소 봉 수 (8 → 6)
-    partial_or_tier_cap: str = "ENTRY"  # 부분 OR일 때 최대 티어를 ENTRY로 상향 (SETUP → ENTRY)
+    # OR 정책 (단타는 완전 OR 선호)
+    strict_or: bool = True
+    min_or_bars: int = 0          # 무시(엄격하게 ready만)
+    partial_or_tier_cap: str = "HEADSUP"
 
 
 class SessionBasedStrategy:
@@ -503,6 +503,10 @@ class SessionBasedStrategy:
                     timing_score = 0.2  # OPEN: -0.05 감점
             else:
                 timing_score = 0.4  # 기본값
+            
+            # 세션 타이밍 가중치 캡 (안전 캡)
+            timing_score = min(timing_score, 0.8)  # 안전 캡
+            
             score += timing_score * self.config.weight_timing
             
             # === 오더플로우 (0.10) ===
@@ -677,7 +681,10 @@ class SessionBasedStrategy:
                     'entry_price': entry_price,
                     'stop_loss': stop_loss,
                     'take_profit1': tp1,
-                    'risk_reward': self.config.tp1_R
+                    'risk_reward': self.config.tp1_R,
+                    'partial_1': 0.4,               # TP1에서 40% 청산
+                    'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                    'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
                 })
             
             return signal
@@ -946,6 +953,12 @@ class SessionBasedStrategy:
                 next_bar_high_breakout = df['high'].iloc[-1] > df['high'].iloc[-2]
                 trigger = trigger or next_bar_high_breakout
             
+            # 트리거 전: 직전 스윙 무효화 체크 (HH/LL 실패)
+            if len(df) >= 4:
+                recent_high = df['high'].iloc[-4:-1].max()
+                swing_fail = df['high'].iloc[-1] > recent_high   # 고점 갱신으로 리버설 확인
+                trigger = trigger and swing_fail
+            
             if not trigger:
                 return None
             
@@ -981,7 +994,10 @@ class SessionBasedStrategy:
                 'reason': f"OR 상단 돌파 후 풀백 롱 | 진행: {drive_return:.1f}ATR, 풀백: {pullback_depth:.1f}ATR",
                 'playbook': 'A',
                 'partial_out': self.config.partial_out,
-                'max_hold_min': self.config.max_hold_min
+                'max_hold_min': self.config.max_hold_min,
+                'partial_1': 0.4,               # TP1에서 40% 청산
+                'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
             }
             
         except Exception as e:
@@ -1055,6 +1071,12 @@ class SessionBasedStrategy:
                 next_bar_low_breakdown = df['low'].iloc[-1] < df['low'].iloc[-2]
                 trigger = trigger or next_bar_low_breakdown
             
+            # 트리거 전: 직전 스윙 무효화 체크 (HH/LL 실패)
+            if len(df) >= 4:
+                recent_low = df['low'].iloc[-4:-1].min()
+                swing_fail = df['low'].iloc[-1] < recent_low   # 저점 갱신으로 리버설 확인
+                trigger = trigger and swing_fail
+            
             if not trigger:
                 return None
             
@@ -1090,7 +1112,10 @@ class SessionBasedStrategy:
                 'reason': f"OR 하단 이탈 후 되돌림 숏 | 진행: {drive_return:.1f}ATR, 되돌림: {pullback_depth:.1f}ATR",
                 'playbook': 'A',
                 'partial_out': self.config.partial_out,
-                'max_hold_min': self.config.max_hold_min
+                'max_hold_min': self.config.max_hold_min,
+                'partial_1': 0.4,               # TP1에서 40% 청산
+                'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
             }
             
         except Exception as e:
@@ -1168,7 +1193,10 @@ class SessionBasedStrategy:
                             'reason': f"전일저가 스윕 후 리클레임 롱 | 스윕깊이: {sweep_depth_long:.1f}ATR",
                             'playbook': 'B',
                             'partial_out': self.config.partial_out,
-                            'max_hold_min': 45
+                            'max_hold_min': 45,
+                            'partial_1': 0.4,               # TP1에서 40% 청산
+                            'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                            'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
                         }
             
             # === 숏 신호 분석 ===
@@ -1230,7 +1258,10 @@ class SessionBasedStrategy:
                             'reason': f"전일고가 스윕 후 리클레임 숏 | 스윕깊이: {sweep_depth_short:.1f}ATR",
                             'playbook': 'B',
                             'partial_out': self.config.partial_out,
-                            'max_hold_min': 45
+                            'max_hold_min': 45,
+                            'partial_1': 0.4,               # TP1에서 40% 청산
+                            'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                            'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
                         }
             
             return None
@@ -1257,6 +1288,10 @@ class SessionBasedStrategy:
                     
                     # 강한 하락 추세일 때 롱 페이드 금지
                     if trend_slope < self.config.trend_filter_slope:
+                        return None
+                    
+                    # 추세 기울기 절대값이 trend_filter_slope보다 크면 페이드 신호 자체 비활성화
+                    if abs(trend_slope) > self.config.trend_filter_slope:
                         return None
             
             # t봉 종가가 VWAP-2σ 아래에서 마감
@@ -1303,7 +1338,10 @@ class SessionBasedStrategy:
                         'reason': f"VWAP 과매도 페이드 롱 | 진입: -{self.config.sd_k_enter}σ, 재진입: -{self.config.sd_k_reenter}σ",
                         'playbook': 'C',
                         'partial_out': self.config.partial_out,
-                        'max_hold_min': 30
+                        'max_hold_min': 30,
+                        'partial_1': 0.4,               # TP1에서 40% 청산
+                        'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                        'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
                     }
             
             # === 숏 신호 분석 ===
@@ -1315,6 +1353,10 @@ class SessionBasedStrategy:
                     
                     # 강한 상승 추세일 때 숏 페이드 금지
                     if trend_slope > -self.config.trend_filter_slope:
+                        return None
+                    
+                    # 추세 기울기 절대값이 trend_filter_slope보다 크면 페이드 신호 자체 비활성화
+                    if abs(trend_slope) > self.config.trend_filter_slope:
                         return None
             
             # t봉 종가가 VWAP+2σ 위에서 마감
@@ -1361,7 +1403,10 @@ class SessionBasedStrategy:
                         'reason': f"VWAP 과매수 페이드 숏 | 진입: +{self.config.sd_k_enter}σ, 재진입: +{self.config.sd_k_reenter}σ",
                         'playbook': 'C',
                         'partial_out': self.config.partial_out,
-                        'max_hold_min': 30
+                        'max_hold_min': 30,
+                        'partial_1': 0.4,               # TP1에서 40% 청산
+                        'trail_after_tp1_atr_mult': 1.0,# 남은 60% ATR*1.0 트레일
+                        'hard_timeout_min': 240         # 4시간 초과 보유 금지(단타)
                     }
             
             return None
@@ -1396,12 +1441,7 @@ class SessionBasedStrategy:
             # --- 세션 정보 출력 (간단하게) ---
             session_type = self._get_session_type(session_start)
             print(f"🔍 세션: {session_start.strftime('%H:%M')} UTC ({session_type})")
-            
-            # # --- OR 로그 (간단하게) ---
-            # if or_info:
-            #     print(f"🎯 OR: {or_info['range']:.1f} ({or_info['timeframe']})")
-            # else:
-            #     print("ℹ️ OR 없음")
+
             
             # ATR 계산
             atr = calculate_atr(df_s, self.config.atr_len)
@@ -1412,7 +1452,6 @@ class SessionBasedStrategy:
             best_signal = None
             best_score = 0.0
             
-
             
             # A: OR가 없거나(strict) 준비 안 됐으면 스킵 또는 티어 제한
             if or_info and (or_info.get("ready") or (not self.config.strict_or and or_info.get("partial"))):

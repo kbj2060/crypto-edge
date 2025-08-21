@@ -25,53 +25,53 @@ class AdvancedLiquidationConfig:
     symbol: str = "ETHUSDT"
     
     # 청산 데이터 집계 설정
-    bin_sec: int = 1  # 1초 bin
-    agg_window_sec: int = 30  # 30초 집계 윈도우
-    background_window_min: int = 60  # 백그라운드 평균 윈도우 (분)
+    bin_sec: int = 3  # 1초 → 3초 bin (노이즈 완화)
+    agg_window_sec: int = 60  # 30초 → 60초 집계
+    background_window_min: int = 180  # 60분 → 180분, 베이스라인 안정
     
     # 최소 워밍업 요구사항 (방향별)
-    min_warmup_samples: int = 10  # ENTRY: 해당 방향 샘플 ≥10
-    min_warmup_samples_setup: int = 5  # SETUP: 해당 방향 샘플 ≥5
+    min_warmup_samples: int = 20  # ENTRY: 해당 방향 샘플 ≥20 (10 → 20)
+    min_warmup_samples_setup: int = 10  # SETUP: 해당 방향 샘플 ≥10 (5 → 10)
     
     # 스파이크 판정 설정 (계층별 분리)
-    z_spike: float = 0.6  # HEADS-UP 기준 (0.6 → 0.6 유지)
-    z_setup: float = 2.0  # SETUP 기준 (새로 추가)
-    z_entry: float = 2.5  # ENTRY 기준 (새로 추가)
-    z_strong: float = 1.8  # 강한 스파이크 임계값 (2.0 → 1.8로 더 완화)
-    z_medium: float = 1.2  # 중간 스파이크 임계값 (1.5 → 1.2로 더 완화)
-    lpi_bias: float = 0.10      # LPI 바이어스 임계값 (0.15 → 0.10으로 더 완화)
+    z_spike: float = 0.8  # HEADS-UP 기준 (0.6 → 0.8)
+    z_setup: float = 2.2  # SETUP 기준 (2.0 → 2.2)
+    z_entry: float = 3.0  # ENTRY 기준 (2.5 → 3.0)
+    z_strong: float = 2.2  # 강한 스파이크 임계값 (1.8 → 2.2)
+    z_medium: float = 1.6  # 중간 스파이크 임계값 (1.2 → 1.6)
+    lpi_bias: float = 0.15      # LPI 바이어스 임계값 (0.10 → 0.15)
     
-    # 캐스케이드 설정 (더 완화)
-    cascade_seconds: int = 20  # 지난 20초 안에 (15초 → 20초로 완화)
-    cascade_count: int = 5  # 5회 이상 (4회 → 5회로 완화)
-    cascade_z: float = 4.0  # z >= 4.0 (3.5 → 4.0으로 완화)
+    # 캐스케이드 설정 (지속성 강조)
+    cascade_seconds: int = 30  # 지난 30초 안에 (20초 → 30초)
+    cascade_count: int = 6  # 6회 이상 (5회 → 6회)
+    cascade_z: float = 4.0  # z >= 4.0 (유지)
     
-    # 쿨다운 설정 (해당 방향만)
-    cooldown_after_strong_sec: int = 8  # 강한 스파이크 후 8초 쿨다운 (4초 → 8초)
-    cooldown_after_medium_sec: int = 3  # 중간 스파이크 후 3초 쿨다운 (2초 → 3초)
+    # 쿨다운 설정 (재진입 남발 억제)
+    cooldown_after_strong_sec: int = 20  # 강한 스파이크 후 20초 쿨다운 (8초 → 20초)
+    cooldown_after_medium_sec: int = 8  # 중간 스파이크 후 8초 쿨다운 (3초 → 8초)
     
-    # 리스크 설정 (초기 튜닝용으로 완화)
-    risk_pct: float = 0.4  # 1트레이드 계좌대비 위험
-    slippage_max_pct: float = 0.03  # 최대 슬리피지 (5% → 3%로 수정)
+    # 리스크 설정 (단타 보유를 반영)
+    risk_pct: float = 0.3  # 1트레이드 계좌대비 위험 (0.4% → 0.3%)
+    slippage_max_pct: float = 0.02  # 최대 슬리피지 (3% → 2%)
     
     # 레벨 설정
-    or_minutes: int = 15  # 오프닝 레인지 분
+    or_minutes: int = 30  # 오프닝 레인지 분
     atr_len: int = 14  # ATR 기간
-    vwap_sd_enter: float = 2.0  # VWAP ±2σ 진입
-    vwap_sd_enter_cascade: float = 1.8  # 캐스케이드 시 VWAP ±1.8σ 진입 (완화)
-    vwap_sd_stop: float = 2.5  # VWAP ±2.5σ 스탑
+    vwap_sd_enter: float = 2.2  # VWAP ±2.2σ 진입 (2.0 → 2.2)
+    vwap_sd_enter_cascade: float = 2.0  # 캐스케이드 시 VWAP ±2.0σ 진입 (1.8 → 2.0)
+    vwap_sd_stop: float = 3.0  # VWAP ±3.0σ 스탑 (2.5 → 3.0)
     
     # 전략 A: 스윕&리클레임
     sweep_buffer_atr: float = 0.25  # 스윕 버퍼 ATR (0.3 → 0.25)
     reclaim_atr_tolerance: float = 0.25  # 리클레임 ATR 허용치 (0.2~0.3 ATR)
     opposite_liquidation_boost: float = 0.1  # 반대측 청산 시 신뢰도 부스트
-    tp1_R_a: float = 1.2  # 전략 A 1차 목표 R
+    tp1_R_a: float = 1.5  # 전략 A 1차 목표 R (1.2 → 1.5)
     tp2: str = "VWAP_or_range_edge"  # 2차 목표
     
     # 전략 B: 스퀴즈 추세지속
     retest_atr_tol: float = 0.55  # 리테스트 ATR 허용치 (0.4 → 0.55로 확대)
     retest_atr_tol_or_extension: float = 0.7  # OR 확장 시 리테스트 ATR 허용치 (추가 완화)
-    tp1_R_b: float = 1.5  # 전략 B 1차 목표 R
+    tp1_R_b: float = 1.8  # 전략 B 1차 목표 R (1.5 → 1.8)
     or_extension: bool = True  # OR 확장 사용
     
     # 전략 C: 과열-소멸 페이드
@@ -81,27 +81,27 @@ class AdvancedLiquidationConfig:
     lpi_extreme: float = 0.5  # LPI 극단 임계값
     vwap_sd_extreme: float = 1.8  # 극단 스파이크 시 VWAP ±1.8σ 진입
     vwap_sd_reenter: float = 1.5  # VWAP ±1.5σ 재진입 (SETUP 허용)
-    stop_atr: float = 0.35  # 스탑 ATR
-    tp2_sigma: float = 0.5  # 2차 목표 시그마
-    tp1_R_c: float = 1.2  # 전략 C 1차 목표 R
+    stop_atr: float = 0.45  # 스탑 ATR (0.35 → 0.45)
+    tp2_sigma: float = 0.6  # 2차 목표 시그마 (0.5 → 0.6)
+    tp1_R_c: float = 1.5  # 전략 C 1차 목표 R (1.2 → 1.5)
     
     # 단계형 스코어링 설정
-    # 가중치 구성 (합계 1.00)
-    weight_orderflow: float = 0.30  # 오더플로우(청산)
-    weight_structure: float = 0.20  # 구조 품질(플레이북별)
-    weight_decay_cascade: float = 0.15  # 소멸/연쇄
-    weight_trend_context: float = 0.10  # 추세/컨텍스트
-    weight_location_baseline: float = 0.10  # 로케이션/기준선
-    weight_risk_appropriateness: float = 0.10  # 리스크 적정성
-    weight_data_quality: float = 0.05  # 데이터 품질
+    # 가중치 구성 (합계 1.00) - 구조·트렌드 비중↑, 데이터 품질·오더플로우 비중↓
+    weight_orderflow: float = 0.20  # 오더플로우(청산) (0.30 → 0.20)
+    weight_structure: float = 0.25  # 구조 품질(플레이북별) (0.20 → 0.25)
+    weight_decay_cascade: float = 0.15  # 소멸/연쇄 (유지)
+    weight_trend_context: float = 0.15  # 추세/컨텍스트 (0.10 → 0.15)
+    weight_location_baseline: float = 0.10  # 로케이션/기준선 (유지)
+    weight_risk_appropriateness: float = 0.10  # 리스크 적정성 (유지)
+    weight_data_quality: float = 0.05  # 데이터 품질 (유지)
     
-    # Tier 임계값 (완화형)
-    tier_entry_threshold: float = 0.55  # ENTRY ≥ 0.55 (0.30 → 0.55)
-    tier_setup_threshold: float = 0.35  # SETUP ≥ 0.35 (0.15 → 0.35)
+    # Tier 임계값 (ENTRY 더 까다롭게)
+    tier_entry_threshold: float = 0.62  # ENTRY ≥ 0.62 (0.55 → 0.62)
+    tier_setup_threshold: float = 0.40  # SETUP ≥ 0.40 (0.35 → 0.40)
     tier_heads_up_threshold: float = 0.25  # HEADS-UP ≥ 0.25 유지
     
     # 동시양방향 충돌 회피 (더 완화)
-    conflict_threshold: float = 0.01  # 점수 차 < 0.01면 관망 (0.02 → 0.01로 완화)
+    conflict_threshold: float = 0.02  # 점수 차 < 0.02면 관망 (0.01 → 0.02로 보수화)
 
 
 class AdvancedLiquidationStrategy:
@@ -130,11 +130,17 @@ class AdvancedLiquidationStrategy:
         self.session_active = False
         self.session_start_time = None
         self.session_score_penalty = 0.15  # 세션 외 신뢰도 감점
-        
+    
+    """_summary_
+    바이낸스 청산 이벤트 형식
+    event = {'timestamp': datetime.datetime(2025, 8, 22, 1, 42, 47, 173880), 
+        'symbol': 'ETHUSDT', 'side': 'BUY', 
+        'quantity': 0.048, 'price': 4255.65, 'qty_usd': 204.2712, 'time': 1755794568097}
+    """    
     def process_liquidation_event(self, event: Dict) -> None:
         """청산 이벤트 처리"""
         try:
-            timestamp = event.get('ts', 0)
+            timestamp = event.get('timestamp', 0)
             side = event.get('side', 'unknown')
             qty_usd = event.get('qty_usd', 0.0)
             
@@ -151,10 +157,10 @@ class AdvancedLiquidationStrategy:
             bin_key = int(timestamp)
             
             # 청산 이벤트 side 매핑 (포지션 청산 방향)
-            if side.lower() in ['long', 'buy']:
+            if side.lower() in ['long', 'sell']:
                 # 롱 포지션 청산 → 롱 청산 데이터에 추가
                 self._add_to_bin(self.long_bins, bin_key, qty_usd)
-            elif side.lower() in ['short', 'sell']:
+            elif side.lower() in ['short', 'buy']:
                 # 숏 포지션 청산 → 숏 청산 데이터에 추가
                 self._add_to_bin(self.short_bins, bin_key, qty_usd)
             else:
@@ -608,8 +614,12 @@ class AdvancedLiquidationStrategy:
         try:
             score = 0.0
             current_price = price_data['close'].iloc[-1]
-            vwap = key_levels.get('vwap', current_price)
-            vwap_std = key_levels.get('vwap_std', current_price * 0.02)
+            vwap = key_levels.get('vwap')
+            vwap_std = key_levels.get('vwap_std')
+            
+            # VWAP와 표준편차가 없으면 직접 계산
+            if not vwap or not vwap_std or vwap_std <= 0:
+                vwap, vwap_std = self._fallback_vwap_std(price_data)
             
             # ±σ 이탈 정도 (2σ 기준)
             vwap_distance = abs(current_price - vwap) / vwap_std if vwap_std > 0 else 0
@@ -804,9 +814,9 @@ class AdvancedLiquidationStrategy:
                 tp1_distance = abs(take_profit1 - entry_price)
                 r_multiple = tp1_distance / risk
                 
-                if r_multiple >= 1.5:
+                if r_multiple >= 1.7:
                     score += 0.3
-                elif r_multiple >= 1.2:
+                elif r_multiple >= 1.3:
                     score += 0.2
                 elif r_multiple < 1.0:
                     score -= 0.2  # 패널티
@@ -962,17 +972,7 @@ class AdvancedLiquidationStrategy:
                 else:
                     final_tier = 'SETUP'  # Play A/B는 강등
                     tier_modification = "캐스케이드 감지로 강등 (Play A/B)"
-            
-            # 슬리피지 초과 시: ENTRY → HEADS_UP 강등 (디버깅용으로 완화)
-            if base_tier == 'ENTRY':
-                # 슬리피지 체크 (간단한 버전)
-                current_price = metrics.get('current_price', 0)
-                if current_price > 0:
-                    slippage_pct = abs(entry_price - current_price) / current_price
-                    if slippage_pct > self.config.slippage_max_pct:
-                        # final_tier = 'HEADS_UP'  # 디버깅용으로 강등 비활성화
-                        # tier_modification = "슬리피지 초과로 강등"
-                        pass
+            # 슬리피지 초과 강등 로직은 신호 생성 단계에서 처리(여기서는 미적용)
             
             return {
                 'base_tier': base_tier,
@@ -1487,137 +1487,6 @@ class AdvancedLiquidationStrategy:
             print(f"❌ 스윕&리클레임 분석 오류: {e}")
             return None
             
-            current_price = price_data['close'].iloc[-1]
-            prev_day_low = key_levels.get('prev_day_low', 0)
-            prev_day_high = key_levels.get('prev_day_high', 0)
-            
-            signals = []
-            
-            # === 롱 신호 후보 생성 ===
-            if prev_day_low > 0 and current_price < prev_day_low:
-                # 기본 조건 확인
-                z_long = metrics.get('z_long', 0)
-                lpi = metrics.get('lpi', 0)
-                
-                if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:
-                    # 신호 생성
-                    entry_price = current_price
-                    stop_loss = min(prev_day_low, current_price) - atr * 0.3
-                    backup_stop = current_price * 0.9992
-                    stop_loss = min(stop_loss, backup_stop)
-                    
-                    risk = entry_price - stop_loss
-                    tp1 = entry_price + risk * self.config.tp1_R_a
-                    
-                    if "VWAP" in self.config.tp2:
-                        tp2 = key_levels.get('vwap', entry_price + risk * 2.0)
-                    else:
-                        tp2 = entry_price + risk * 2.0
-                    
-                    # 스코어링 및 Tier 결정
-                    scoring_result = self.calculate_total_score(
-                        'A', 'BUY', price_data, key_levels, {}, atr, 
-                        entry_price, stop_loss, tp1, metrics
-                    )
-                    
-                    tier_result = self.determine_signal_tier(
-                        scoring_result['total_score'], 'A', metrics, atr
-                    )
-                    
-                    # 후보 상세 로그
-                    self.log_candidate_details('A', 'BUY', metrics, price_data, key_levels, atr)
-                    
-                    # 스코어링 결과 로그
-                    self.log_scoring_results('A', 'BUY', scoring_result, tier_result)
-                    
-                    # 신호 생성
-                    signal = {
-                        'signal_type': 'SWEEP_RECLAIM_LONG',
-                        'action': 'BUY',
-                        'confidence': scoring_result['total_score'],
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss,
-                        'take_profit1': tp1,
-                        'take_profit2': tp2,
-                        'risk_reward': self.config.tp1_R_a,
-                        'timestamp': datetime.now(timezone.utc),
-                        'reason': f"하단 스윕 + 롱청산스파이크 | Z:{z_long:.1f}, LPI:{lpi:.2f}",
-                        'playbook': 'A',
-                        'liquidation_metrics': metrics,
-                        'total_score': scoring_result['total_score'],
-                        'tier': tier_result['final_tier'],
-                        'component_scores': scoring_result['component_scores']
-                    }
-                    
-                    signals.append(signal)
-            
-            # === 숏 신호 후보 생성 ===
-            if prev_day_high > 0 and current_price > prev_day_high:
-                # 기본 조건 확인
-                z_short = metrics.get('z_short', 0)
-                lpi = metrics.get('lpi', 0)
-                
-                if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:
-                    # 신호 생성
-                    entry_price = current_price
-                    stop_loss = max(prev_day_high, current_price) + atr * 0.3
-                    backup_stop = current_price * 1.0008
-                    stop_loss = max(stop_loss, backup_stop)
-                    
-                    risk = stop_loss - entry_price
-                    tp1 = entry_price - risk * self.config.tp1_R_a
-                    
-                    if "VWAP" in self.config.tp2:
-                        tp2 = key_levels.get('vwap', entry_price - risk * 2.0)
-                    else:
-                        tp2 = entry_price - risk * 2.0
-                    
-                    # 스코어링 및 Tier 결정
-                    scoring_result = self.calculate_total_score(
-                        'A', 'SELL', price_data, key_levels, {}, atr, 
-                        entry_price, stop_loss, tp1, metrics
-                    )
-                    
-                    tier_result = self.determine_signal_tier(
-                        scoring_result['total_score'], 'A', metrics, atr
-                    )
-                    
-                    # 후보 상세 로그
-                    self.log_candidate_details('A', 'SELL', metrics, price_data, key_levels, atr)
-                    
-                    # 스코어링 결과 로그
-                    self.log_scoring_results('A', 'SELL', scoring_result, tier_result)
-                    
-                    # 신호 생성
-                    signal = {
-                        'signal_type': 'SWEEP_RECLAIM_SHORT',
-                        'action': 'SELL',
-                        'confidence': scoring_result['total_score'],
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss,
-                        'take_profit1': tp1,
-                        'take_profit2': tp2,
-                        'risk_reward': self.config.tp1_R_a,
-                        'timestamp': datetime.now(timezone.utc),
-                        'reason': f"상단 스윕 + 숏청산스파이크 | Z:{z_short:.1f}, LPI:{lpi:.2f}",
-                        'playbook': 'A',
-                        'liquidation_metrics': metrics,
-                        'total_score': scoring_result['total_score'],
-                        'tier': tier_result['final_tier'],
-                        'component_scores': scoring_result['component_scores']
-                    }
-                    
-                    signals.append(signal)
-            
-            # 3. 신호 선택 (가장 높은 점수)
-            if signals:
-                best_signal = max(signals, key=lambda x: x['total_score'])
-                print(f"🎯 전략 A 최종 신호: {best_signal['action']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
-                return best_signal
-            
-            # print("🔄 전략 A: 신호 없음 (스윕&리클레임 조건 미충족)")
-            return None
-            
         except Exception as e:
             print(f"❌ 스윕&리클레임 분석 오류: {e}")
             return None
@@ -1742,7 +1611,7 @@ class AdvancedLiquidationStrategy:
                         
                         if len(price_data) >= 4:
                             retest_tolerance = (self.config.retest_atr_tol_or_extension if self.config.or_extension 
-                                              else self.config.retest_atr_tol)
+                                                else self.config.retest_atr_tol)
                             
                             for i in range(1, min(11, len(price_data))):
                                 high_price = price_data['high'].iloc[-i]
@@ -2672,84 +2541,257 @@ class AdvancedLiquidationStrategy:
             print(f"❌ 전체 전략 분석 오류: {e}")
             return None
     
-    def get_strategy_summary(self) -> Dict[str, Any]:
-        """전략 요약 정보 (방향별 분리)"""
-        cooldown_info = self._is_cooldown_active(datetime.now(timezone.utc))
-        
-        return {
-            'session_active': self.session_active,
-            'cascade_detected': self.cascade_detected,
-            'cooldown_active': cooldown_info['active'],
-            'cooldown_penalty': cooldown_info['penalty'],
-            'cooldown_reason': cooldown_info['reason'],
-            'background_stats': {
-                'mu_long': self.mu_long,
-                'sigma_long': self.sigma_long,
-                'mu_short': self.mu_short,
-                'sigma_short': self.sigma_short
-            },
-            'data_points': {
-                'long_bins': len(self.long_bins),
-                'short_bins': len(self.short_bins),
-                'total_bins': len(self.liquidation_bins)
-            },
-            'warmup_status': {
-                'long_signal_ready': len(self.short_bins) >= 1,  # 롱 신호를 위한 숏 청산 샘플
-                'short_signal_ready': len(self.long_bins) >= 1,  # 숏 신호를 위한 롱 청산 샘플
-                'total_samples': len(self.long_bins) + len(self.short_bins)
+    def _fallback_vwap_std(self, df: pd.DataFrame, lookback: int = 120) -> Tuple[float, float]:
+        """VWAP와 표준편차를 직접 계산하여 기본값 교체"""
+        try:
+            if len(df) < lookback:
+                lookback = len(df)
+            
+            # 세션 앵커드 VWAP 계산
+            pv = (df['close'] * df['volume']).cumsum()
+            v = df['volume'].cumsum().replace(0, np.nan)
+            vwap_series = pv / v
+            
+            # VWAP 대비 편차 계산
+            dev = df['close'] - vwap_series
+            
+            # 최근 lookback 기간의 표준편차 계산
+            recent_dev = dev.tail(lookback).dropna()
+            if len(recent_dev) == 0:
+                return df['close'].iloc[-1], df['close'].iloc[-1] * 0.005  # 기본값 0.5%
+            
+            std = float(recent_dev.std(ddof=0))
+            current_vwap = float(vwap_series.iloc[-1])
+            
+            # 너무 작을 때 최소 바닥(0.1%) 부여
+            min_std = df['close'].iloc[-1] * 0.001
+            final_std = max(std, min_std)
+            
+            return current_vwap, final_std
+            
+        except Exception as e:
+            print(f"❌ VWAP 표준편차 계산 오류: {e}")
+            # 기본값 반환
+            return df['close'].iloc[-1], df['close'].iloc[-1] * 0.005
+    
+    
+    def analyze_bucket_liquidations(self, bucket_data: List[Dict], current_price: float, context: Optional[Dict]=None) -> Optional[Dict]:
+            """60초 버킷 데이터 분석
+            - 기본: 버킷 기반 오더플로우 메트릭만으로 HEADS_UP/SETUP을 생성
+            - 확장: context(price_data, key_levels, opening_range, vwap, vwap_std, atr)가 주어지면
+                    정식 분석 루틴(analyze_all_strategies)으로 위임하여 ENTRY까지 평가
+            """
+            try:
+                if not bucket_data:
+                    return None
+
+                # 버킷 데이터로 메트릭 계산
+                metrics = self._calculate_bucket_metrics(bucket_data)
+
+                # 워밍업 체크
+                if not self._check_basic_warmup(metrics):
+                    return None
+
+                # Z점수 및 LPI 계산 (USD 노션널 기반, 60초 스케일)
+                z_long, z_short, lpi = self._calculate_z_and_lpi(bucket_data)
+                metrics.update({
+                    'z_long': z_long,
+                    'z_short': z_short,
+                    'lpi': lpi
+                })
+
+                # 캐스케이드/쿨다운 체크
+                is_cascade = self._check_cascade_condition(bucket_data)
+                metrics['is_cascade'] = is_cascade
+                cooldown_info = self._check_cooldown_condition(metrics)
+                metrics['cooldown_info'] = cooldown_info
+
+                # 로그
+                print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
+
+                # ---- 확장 경로: 충분한 컨텍스트가 있으면 정식 분석으로 위임 ----
+                if context and isinstance(context.get('price_data'), pd.DataFrame):
+                    price_data = context['price_data']
+                    key_levels = context.get('key_levels', {})
+                    opening_range = context.get('opening_range', {})
+                    vwap = context.get('vwap', key_levels.get('vwap'))
+                    vwap_std = context.get('vwap_std', key_levels.get('vwap_std'))
+                    atr = context.get('atr', 0.0)
+
+                    # 내부 메트릭은 self의 상태를 쓰는 루틴과 호환되므로 그대로 사용
+                    # 정식 루틴은 get_current_liquidation_metrics를 호출하므로,
+                    # 여기도 최근 상태 반영을 위해 process_liquidation_event를 병행하는 것이 이상적.
+                    # 여기서는 버킷 기반 Z/LPI만 이용하고, 나머지는 정식 루틴이 price_data를 활용.
+                    return self.analyze_all_strategies(
+                        price_data=price_data,
+                        key_levels=key_levels,
+                        opening_range=opening_range,
+                        vwap=vwap if vwap is not None else key_levels.get('vwap', current_price),
+                        vwap_std=vwap_std if vwap_std is not None else key_levels.get('vwap_std', current_price*0.005),
+                        atr=atr
+                    )
+
+                # ---- 기본 경로: 컨텍스트가 없으면 HEADS_UP/SETUP만 생성 ----
+                # z 임계에 따른 tier 힌트
+                if max(z_long, z_short) >= self.config.z_entry:
+                    tier = 'SETUP'  # ENTRY는 컨텍스트(가격구조/VWAP 재진입) 확인 필요 → 컨텍스트 없으면 SETUP까지만
+                elif max(z_long, z_short) >= self.config.z_setup:
+                    tier = 'SETUP'
+                elif max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or is_cascade:
+                    tier = 'HEADS_UP'
+                else:
+                    return None
+
+                action = 'BUY' if z_short >= z_long else 'SELL'
+                return {
+                    'signal_type': f'LIQ_BUCKET_{tier}',
+                    'action': action,
+                    'confidence': 0.1 if tier == 'HEADS_UP' else 0.3,
+                    'entry_price': current_price,
+                    'stop_loss': current_price,
+                    'take_profit1': current_price,
+                    'take_profit2': current_price,
+                    'risk_reward': 0.0,
+                    'timestamp': datetime.now(timezone.utc),
+                    'reason': f'버킷 기반 {tier}: ZL={z_long:.2f}, ZS={z_short:.2f}, LPI={lpi:.2f}',
+                    'playbook': tier,
+                    'liquidation_metrics': metrics,
+                    'total_score': 0.12 if tier == 'HEADS_UP' else 0.35,
+                    'tier': tier,
+                    'component_scores': {}
+                }
+
+            except Exception as e:
+                print(f"❌ 버킷 분석 오류: {e}")
+                return None
+
+
+    def _calculate_bucket_metrics(self, bucket_data: List[Dict]) -> Dict[str, Any]:
+        """버킷 데이터로 기본 메트릭 계산"""
+        try:
+            total_count = len(bucket_data)
+            long_count = sum(1 for item in bucket_data if item.get('side') == 'long')
+            short_count = sum(1 for item in bucket_data if item.get('side') == 'short')
+            
+            total_value = sum(item.get('qty_usd', 0) for item in bucket_data)
+            long_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'long')
+            short_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'short')
+            
+            return {
+                'total_count': total_count,
+                'long_count': long_count,
+                'short_count': short_count,
+                'total_value': total_value,
+                'long_value': long_value,
+                'short_value': short_value,
+                'long_ratio': long_count / total_count if total_count > 0 else 0,
+                'short_ratio': short_count / total_count if total_count > 0 else 0
             }
-        }
-
-
-def make_advanced_liquidation_plan(df: pd.DataFrame,
-                                  liquidation_events: List[Dict],
-                                  config: AdvancedLiquidationConfig,
-                                  key_levels: Dict[str, float],
-                                  opening_range: Dict[str, float],
-                                  vwap: float,
-                                  vwap_std: float) -> Optional[Dict]:
-    """고급 청산 거래 계획 생성"""
-    try:
-        strategy = AdvancedLiquidationStrategy(config)
-        
-        # 청산 이벤트 처리
-        for event in liquidation_events:
-            strategy.process_liquidation_event(event)
-        
-        # ATR 계산
-        atr = calculate_atr(df, config.atr_len)
-        if pd.isna(atr):
-            atr = df['close'].iloc[-1] * 0.02  # 기본값
-        
-        # 모든 전략 분석
-        signal = strategy.analyze_all_strategies(
-            df, key_levels, opening_range, vwap, vwap_std, atr
-        )
-        
-        if signal:
-            # 중립 신호인 경우
-            if signal.get('action') == 'NEUTRAL':
-                print(f"🔄 중립 신호: {signal.get('reason', '알 수 없음')}")
-                print(f"   📋 세부사항: {signal.get('playbook', 'N/A')}")
-                return signal
             
-            # 포지션 사이징 계산
-            risk_percent = config.risk_pct
-            equity = 10000  # 예시 자본금
-            risk_dollar = equity * risk_percent / 100
+        except Exception as e:
+            print(f"❌ 버킷 메트릭 계산 오류: {e}")
+            return {}
+    
+    def _calculate_z_and_lpi(self, bucket_data: List[Dict]) -> Tuple[float, float, float]:
+        """Z점수와 LPI 계산"""
+        try:
+            if not bucket_data:
+                return 0.0, 0.0, 0.0
             
-            stop_distance = abs(signal['entry_price'] - signal['stop_loss'])
-            position_size = risk_dollar / stop_distance if stop_distance > 0 else 0
+            # 최근 60초 데이터로 Z점수 계산
+            current_time = int(datetime.now(timezone.utc).timestamp())
+            window_start = current_time - 60
             
-            signal['position_size'] = position_size
-            signal['risk_dollar'] = risk_dollar
+            recent_long = [item for item in bucket_data if item.get('timestamp', 0) >= window_start and item.get('side') == 'long']
+            recent_short = [item for item in bucket_data if item.get('timestamp', 0) >= window_start and item.get('side') == 'short']
             
-            print(f"💰 포지션 사이징: {position_size:.2f} (리스크: ${risk_dollar:.2f})")
-            return signal
-        
-        print("❌ 모든 전략에서 신호 없음")
-        return None
-        
-    except Exception as e:
-        print(f"❌ 고급 청산 거래 계획 생성 오류: {e}")
-        return None
+            # Z점수 계산 (최근 60초 vs 이전 60초)
+            if len(recent_long) > 0 and len(recent_short) > 0:
+                z_long = len(recent_long) / max(len(recent_short), 1)
+                z_short = len(recent_short) / max(len(recent_long), 1)
+            else:
+                z_long = len(recent_long) / 10.0  # 기본값
+                z_short = len(recent_short) / 10.0  # 기본값
+            
+            # LPI 계산
+            total_recent = len(recent_long) + len(recent_short)
+            if total_recent > 0:
+                lpi = (len(recent_long) - len(recent_short)) / total_recent
+            else:
+                lpi = 0.0
+            
+            return z_long, z_short, lpi
+            
+        except Exception as e:
+            print(f"❌ Z점수/LPI 계산 오류: {e}")
+            return 0.0, 0.0, 0.0
+    
+    def _check_basic_warmup(self, metrics: Dict[str, Any]) -> bool:
+        """기본 워밍업 조건 체크"""
+        try:
+            total_count = metrics.get('total_count', 0)
+            return total_count >= 5  # 최소 5개 이벤트 필요
+            
+        except Exception as e:
+            print(f"❌ 워밍업 체크 오류: {e}")
+            return False
+    
+    def _check_cascade_condition(self, bucket_data: List[Dict]) -> bool:
+        """캐스케이드 조건 체크"""
+        try:
+            if len(bucket_data) < 3:
+                return False
+            
+            # 최근 30초 내 같은 방향 청산이 연속으로 발생하는지 체크
+            current_time = int(datetime.now(timezone.utc).timestamp())
+            window_start = current_time - 30
+            
+            recent_data = [item for item in bucket_data if item.get('timestamp', 0) >= window_start]
+            if len(recent_data) < 3:
+                return False
+            
+            # 같은 방향 청산이 연속으로 발생하는지 확인
+            sides = [item.get('side') for item in recent_data]
+            if len(sides) >= 3:
+                # 최근 3개가 모두 같은 방향인지 체크
+                if all(side == 'long' for side in sides[-3:]) or all(side == 'short' for side in sides[-3:]):
+                    return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"❌ 캐스케이드 조건 체크 오류: {e}")
+            return False
+    
+    def _check_cooldown_condition(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
+        """쿨다운 조건 체크"""
+        try:
+            cooldown_info = {
+                'active': False,
+                'penalty': 0.0,
+                'reason': ''
+            }
+            
+            # 강한 신호 후 쿨다운
+            z_long = metrics.get('z_long', 0)
+            z_short = metrics.get('z_short', 0)
+            max_z = max(z_long, z_short)
+            
+            if max_z >= self.config.z_strong:
+                cooldown_info.update({
+                    'active': True,
+                    'penalty': 0.3,
+                    'reason': '강한 신호 후 쿨다운'
+                })
+            elif max_z >= self.config.z_medium:
+                cooldown_info.update({
+                    'active': True,
+                    'penalty': 0.15,
+                    'reason': '중간 신호 후 쿨다운'
+                })
+            
+            return cooldown_info
+            
+        except Exception as e:
+            print(f"❌ 쿨다운 조건 체크 오류: {e}")
+            return {'active': False, 'penalty': 0.0, 'reason': ''}
