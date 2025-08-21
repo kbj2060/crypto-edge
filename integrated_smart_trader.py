@@ -52,10 +52,6 @@ class ExternalDataLoader:
             response.raise_for_status()
             data = response.json()
             
-            # 디버깅: 첫 번째 데이터 샘플 출력
-            if isinstance(data, list) and data:
-                print(f"🔍 첫 번째 데이터 샘플: {data[0]}")
-            
             # 데이터가 리스트라고 가정하고 유연 매핑
             if isinstance(data, list):
                 mapped: List[Dict] = []
@@ -119,19 +115,6 @@ class ExternalDataLoader:
                             'qty_usd': qty_val,
                             'price': price_val
                         })
-                
-                # 디버깅: 처리된 데이터 샘플 출력
-                if mapped:
-                    print(f"🔍 처리된 데이터 샘플: {mapped[0]}")
-                    print(f"📊 사이드 분포: {[d['side'] for d in mapped[:10]]}")
-                    # 샘플 시각을 KST로 변환해 표시
-                    try:
-                        import datetime as _dt
-                        kst = _dt.timezone(_dt.timedelta(hours=9))
-                        dt_kst = _dt.datetime.fromtimestamp(mapped[0]['timestamp'], tz=_dt.timezone.utc).astimezone(kst)
-                        print(f"🕒 샘플 시각(KST): {dt_kst.strftime('%Y-%m-%d %H:%M:%S')}")
-                    except Exception:
-                        pass
                 
                 print(f"✅ 외부 서버에서 {len(mapped)}개의 청산 데이터를 성공적으로 가져왔습니다.")
                 return mapped
@@ -390,7 +373,6 @@ class IntegratedSmartTrader:
                 processed_count += 1
             
             print(f"✅ AdvancedLiquidationStrategy 초기화 완료: {processed_count}개 히스토리 이벤트 처리됨")
-            print(f"📊 처리된 데이터 분포: 롱={long_count}, 숏={short_count}")
             
             # 워밍업 상태 확인
             if hasattr(self._adv_liquidation_strategy, 'get_warmup_status'):
@@ -457,12 +439,6 @@ class IntegratedSmartTrader:
                 }
                 
                 strategy.process_liquidation_event(liquidation_event)
-                
-                # 실시간 청산 정보 출력 (더 명확하게)
-                if data['side'] == 'BUY':
-                    print(f"🔥 실시간 청산: SHORT ${data['qty_usd']:,.0f} @ ${data.get('price', 0):.2f} (숏 포지션 강제 청산)")
-                else:
-                    print(f"🔥 실시간 청산: LONG ${data['qty_usd']:,.0f} @ ${data.get('price', 0):.2f} (롱 포지션 강제 청산)")
                 
                 # 청산 데이터가 들어올 때마다 고급 청산 전략 분석 실행
                 websocket = self.core.get_websocket()
@@ -668,31 +644,12 @@ class IntegratedSmartTrader:
             
             # # 워밍업 상태 및 청산 데이터 상태 확인
             warmup_status = adv_strategy.get_warmup_status()
-            # print(f"   🔥 워밍업 상태: SETUP={warmup_status['can_setup']}, ENTRY={warmup_status['can_entry']}")
-            # print(f"   📊 청산 샘플: 롱={warmup_status['long_samples']}, 숏={warmup_status['short_samples']}")
             
             # 현재 청산 메트릭 확인
             try:
                 metrics = adv_strategy.get_current_liquidation_metrics()
-                if metrics:
-                    # print(f"   📈 청산 지표: 롱 Z={metrics['z_long']:.2f}, 숏 Z={metrics['z_short']:.2f}, LPI={metrics['lpi']:.3f}")
-                    
-                    # 청산 데이터 방향성 확인
-                    if warmup_status['long_samples'] > 0 or warmup_status['short_samples'] > 0:
-                        print(f"   📊 청산 데이터 방향성:")
-                        print(f"      - 롱 샘플: {warmup_status['long_samples']}개 (롱 포지션 강제 청산)")
-                        print(f"      - 숏 샘플: {warmup_status['short_samples']}개 (숏 포지션 강제 청산)")
-                        
-                        # 최근 청산 이벤트 확인
-                        if hasattr(adv_strategy, 'long_bins') and adv_strategy.long_bins:
-                            recent_long = list(adv_strategy.long_bins)[-1] if adv_strategy.long_bins else None
-                            if recent_long:
-                                print(f"      - 최근 롱 청산: ${recent_long[1]:,.0f}")
-                        
-                        if hasattr(adv_strategy, 'short_bins') and adv_strategy.short_bins:
-                            recent_short = list(adv_strategy.short_bins)[-1] if adv_strategy.short_bins else None
-                            if recent_short:
-                                print(f"      - 최근 숏 청산: ${recent_short[1]:,.0f}")
+                if metrics and warmup_status['long_samples'] > 0 or warmup_status['short_samples'] > 0:
+                    pass  # 메트릭 확인 완료
             except Exception as e:
                 print(f"   ❌ 청산 메트릭 확인 실패: {e}")
             
@@ -703,12 +660,6 @@ class IntegratedSmartTrader:
             advanced_signal = adv_strategy.analyze_all_strategies(
                 df_1m, key_levels, opening_range, vwap, vwap_std, atr
             )
-            
-            # # 간단한 분석 완료 메시지
-            # if advanced_signal:
-            #     print(f"   📊 분석 완료: {advanced_signal.get('action', 'UNKNOWN')} | {advanced_signal.get('tier', 'UNKNOWN')} | 점수: {advanced_signal.get('total_score', 0.00):.3f}")
-            # else:
-            #     print(f"   📊 분석 완료: 신호 없음")
             
             return advanced_signal
             

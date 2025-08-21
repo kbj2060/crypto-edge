@@ -29,12 +29,14 @@ class AdvancedLiquidationConfig:
     agg_window_sec: int = 30  # 30초 집계 윈도우
     background_window_min: int = 60  # 백그라운드 평균 윈도우 (분)
     
-    # 최소 워밍업 요구사항
-    min_warmup_samples: int = 10  # 최소 10개 샘플(초) 확보 전 ENTRY 금지 (30 → 10으로 대폭 완화)
-    min_warmup_samples_setup: int = 5  # SETUP 허용을 위한 최소 샘플 (15 → 5로 대폭 완화)
+    # 최소 워밍업 요구사항 (방향별)
+    min_warmup_samples: int = 10  # ENTRY: 해당 방향 샘플 ≥10
+    min_warmup_samples_setup: int = 5  # SETUP: 해당 방향 샘플 ≥5
     
-    # 스파이크 판정 설정 (더 완화)
-    z_spike: float = 0.6  # 기본 스파이크 임계값 (0.8 → 0.6로 더 완화)
+    # 스파이크 판정 설정 (계층별 분리)
+    z_spike: float = 0.6  # HEADS-UP 기준 (0.6 → 0.6 유지)
+    z_setup: float = 2.0  # SETUP 기준 (새로 추가)
+    z_entry: float = 2.5  # ENTRY 기준 (새로 추가)
     z_strong: float = 1.8  # 강한 스파이크 임계값 (2.0 → 1.8로 더 완화)
     z_medium: float = 1.2  # 중간 스파이크 임계값 (1.5 → 1.2로 더 완화)
     lpi_bias: float = 0.10      # LPI 바이어스 임계값 (0.15 → 0.10으로 더 완화)
@@ -44,13 +46,13 @@ class AdvancedLiquidationConfig:
     cascade_count: int = 5  # 5회 이상 (4회 → 5회로 완화)
     cascade_z: float = 4.0  # z >= 4.0 (3.5 → 4.0으로 완화)
     
-    # 쿨다운 설정 (더 완화)
-    cooldown_after_strong_sec: int = 4  # 강한 스파이크 후 4초 쿨다운 (6초 → 4초로 완화)
-    cooldown_after_medium_sec: int = 2  # 중간 스파이크 후 2초 쿨다운 (3초 → 2초로 완화)
+    # 쿨다운 설정 (해당 방향만)
+    cooldown_after_strong_sec: int = 8  # 강한 스파이크 후 8초 쿨다운 (4초 → 8초)
+    cooldown_after_medium_sec: int = 3  # 중간 스파이크 후 3초 쿨다운 (2초 → 3초)
     
     # 리스크 설정 (초기 튜닝용으로 완화)
     risk_pct: float = 0.4  # 1트레이드 계좌대비 위험
-    slippage_max_pct: float = 0.05  # 최대 슬리피지 (3% → 5%로 완화)
+    slippage_max_pct: float = 0.03  # 최대 슬리피지 (5% → 3%로 수정)
     
     # 레벨 설정
     or_minutes: int = 15  # 오프닝 레인지 분
@@ -60,7 +62,7 @@ class AdvancedLiquidationConfig:
     vwap_sd_stop: float = 2.5  # VWAP ±2.5σ 스탑
     
     # 전략 A: 스윕&리클레임
-    sweep_buffer_atr: float = 0.3  # 스윕 버퍼 ATR
+    sweep_buffer_atr: float = 0.25  # 스윕 버퍼 ATR (0.3 → 0.25)
     reclaim_atr_tolerance: float = 0.25  # 리클레임 ATR 허용치 (0.2~0.3 ATR)
     opposite_liquidation_boost: float = 0.1  # 반대측 청산 시 신뢰도 부스트
     tp1_R_a: float = 1.2  # 전략 A 1차 목표 R
@@ -93,10 +95,10 @@ class AdvancedLiquidationConfig:
     weight_risk_appropriateness: float = 0.10  # 리스크 적정성
     weight_data_quality: float = 0.05  # 데이터 품질
     
-    # Tier 임계값 (더 완화)
-    tier_entry_threshold: float = 0.30  # ENTRY ≥ 0.30 (초기 테스트 더 낮춤)
-    tier_setup_threshold: float = 0.15  # SETUP ≥ 0.15 (초기 테스트 더 낮춤)
-    tier_heads_up_threshold: float = 0.10  # HEADS-UP ≥ 0.10 유지
+    # Tier 임계값 (완화형)
+    tier_entry_threshold: float = 0.55  # ENTRY ≥ 0.55 (0.30 → 0.55)
+    tier_setup_threshold: float = 0.35  # SETUP ≥ 0.35 (0.15 → 0.35)
+    tier_heads_up_threshold: float = 0.25  # HEADS-UP ≥ 0.25 유지
     
     # 동시양방향 충돌 회피 (더 완화)
     conflict_threshold: float = 0.01  # 점수 차 < 0.01면 관망 (0.02 → 0.01로 완화)
@@ -152,11 +154,9 @@ class AdvancedLiquidationStrategy:
             if side.lower() in ['long', 'buy']:
                 # 롱 포지션 청산 → 롱 청산 데이터에 추가
                 self._add_to_bin(self.long_bins, bin_key, qty_usd)
-                print(f"🔥 롱 청산 이벤트: ${qty_usd:.0f} (side: {side})")
             elif side.lower() in ['short', 'sell']:
                 # 숏 포지션 청산 → 숏 청산 데이터에 추가
                 self._add_to_bin(self.short_bins, bin_key, qty_usd)
-                print(f"🔥 숏 청산 이벤트: ${qty_usd:.0f} (side: {side})")
             else:
                 print(f"⚠️ 알 수 없는 side: {side}, 이벤트 무시")
                 return
@@ -312,8 +312,8 @@ class AdvancedLiquidationStrategy:
             # 슬리피지 체크
             slippage_ok = slippage_pct <= self.config.slippage_max_pct
             
-            # 스탑 거리 체크 (초기 튜닝용으로 허용폭 확대)
-            stop_distance_ok = 0.02 <= stop_distance_atr <= 5.0  # 0.02~5.0 ATR 범위 (0.05~4.0 → 0.02~5.0으로 확대)
+            # 스탑 거리 체크 (0.5~2.0R 허용)
+            stop_distance_ok = 0.5 <= stop_distance_atr <= 2.0  # 0.02~5.0 → 0.5~2.0으로 수정
             
             # 전체 체크 결과
             all_checks_passed = slippage_ok and stop_distance_ok
@@ -428,11 +428,13 @@ class AdvancedLiquidationStrategy:
             
             # 롱 신호: '숏 청산' 지분·강도↑ 가점 / '롱 청산'↑ 감점
             if signal_side == 'BUY':
-                # 숏 청산 스파이크 가점 (SETUP/ENTRY 임계값 분리)
-                if z_short >= 2.5:  # ENTRY 기준
+                # 숏 청산 스파이크 가점 (계층별 임계값 분리)
+                if z_short >= self.config.z_entry:  # ENTRY 기준 (2.5)
                     short_liquidation_bonus = min(z_short / 3.0, 1.0)
-                elif z_short >= 2.0:  # SETUP 기준
+                elif z_short >= self.config.z_setup:  # SETUP 기준 (2.0)
                     short_liquidation_bonus = min(z_short / 3.0, 0.7)
+                elif z_short >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
+                    short_liquidation_bonus = min(z_short / 3.0, 0.4)
                 else:
                     short_liquidation_bonus = 0.0
                 
@@ -446,11 +448,13 @@ class AdvancedLiquidationStrategy:
                 
             # 숏 신호: '롱 청산' 지분·강도↑ 가점 / '숏 청산'↑ 감점
             else:  # SELL
-                # 롱 청산 스파이크 가점 (SETUP/ENTRY 임계값 분리)
-                if z_long >= 2.5:  # ENTRY 기준
+                # 롱 청산 스파이크 가점 (계층별 임계값 분리)
+                if z_long >= self.config.z_entry:  # ENTRY 기준 (2.5)
                     long_liquidation_bonus = min(z_long / 3.0, 1.0)
-                elif z_long >= 2.0:  # SETUP 기준
+                elif z_long >= self.config.z_setup:  # SETUP 기준 (2.0)
                     long_liquidation_bonus = min(z_long / 3.0, 0.7)
+                elif z_long >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
+                    long_liquidation_bonus = min(z_long / 3.0, 0.4)
                 else:
                     long_liquidation_bonus = 0.0
                 
@@ -505,27 +509,27 @@ class AdvancedLiquidationStrategy:
                 if sweep_depth >= 0.25:  # min_sweep_atr
                     score += 0.4
             
-            # 리클레임 품질
+            # 리클레임 품질 (완화: 종가 리클로즈 + 레벨±0.5ATR 근접도 SETUP 인정)
             if len(price_data) >= 2:
                 prev_close = price_data['close'].iloc[-2]
                 current_close = price_data['close'].iloc[-1]
                 
-                # 종가 리클로즈 (완전 복귀)
+                # 종가 리클로즈 (완전 복귀) - 가점 증가
                 if prev_day_low > 0 and prev_close < prev_day_low and current_close > prev_day_low:
-                    score += 0.4
-                # 근접 리클레임 (±0.5ATR)
+                    score += 0.5  # 0.4 → 0.5로 증가
+                # 근접 리클레임 (±0.5ATR) - SETUP 인정
                 elif prev_day_low > 0 and prev_close < prev_day_low:
                     atr_buffer = atr * 0.5
                     if current_close > prev_day_low - atr_buffer:
-                        score += 0.2
+                        score += 0.3  # 0.2 → 0.3으로 증가
                 
                 # 상단 스윕&리클레임도 동일하게
                 if prev_day_high > 0 and prev_close > prev_day_high and current_close < prev_day_high:
-                    score += 0.4
+                    score += 0.5  # 0.4 → 0.5로 증가
                 elif prev_day_high > 0 and prev_close > prev_day_high:
                     atr_buffer = atr * 0.5
                     if current_close < prev_day_high + atr_buffer:
-                        score += 0.2
+                        score += 0.3  # 0.2 → 0.3으로 증가
             
             # 스윕 최근성 (≤15봉)
             bars_since_sweep = 0
@@ -582,7 +586,7 @@ class AdvancedLiquidationStrategy:
                         retest_distance = (high_price - or_low) / atr if atr > 0 else 0
                         break
             
-            if retest_distance <= 0.6:
+            if retest_distance <= 0.6:  # 0.6 → 0.6 유지
                 score += 0.4
             elif retest_distance <= 1.0:
                 score += 0.2
@@ -651,7 +655,7 @@ class AdvancedLiquidationStrategy:
                 score += 0.3  # SETUP 기준만 만족
             # ENTRY 승급 조건으로만 사용, 불만족시 강한 감점은 제거
             
-            # 2. 같은 방향 캐스케이드 감점
+            # 2. 같은 방향 캐스케이드 감점 (Play C만 강차단, A/B는 감점/강등)
             is_cascade = metrics.get('is_cascade', False)
             if is_cascade:
                 # 캐스케이드 지분 확인 (최근 20~30초)
@@ -667,11 +671,11 @@ class AdvancedLiquidationStrategy:
                 
                 cascade_ratio = cascade_liquidation / (total_liquidation + 1e-9)
                 
-                # 지분 ≥ 0.85 & 이벤트 ≥ 2회면 감점
+                # 지분 ≥ 0.85 & 이벤트 ≥ 2회면 감점 (Play C만 강차단)
                 if cascade_ratio >= 0.85:
-                    score -= 0.4
+                    score -= 0.2  # 강차단에서 감점으로 완화
                 elif cascade_ratio >= 0.7:
-                    score -= 0.2
+                    score -= 0.1  # 감점 유지
             
             # 3. 쿨다운 감점 적용
             cooldown_info = metrics.get('cooldown_info', {})
@@ -783,13 +787,13 @@ class AdvancedLiquidationStrategy:
         try:
             score = 0.0
             
-            # 1. 스탑 거리/ATR 적합 (0.6~1.6R 가점)
+            # 1. 스탑 거리/ATR 적합 (0.5~2.0R 가점)
             stop_distance = abs(entry_price - stop_loss)
             stop_distance_atr = stop_distance / atr if atr > 0 else 0
             
-            if 0.6 <= stop_distance_atr <= 1.6:
+            if 0.5 <= stop_distance_atr <= 2.0:  # 0.6~1.6 → 0.5~2.0으로 확대
                 score += 0.5
-            elif 0.4 <= stop_distance_atr <= 2.0:
+            elif 0.3 <= stop_distance_atr <= 2.5:  # 0.4~2.0 → 0.3~2.5로 확대
                 score += 0.3
             elif stop_distance_atr < 0.2 or stop_distance_atr > 3.0:
                 score -= 0.3  # 패널티
@@ -922,6 +926,9 @@ class AdvancedLiquidationStrategy:
                             metrics: Dict[str, Any], atr: float) -> Dict[str, Any]:
         """신호 Tier 결정 (ENTRY/SETUP/HEADS-UP)"""
         try:
+            # 현재 전략 추적
+            self.current_strategy = strategy_name
+            
             # 기본 Tier 결정
             if total_score >= self.config.tier_entry_threshold:
                 base_tier = 'ENTRY'
@@ -947,9 +954,14 @@ class AdvancedLiquidationStrategy:
             
             # 캐스케이드 감지 시: ENTRY → SETUP 강등 (디버깅용으로 완화)
             if base_tier == 'ENTRY' and metrics.get('is_cascade', False):
-                # final_tier = 'SETUP'  # 디버깅용으로 강등 비활성화
-                # tier_modification = "캐스케이드 감지로 강등"
-                pass
+                # Play C(페이드)만 강차단, A/B는 강등
+                strategy_name = getattr(self, 'current_strategy', 'UNKNOWN')
+                if strategy_name == 'C':
+                    final_tier = 'REJECT'  # Play C는 강차단
+                    tier_modification = "캐스케이드 감지로 강차단 (Play C)"
+                else:
+                    final_tier = 'SETUP'  # Play A/B는 강등
+                    tier_modification = "캐스케이드 감지로 강등 (Play A/B)"
             
             # 슬리피지 초과 시: ENTRY → HEADS_UP 강등 (디버깅용으로 완화)
             if base_tier == 'ENTRY':
@@ -1021,38 +1033,22 @@ class AdvancedLiquidationStrategy:
     
     def log_strategy_diagnosis(self, strategy_name: str, metrics: Dict[str, Any], 
                                 reason: str = None) -> None:
-        """전략별 진단 로그 - 디버깅 활성화"""
-        if reason:
-            print(f"🔍 {strategy_name} 진단: {reason}")
-        else:
-            print(f"🔍 {strategy_name} 진단: 조건 미충족")
+        """전략별 진단 로그 - 디버깅 비활성화"""
+        # 디버깅 출력 제거
+        pass
     
     def log_scoring_results(self, strategy_name: str, signal_side: str, 
                             scoring_result: Dict[str, Any], tier_result: Dict[str, Any]) -> None:
-        """스코어링 결과 로그 - 디버깅 활성화"""
-        try:
-            total_score = scoring_result.get('total_score', 0)
-            final_tier = tier_result.get('final_tier', 'UNKNOWN')
-            
-            print(f"   📊 {strategy_name} {signal_side}: {total_score:.3f} → {final_tier}")
-                
-        except Exception as e:
-            print(f"❌ 스코어링 결과 로그 오류: {e}")
+        """스코어링 결과 로그 - 디버깅 비활성화"""
+        # 디버깅 출력 제거
+        pass
     
     def log_candidate_details(self, strategy_name: str, signal_side: str, 
                             metrics: Dict[str, Any], price_data: pd.DataFrame,
                             key_levels: Dict[str, float], atr: float) -> None:
-        """후보별 상세 로그 - 디버깅 활성화"""
-        try:
-            # 핵심 지표만 간단히 출력
-            z_long = metrics.get('z_long', 0)
-            z_short = metrics.get('z_short', 0)
-            lpi = metrics.get('lpi', 0)
-            
-            print(f"   📊 {strategy_name} {signal_side}: Z({z_long:.1f}/{z_short:.1f}), LPI({lpi:.2f})")
-                
-        except Exception as e:
-            print(f"❌ 후보 상세 로그 오류: {e}")
+        """후보별 상세 로그 - 디버깅 비활성화"""
+        # 디버깅 출력 제거
+        pass
     
     def get_warmup_status(self) -> Dict[str, Any]:
         """워밍업 상태 확인 (방향별 분리)"""
@@ -1070,8 +1066,12 @@ class AdvancedLiquidationStrategy:
         # 방향별 워밍업 확인 (신호 방향에 따라 해당 방향만 확인)
         # LONG 신호: 숏 청산 샘플만 확인 (숏 청산이 많으면 롱 신호)
         # SHORT 신호: 롱 청산 샘플만 확인 (롱 청산이 많으면 숏 신호)
-        long_signal_warmup = short_samples >= 1  # 롱 신호를 위한 숏 청산 샘플
-        short_signal_warmup = long_samples >= 1  # 숏 신호를 위한 롱 청산 샘플
+        long_signal_warmup = short_samples >= self.config.min_warmup_samples_setup  # 롱 신호를 위한 숏 청산 샘플 (SETUP 기준)
+        short_signal_warmup = long_samples >= self.config.min_warmup_samples_setup  # 숏 신호를 위한 롱 청산 샘플 (SETUP 기준)
+        
+        # ENTRY 레벨 워밍업 확인
+        long_signal_entry_warmup = short_samples >= self.config.min_warmup_samples  # ENTRY 기준
+        short_signal_entry_warmup = long_samples >= self.config.min_warmup_samples  # ENTRY 기준
         
         # μ·σ 안정성 확인
         mu_long_valid = self.mu_long > 0
@@ -1082,21 +1082,21 @@ class AdvancedLiquidationStrategy:
         mu_stable = (sigma_long_valid and sigma_short_valid and
                     mu_long_valid and mu_short_valid)
         
-        # 워밍업 상태 로깅 (방향별 분리)
-        print(f"🔥 워밍업 상태: 전체={total_samples}, 롱신호용(숏청산)={short_samples}, 숏신호용(롱청산)={long_samples}")
-        print(f"🔥 롱청산 모수: μ={self.mu_long:.2f}({'✓' if mu_long_valid else '✗'}), σ={self.sigma_long:.2f}({'✓' if sigma_long_valid else '✗'})")
-        print(f"🔥 숏청산 모수: μ={self.mu_short:.2f}({'✓' if mu_short_valid else '✗'}), σ={self.sigma_short:.2f}({'✓' if sigma_short_valid else '✗'})")
+        # 워밍업 상태 로깅 제거 (디버깅 출력)
         
         # 방향별 실행 가능 여부
         can_long_setup = basic_warmup and long_signal_warmup and mu_stable
-        can_long_entry = basic_warmup and long_signal_warmup and mu_stable
+        can_long_entry = basic_warmup and long_signal_entry_warmup and mu_stable
         can_short_setup = basic_warmup and short_signal_warmup and mu_stable
-        can_short_entry = basic_warmup and short_signal_warmup and mu_stable
+        can_short_entry = basic_warmup and short_signal_entry_warmup and mu_stable
         
-        return {
+        # 워밍업 상태 요약
+        warmup_summary = {
             'basic_warmup': basic_warmup,
             'long_signal_warmup': long_signal_warmup,
             'short_signal_warmup': short_signal_warmup,
+            'long_signal_entry_warmup': long_signal_entry_warmup,
+            'short_signal_entry_warmup': short_signal_entry_warmup,
             'mu_stable': mu_stable,
             'can_long_setup': can_long_setup,
             'can_long_entry': can_long_entry,
@@ -1110,6 +1110,8 @@ class AdvancedLiquidationStrategy:
             'sigma_long_valid': sigma_long_valid,
             'sigma_short_valid': sigma_short_valid
         }
+        
+        return warmup_summary
     
     def get_current_liquidation_metrics(self) -> Dict[str, Any]:
         """현재 청산 지표 계산"""
@@ -1162,20 +1164,7 @@ class AdvancedLiquidationStrategy:
             # 쿨다운 상태 확인 (방향별)
             cooldown_info = self._is_cooldown_active(current_time)
             
-            # 상세한 Z-score 스케일링 로깅 (디버깅 활성화)
-            if total_liquidation > 0:
-                print(f"🔥 30초 청산: 롱청산={l_long_30s:.0f}, 숏청산={l_short_30s:.0f} | Z: 롱청산={z_long:.1f}, 숏청산={z_short:.1f} | LPI={lpi:.2f}")
-                print(f"🔥 롱청산 Z-score: μ={self.mu_long:.0f}×30={mu_long_scaled:.0f}, σ={self.sigma_long:.0f}×√30={sigma_long_scaled:.0f}")
-                print(f"🔥 숏청산 Z-score: μ={self.mu_short:.0f}×30={mu_short_scaled:.0f}, σ={self.sigma_short:.0f}×√30={sigma_short_scaled:.0f}")
-                
-                # 청산 데이터 방향성 로깅 (방향별 분리)
-                print(f"   📊 청산 데이터 방향성:")
-                print(f"      - 롱 샘플: {len(self.long_bins)}개 (롱 포지션 강제 청산)")
-                print(f"      - 숏 샘플: {len(self.short_bins)}개 (숏 포지션 강제 청산)")
-                if l_short_30s > 0:
-                    print(f"      - 최근 숏 청산: ${l_short_30s:,.0f}")
-                if l_long_30s > 0:
-                    print(f"      - 최근 롱 청산: ${l_long_30s:,.0f}")
+            # 상세한 Z-score 스케일링 로깅 제거 (디버깅 출력)
             
             return {
                 'timestamp': current_time,
@@ -1226,7 +1215,7 @@ class AdvancedLiquidationStrategy:
                     if z_score >= self.config.cascade_z:
                         short_cascade_count += 1
             
-            # 방향별 캐스케이드 상태 업데이트
+            # 방향별 캐스케이드 상태 업데이트 (20~30초 한쪽 지분 ≥0.85 & 이벤트 ≥2)
             long_cascade = long_cascade_count >= self.config.cascade_count
             short_cascade = short_cascade_count >= self.config.cascade_count
             
@@ -1264,15 +1253,15 @@ class AdvancedLiquidationStrategy:
         penalty = 0.0
         reason = None
         
-        # 강한 스파이크 (z >= 3.2) 쿨다운
-        if hasattr(self, 'last_spike_strength') and self.last_spike_strength >= self.config.z_strong:
+        # 강한 스파이크 (z >= 3.5) 쿨다운: ENTRY 제한/SETUP 허용
+        if hasattr(self, 'last_spike_strength') and self.last_spike_strength >= 3.5:
             if time_since_spike < self.config.cooldown_after_strong_sec:
                 cooldown_active = True
-                penalty = 0.2  # 강한 스파이크 후 감점
-                reason = f"강한 스파이크 쿨다운 ({time_since_spike:.1f}s)"
+                penalty = 0.3  # 강한 스파이크 후 ENTRY 제한
+                reason = f"강한 스파이크 쿨다운 - ENTRY 제한/SETUP 허용 ({time_since_spike:.1f}s)"
         
         # 중간 스파이크 (z >= 3.0) 쿨다운
-        elif hasattr(self, 'last_spike_strength') and self.last_spike_strength >= self.config.z_medium:
+        elif hasattr(self, 'last_spike_strength') and self.last_spike_strength >= 3.0:
             if time_since_spike < self.config.cooldown_after_medium_sec:
                 cooldown_active = True
                 penalty = 0.1  # 중간 스파이크 후 감점
@@ -1332,7 +1321,7 @@ class AdvancedLiquidationStrategy:
                     z_long = metrics.get('z_long', 0)
                     lpi = metrics.get('lpi', 0)
                     
-                    if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:
+                    if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
                         # 신호 생성
                         entry_price = current_price
                         stop_loss = min(prev_day_low, current_price) - atr * 0.3
@@ -1411,7 +1400,7 @@ class AdvancedLiquidationStrategy:
                     z_short = metrics.get('z_short', 0)
                     lpi = metrics.get('lpi', 0)
                     
-                    if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:
+                    if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
                         # 신호 생성
                         entry_price = current_price
                         stop_loss = max(prev_day_high, current_price) + atr * 0.3
@@ -1473,7 +1462,7 @@ class AdvancedLiquidationStrategy:
             z_long = metrics.get('z_long', 0)
             z_short = metrics.get('z_short', 0)
             lpi = metrics.get('lpi', 0)
-            if max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or metrics.get('is_cascade', False):
+            if max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or metrics.get('is_cascade', False):  # HEADS-UP 기준 (0.6)
                 self.log_strategy_diagnosis('A', metrics, "레벨 스윕/리클레임 미충족이나 약한 스파이크/LPI/캐스케이드 감지 → HEADS_UP")
                 return {
                     'signal_type': 'SWEEP_RECLAIM_HEADS_UP',
@@ -1668,7 +1657,7 @@ class AdvancedLiquidationStrategy:
                     z_short = metrics.get('z_short', 0)
                     lpi = metrics.get('lpi', 0)
                     
-                    if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:
+                    if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
                         # 리테스트 확인
                         retest_found = False
                         retest_low = current_price
@@ -1746,7 +1735,7 @@ class AdvancedLiquidationStrategy:
                     z_long = metrics.get('z_long', 0)
                     lpi = metrics.get('lpi', 0)
                     
-                    if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:
+                    if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
                         # 리테스트 확인
                         retest_found = False
                         retest_high = current_price
@@ -1823,7 +1812,7 @@ class AdvancedLiquidationStrategy:
             z_long = metrics.get('z_long', 0)
             z_short = metrics.get('z_short', 0)
             lpi = metrics.get('lpi', 0)
-            if max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or metrics.get('is_cascade', False):
+            if max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or metrics.get('is_cascade', False):  # HEADS-UP 기준 (0.6)
                 self.log_strategy_diagnosis('B', metrics, "OR 돌파/리테스트 미충족이나 약한 스파이크/LPI/캐스케이드 감지 → HEADS_UP")
                 return {
                     'signal_type': 'SQUEEZE_TREND_HEADS_UP',
@@ -1860,7 +1849,7 @@ class AdvancedLiquidationStrategy:
                 z_short = metrics.get('z_short', 0)
                 lpi = metrics.get('lpi', 0)
                 
-                if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:
+                if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
                     # 리테스트 확인
                     retest_found = False
                     retest_low = current_price
@@ -1933,7 +1922,7 @@ class AdvancedLiquidationStrategy:
                 z_long = metrics.get('z_long', 0)
                 lpi = metrics.get('lpi', 0)
                 
-                if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:
+                if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
                     # 리테스트 확인
                     retest_found = False
                     retest_high = current_price
@@ -2062,12 +2051,15 @@ class AdvancedLiquidationStrategy:
                 else:
                     # 다단계: z_long 임계별 HEADS-UP/SETUP/ENTRY
                     tier_hint = None
-                    if z_long >= self.config.z_strong or is_cascade:
+                    if z_long >= self.config.z_entry or is_cascade:  # ENTRY 기준 (2.5)
                         tier_hint = 'ENTRY'
-                    elif z_long >= self.config.z_medium:
+                    elif z_long >= self.config.z_setup:  # SETUP 기준 (2.0)
                         tier_hint = 'SETUP'
-                    elif z_long >= self.config.z_spike:
+                    elif z_long >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
                         tier_hint = 'HEADS_UP'
+                    # 기본: 1.8σ에서 SETUP 허용
+                    elif abs(current_price - vwap) >= 1.8 * vwap_std:
+                        tier_hint = 'SETUP'
                     if tier_hint:
                         # 신호 생성
                         entry_price = current_price
@@ -2131,12 +2123,15 @@ class AdvancedLiquidationStrategy:
                 else:
                     # 다단계: z_short 임계별 HEADS-UP/SETUP/ENTRY
                     tier_hint = None
-                    if z_short >= self.config.z_strong or is_cascade:
+                    if z_short >= self.config.z_entry or is_cascade:  # ENTRY 기준 (2.5)
                         tier_hint = 'ENTRY'
-                    elif z_short >= self.config.z_medium:
+                    elif z_short >= self.config.z_setup:  # SETUP 기준 (2.0)
                         tier_hint = 'SETUP'
-                    elif z_short >= self.config.z_spike:
+                    elif z_short >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
                         tier_hint = 'HEADS_UP'
+                    # 기본: 1.8σ에서 SETUP 허용
+                    elif abs(current_price - vwap) >= 1.8 * vwap_std:
+                        tier_hint = 'SETUP'
                     if tier_hint:
                         # 신호 생성
                         entry_price = current_price
@@ -2201,7 +2196,7 @@ class AdvancedLiquidationStrategy:
             z_long = metrics.get('z_long', 0)
             z_short = metrics.get('z_short', 0)
             lpi = metrics.get('lpi', 0)
-            if max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or metrics.get('is_cascade', False):
+            if max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or metrics.get('is_cascade', False):  # HEADS-UP 기준 (0.6)
                 self.log_strategy_diagnosis('C', metrics, "VWAP 과열 미충족이나 약한 스파이크/LPI/캐스케이드 감지 → HEADS_UP")
                 return {
                     'signal_type': 'VWAP_FADE_HEADS_UP',
@@ -2231,7 +2226,7 @@ class AdvancedLiquidationStrategy:
             # === 롱 페이드 후보 생성 ===
             if current_price < vwap_lower:  # 하락 과열
                 # 기본 조건 확인
-                if z_long >= self.config.z_spike:
+                if z_long >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
                     # 신호 생성
                     entry_price = current_price
                     stop_loss = max(
@@ -2283,7 +2278,7 @@ class AdvancedLiquidationStrategy:
             # === 숏 페이드 후보 생성 ===
             elif current_price > vwap_upper:  # 상승 과열
                 # 기본 조건 확인
-                if z_short >= self.config.z_spike:
+                if z_short >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
                     # 신호 생성
                     entry_price = current_price
                     stop_loss = min(
@@ -2491,8 +2486,8 @@ class AdvancedLiquidationStrategy:
             
             # SETUP/ENTRY 임계값 분리
             if for_entry:
-                # ENTRY: 더 엄격한 기준 (0.8)
-                base_threshold = 0.8
+                # ENTRY: 더 엄격한 기준 (0.80)
+                base_threshold = 0.80
             else:
                 # SETUP: 더 완화된 기준 (0.85)
                 base_threshold = 0.85

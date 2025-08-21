@@ -41,39 +41,39 @@ class SessionConfig:
     trend_filter_ma: int = 50
     
     # 플레이북 A: 오프닝 드라이브 풀백 (임계값 완화)
-    min_drive_return_R: float = 0.6  # OR 돌파 후 최소 0.6R 이상 진행 (0.8 → 0.6)
-    pullback_depth_atr: Tuple[float, float] = (0.5, 1.6)  # 풀백 깊이(ATR배) 허용 범위 확대
+    min_drive_return_R: float = 0.8  # OR 돌파 후 최소 0.8R 이상 진행 (0.6 → 0.8)
+    pullback_depth_atr: Tuple[float, float] = (0.6, 1.4)  # 풀백 깊이(ATR배) 허용 범위 (0.5~1.6 → 0.6~1.4)
     trigger_type: str = "close_reject"  # 'close_reject' 또는 'wick_touch'
     stop_atr_mult: float = 1.0  # 스탑 = 엔트리 기준 무효화/스윙 아래 + 1.0×ATR (1.1 → 1.0)
     tp1_R: float = 1.2  # 1차 청산 R (1.5 → 1.2)
     tp2_to_level: str = "OR_ext|PrevHigh|VWAP"  # 2차 목표 우선순위
     partial_out: float = 0.5  # 1차에서 절반 청산
     max_hold_min: int = 60  # 최대 보유시간(분)
-    max_slippage_pct: float = 0.03  # 허용 슬리피지(%) 초과 시 신호 무효 (0.02 → 0.03)
+    max_slippage_pct: float = 0.025  # 허용 슬리피지(%) 초과 시 신호 무효 (0.03 → 0.025)
     
     # 플레이북 B: 유동성 스윕 & 리클레임 (임계값 완화)
-    sweep_depth_atr_min: float = 0.2  # 레벨 하회/상회 최소 깊이(ATR배) (0.3 → 0.2)
+    sweep_depth_atr_min: float = 0.25  # 레벨 하회/상회 최소 깊이(ATR배) (0.2 → 0.25)
     reclaim_close_rule: str = "close_above_level"  # 롱: 레벨 위 종가 마감
     stop_buffer_atr: float = 0.5  # 스탑 버퍼 (0.6 → 0.5)
     tp1_to_b: str = "VWAP"  # 1차 목표 (Play B용)
     tp2_to_b: str = "opposite_range_edge"  # 2차 목표 (Play B용)
     
     # 플레이북 C: VWAP 리버전(평균회귀) 페이드 (임계값 완화)
-    sd_k_enter: float = 1.8  # 진입 트리거: 봉 종가가 ±1.8σ 밖에서 마감 (2.0 → 1.8)
-    sd_k_reenter: float = 1.3  # 그 다음 봉 종가가 ±1.3σ 안쪽으로 재진입 (1.5 → 1.3)
-    stop_outside_sd_k: float = 2.2  # 스탑: ±2.2σ 바깥 (2.5 → 2.2)
+    sd_k_enter: float = 1.8  # 진입 트리거: 봉 종가가 ±1.8σ 밖에서 마감 (1.8 → 1.8 유지)
+    sd_k_reenter: float = 1.5  # 그 다음 봉 종가가 ±1.5σ 안쪽으로 재진입 (1.3 → 1.5)
+    stop_outside_sd_k: float = 2.5  # 스탑: ±2.5σ 바깥 (2.2 → 2.5)
     tp1_to_c: str = "VWAP"  # 1차 목표: VWAP 터치 (Play C용)
     tp2_to_c: float = 0.4  # 2차: 반대측 0.4σ (0.5 → 0.4)
     trend_filter_slope: float = 0.0  # SMA50 기울기 > 0.0이면 숏페이드 보수적
     
     # 단계형 신호 설정 (임계값 완화로 시그널 생성 증가)
-    entry_thresh: float = 0.60  # Entry 임계점 (0.70 → 0.60)
-    setup_thresh: float = 0.40  # Setup 임계점 (0.50 → 0.40)
+    entry_thresh: float = 0.58  # Entry 임계점 (0.60 → 0.58)
+    setup_thresh: float = 0.38  # Setup 임계점 (0.40 → 0.38)
     headsup_thresh: float = 0.25  # Heads-up 임계점 (0.35 → 0.25)
     
     # Gate 설정 (임계값 완화로 게이트 통과 증가)
-    min_sweep_depth_atr: float = 0.15  # 최소 스윕 깊이 (0.2 → 0.15)
-    max_slippage_gate: float = 0.05  # 최대 허용 슬리피지 (0.03 → 0.05)
+    min_sweep_depth_atr: float = 0.25  # 최소 스윕 깊이 (0.15 → 0.25)
+    max_slippage_gate: float = 0.025  # 최대 허용 슬리피지 (0.05 → 0.025)
     min_volume_ratio: float = 0.5  # 최소 거래량 비율 (0.7 → 0.5)
     
     # Score 가중치
@@ -82,7 +82,7 @@ class SessionConfig:
     weight_pullback: float = 0.15  # 풀백 품질
     weight_baseline: float = 0.10  # 기준선 근접/복귀
     weight_timing: float = 0.10  # 세션 타이밍
-    weight_orderflow: float = 0.20  # 오더플로우
+    weight_orderflow: float = 0.10  # 오더플로우 (0.20 → 0.10)
     weight_risk: float = 0.10  # 리스크 적정성
     
     # --- 설정 추가 --- (임계값 완화)
@@ -239,6 +239,8 @@ class SessionBasedStrategy:
             
             # A 플레이북도 OR 조건으로 완화 (시그널 생성 증가)
             if playbook == 'A':
+                # SETUP: EMA정렬 OR 가격·VWAP 정렬
+                # ENTRY: EMA정렬 AND 가격·VWAP 정렬
                 direction_gate = direction_gate_a or direction_gate_b
             else:
                 direction_gate = direction_gate_a or direction_gate_b
@@ -494,16 +496,16 @@ class SessionBasedStrategy:
                 time_diff = abs((now_ts - self.session_start_time).total_seconds() / 60)  # 분 단위
                 # 세션 시작 ±90분 내: 최고점, ±180분 내: 중간점, 그 외: 낮은 점수
                 if time_diff <= 90:
-                    timing_score = 1.0
+                    timing_score = 1.0  # MID: +0.05 가점
                 elif time_diff <= 180:
-                    timing_score = 0.6
+                    timing_score = 0.6  # 중간
                 else:
-                    timing_score = 0.2
+                    timing_score = 0.2  # OPEN: -0.05 감점
             else:
                 timing_score = 0.4  # 기본값
             score += timing_score * self.config.weight_timing
             
-            # === 오더플로우 (0.20) ===
+            # === 오더플로우 (0.10) ===
             # 실제 거래량과 청산 데이터 기반 계산
             orderflow_score = 0.0
             
@@ -559,7 +561,7 @@ class SessionBasedStrategy:
                 # 청산 데이터가 없는 경우 기본값
                 orderflow_score += 0.1
             
-            orderflow_score = min(orderflow_score, 0.2)  # 최대 0.2
+            orderflow_score = min(orderflow_score, 0.1)  # 최대 0.1 (0.2 → 0.1)
             score += orderflow_score
             
             # === 리스크 적정성 (0.10) ===
@@ -925,6 +927,7 @@ class SessionBasedStrategy:
             print(f"      📊 VWAP: ${session_vwap:.2f}")
             print(f"      📊 EMA20 터치: {'✅' if ema_touch else '❌'}, VWAP 터치: {'✅' if vwap_touch else '❌'}")
             
+            # SETUP: ±0.3 ATR "근접"도 인정, ENTRY: 터치/재진입 가점
             if not (ema_touch or vwap_touch):
                 print(f"      ❌ EMA/VWAP 터치 조건 불만족")
                 return None
@@ -1119,13 +1122,16 @@ class SessionBasedStrategy:
                     reclaim_long = current_price > prev_day_low
                     
                     if reclaim_long:
-                        # 리클레임 확증: 다음 봉도 레벨 위에서 지속
+                        # 리클레임 확증: 종가 재돌파=ENTRY 가점, 레벨 ±0.5 ATR "근접"=SETUP 허용
                         if len(df) >= 2:
                             next_bar_low = df['low'].iloc[-2]
                             next_bar_close = df['close'].iloc[-2]
+                            # ENTRY: 종가 재돌파 확인
                             reclaim_confirmed = (next_bar_low >= prev_day_low and next_bar_close >= prev_day_low)
+                            # SETUP: 레벨 ±0.5 ATR "근접" 허용
+                            reclaim_setup = abs(next_bar_close - prev_day_low) <= atr * 0.5
                             
-                            if not reclaim_confirmed:
+                            if not (reclaim_confirmed or reclaim_setup):
                                 return None
                         
                         # 롱 신호 생성
@@ -1178,13 +1184,16 @@ class SessionBasedStrategy:
                     reclaim_short = current_price < prev_day_high
                     
                     if reclaim_short:
-                        # 리클레임 확증: 다음 봉도 레벨 아래에서 지속
+                        # 리클레임 확증: 종가 재돌파=ENTRY 가점, 레벨 ±0.5 ATR "근접"=SETUP 허용
                         if len(df) >= 2:
                             next_bar_low = df['low'].iloc[-2]
                             next_bar_close = df['close'].iloc[-2]
+                            # ENTRY: 종가 재돌파 확인
                             reclaim_confirmed = (next_bar_low <= prev_day_high and next_bar_close <= prev_day_high)
+                            # SETUP: 레벨 ±0.5 ATR "근접" 허용
+                            reclaim_setup = abs(next_bar_close - prev_day_high) <= atr * 0.5
                             
-                            if not reclaim_confirmed:
+                            if not (reclaim_confirmed or reclaim_setup):
                                 return None
                         
                         # 숏 신호 생성
