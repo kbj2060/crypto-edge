@@ -36,11 +36,11 @@ class IntegratedSmartTrader:
         self.bucket_start_time = datetime.datetime.now()
         self.last_60sec_bucket = None
         
-        # 콜백 설정
-        self._setup_callbacks()
-        
         # 고급 청산 전략 초기화
         self._init_advanced_liquidation_strategy()
+        
+        # 세션 기반 전략 초기화
+        self._init_session_strategy()
     
     def _init_advanced_liquidation_strategy(self):
         """고급 청산 전략 초기화"""
@@ -70,6 +70,30 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
             self._adv_liquidation_strategy = None
+    
+    def _init_session_strategy(self):
+        """세션 기반 전략 초기화"""
+        try:
+            if not self.config.enable_session_strategy:
+                print("⚠️ 세션 전략이 비활성화됨")
+                self._session_strategy = None
+                return
+                
+            print("🚀 세션 기반 전략 초기화 시작...")
+            
+            from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
+            
+            session_config = SessionConfig()
+            
+            self._session_strategy = SessionBasedStrategy(session_config)
+            
+            print("🎯 세션 기반 전략 초기화 완료!")
+                
+        except Exception as e:
+            print(f"❌ 세션 기반 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._session_strategy = None
     
 
     def _fetch_external_liquidation_data(self) -> List[Dict]:
@@ -217,12 +241,19 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
     
-    def _setup_callbacks(self):
-        """웹소켓 콜백 설정"""
-        # BinanceWebSocket에 직접 콜백 등록
+    def _setup_websocket_strategies(self):
+        """웹소켓 전략 설정"""
         websocket = self.core.get_websocket()
-        websocket.add_callback('liquidation', self._handle_liquidation_event)
-        websocket.add_callback('kline_3m', self._handle_3m_kline_close)  # 3분봉 마감 콜백 추가
+        
+        # 전략 실행기를 웹소켓에 설정
+        websocket.set_strategies(
+            session_strategy=self._session_strategy,
+            advanced_liquidation_strategy=self._adv_liquidation_strategy
+        )
+        
+        print("✅ 웹소켓에서 직접 전략 실행하도록 설정 완료")
+        print("   - 1분봉마다: 청산 전략 실행")
+        print("   - 3분마다: 세션 전략 실행 (1분봉 시뮬레이션)")
     
     def _handle_liquidation_event(self, data: Dict):
         """청산 이벤트 처리"""
@@ -384,32 +415,40 @@ class IntegratedSmartTrader:
             print(f"❌ 세션 키 레벨 계산 오류: {e}")
             return {}
     
-    def _analyze_advanced_liquidation_strategy(self) -> Optional[Dict]:
-        """고급 청산 전략 분석"""
-        try:
-            if not self._adv_liquidation_strategy:
-                return None
+    # def _analyze_advanced_liquidation_strategy(self) -> Optional[Dict]:
+    #     """고급 청산 전략 분석"""
+    #     try:
+    #         if not self._adv_liquidation_strategy:
+    #             print("❌ 고급 청산 전략이 초기화되지 않음")
+    #             return None
             
-            # 현재 가격 데이터 가져오기
-            websocket = self.core.get_websocket()
-            if not websocket.price_history:
-                return None
+    #         # 현재 가격 데이터 가져오기
+    #         websocket = self.core.get_websocket()
+    #         if not websocket.price_history:
+    #             print("❌ 가격 히스토리가 비어있음 - 1분봉 데이터 대기 중...")
+    #             return None
             
-            current_price = websocket.price_history[-1]['price']
+    #         current_price = websocket.price_history[-1]['price']
+    #         print(f"💰 현재 가격: {current_price}")
             
-            # 60초 버킷 데이터로 분석
-            if hasattr(self, 'liquidation_bucket') and self.liquidation_bucket:
-                # 버킷 데이터를 전략에 전달하여 분석
-                signal = self._adv_liquidation_strategy.analyze_bucket_liquidations(
-                    self.liquidation_bucket, current_price
-                )
-                return signal
+    #         # 60초 버킷 데이터로 분석
+    #         if hasattr(self, 'liquidation_bucket') and self.liquidation_bucket:
+    #             print(f"📦 버킷 데이터 {len(self.liquidation_bucket)}개로 분석 시작...")
+    #             # 버킷 데이터를 전략에 전달하여 분석
+    #             signal = self._adv_liquidation_strategy.analyze_bucket_liquidations(
+    #                 self.liquidation_bucket, current_price
+    #             )
+    #             print(f"🎯 전략 분석 결과: {signal}")
+    #             return signal
+    #         else:
+    #             print("❌ 청산 버킷이 비어있음")
+    #             return None
             
-            return None
-            
-        except Exception as e:
-            print(f"❌ 고급 청산 전략 분석 오류: {e}")
-            return None
+    #     except Exception as e:
+    #         print(f"❌ 고급 청산 전략 분석 오류: {e}")
+    #         import traceback
+    #         traceback.print_exc()
+    #         return None
     
     def _calculate_opening_range(self, df) -> Dict[str, float]:
         """오프닝 레인지 계산"""
@@ -484,6 +523,9 @@ class IntegratedSmartTrader:
         """트레이더 시작"""
         self._print_startup_info()
         
+        # 웹소켓 전략 설정 (전략 초기화 완료 후)
+        self._setup_websocket_strategies()
+        
         self.running = True
         
         # 웹소켓 백그라운드 시작
@@ -496,43 +538,20 @@ class IntegratedSmartTrader:
         """시작 정보 출력"""
         print(f"🚀 {self.config.symbol} 통합 스마트 트레이더 시작!")
         print(f"📊 세션: {'활성' if self.config.enable_session_strategy else '비활성'}")
-        print(f"⏰ 세션 전략: 3분봉 마감 시점 (OR 30분 완성 후)")
-        print(f"⚡ 청산 전략: 60초마다 이벤트 처리")
+        print(f"⏰ 세션 전략: 1분봉 기반 3분마다 실행 (OR 30분 완성 후)")
+        print(f"⚡ 청산 전략: 1분봉마다 실행")
         print("=" * 60)
-        print("💡 실시간 분석 중... 신호가 나올 때만 알림을 표시합니다.")
+        print("💡 웹소켓에서 직접 전략 실행 - 메인 루프 단순화됨")
+        print("⚠️  첫 1분봉 데이터 수집까지 대기 중... (약 1분)")
         print("=" * 60)
     
     def _run_main_loop(self):
-        """메인 실행 루프"""
+        """메인 실행 루프 - 단순화됨"""
         try:
+            print("🔄 메인 루프 시작 - 웹소켓에서 전략 실행")
             while self.running:
-                time.sleep(0.5)  # 1초마다 체크
+                time.sleep(1)  # 1초마다 상태 체크만
                 
-                # 60초 경과 체크
-                elapsed_seconds = (datetime.datetime.now() - self.bucket_start_time).total_seconds()
-                
-                # 디버깅: 10초마다 상태 출력
-                if int(elapsed_seconds) % 10 == 0 and elapsed_seconds > 0:
-                    print(f"⏱️ 버킷 상태: {elapsed_seconds:.1f}초 경과, 이벤트 {len(self.liquidation_bucket)}개")
-                
-                if elapsed_seconds >= 60:
-                    if self.liquidation_bucket:  # 버킷에 데이터가 있는 경우에만 실행
-                        print(f"\n⏰ {datetime.datetime.now().strftime('%H:%M:%S')} - 60초 청산 버킷 분석 시작")
-                        
-                        # 버킷 데이터로 청산 전략 분석
-                        advanced_signal = self._analyze_advanced_liquidation_strategy()
-                        if advanced_signal:
-                            self._print_advanced_liquidation_signal(advanced_signal, datetime.datetime.now())
-                        
-                        print(f"✅ {datetime.datetime.now().strftime('%H:%M')} - 청산 전략 분석 완료 (버킷 크기: {len(self.liquidation_bucket)})")
-                    else:
-                        print(f"⏰ {datetime.datetime.now().strftime('%H:%M:%S')} - 60초 경과 (버킷 비어있음)")
-                    
-                    # 버킷 초기화
-                    self.liquidation_bucket = []
-                    self.bucket_start_time = datetime.datetime.now()
-                    print(f"🔄 버킷 초기화 완료: {datetime.datetime.now().strftime('%H:%M:%S')}")
-                    
         except KeyboardInterrupt:
             print("\n⏹️ 사용자에 의해 중지됨")
         finally:

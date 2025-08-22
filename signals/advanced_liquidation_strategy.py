@@ -16,6 +16,7 @@ from collections import deque
 import pytz
 from indicators.moving_averages import calculate_ema
 from indicators.atr import calculate_atr
+from utils.timestamp_utils import get_timestamp_int
 
 
 @dataclass
@@ -1486,10 +1487,6 @@ class AdvancedLiquidationStrategy:
         except Exception as e:
             print(f"❌ 스윕&리클레임 분석 오류: {e}")
             return None
-            
-        except Exception as e:
-            print(f"❌ 스윕&리클레임 분석 오류: {e}")
-            return None
     
     def analyze_strategy_b_squeeze_trend_continuation(self,
                                                     metrics: Dict[str, Any],
@@ -1611,7 +1608,7 @@ class AdvancedLiquidationStrategy:
                         
                         if len(price_data) >= 4:
                             retest_tolerance = (self.config.retest_atr_tol_or_extension if self.config.or_extension 
-                                                else self.config.retest_atr_tol)
+                                              else self.config.retest_atr_tol)
                             
                             for i in range(1, min(11, len(price_data))):
                                 high_price = price_data['high'].iloc[-i]
@@ -1700,171 +1697,6 @@ class AdvancedLiquidationStrategy:
                     'tier': 'HEADS_UP',
                     'component_scores': {}
                 }
-            return None
-            
-        except Exception as e:
-            print(f"❌ 스퀴즈 추세지속 분석 오류: {e}")
-            return None
-            
-            current_price = price_data['close'].iloc[-1]
-            or_high = opening_range.get('high', 0)
-            or_low = opening_range.get('low', 0)
-            
-            signals = []
-            
-            # === 롱 신호 후보 생성 ===
-            if or_high > 0 and current_price > or_high:  # 상단 돌파
-                # 기본 조건 확인
-                z_short = metrics.get('z_short', 0)
-                lpi = metrics.get('lpi', 0)
-                
-                if z_short >= self.config.z_spike and lpi >= self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
-                    # 리테스트 확인
-                    retest_found = False
-                    retest_low = current_price
-                    
-                    if len(price_data) >= 4:
-                        retest_tolerance = (self.config.retest_atr_tol_or_extension if self.config.or_extension 
-                                          else self.config.retest_atr_tol)
-                        
-                        for i in range(1, min(5, len(price_data))):
-                            low_price = price_data['low'].iloc[-i]
-                            if low_price < or_high and low_price >= or_high - atr * retest_tolerance:
-                                retest_found = True
-                                retest_low = min(retest_low, low_price)
-                                break
-                    
-                    if retest_found:
-                        # 신호 생성
-                        entry_price = current_price
-                        stop_loss = retest_low - atr * 0.5
-                        
-                        risk = entry_price - stop_loss
-                        tp1 = entry_price + risk * self.config.tp1_R_b
-                        
-                        if self.config.or_extension:
-                            or_range = or_high - or_low
-                            tp2 = or_high + or_range
-                        else:
-                            tp2 = entry_price + risk * 2.5
-                        
-                        # 스코어링 및 Tier 결정
-                        scoring_result = self.calculate_total_score(
-                            'B', 'BUY', price_data, {}, opening_range, atr, 
-                            entry_price, stop_loss, tp1, metrics
-                        )
-                        
-                        tier_result = self.determine_signal_tier(
-                            scoring_result['total_score'], 'B', metrics, atr
-                        )
-                        
-                        # 후보 상세 로그
-                        self.log_candidate_details('B', 'BUY', metrics, price_data, {}, atr)
-                        
-                        # 스코어링 결과 로그
-                        self.log_scoring_results('B', 'BUY', scoring_result, tier_result)
-                        
-                        # 신호 생성
-                        signal = {
-                            'signal_type': 'SQUEEZE_TREND_CONTINUATION_LONG',
-                            'action': 'BUY',
-                            'confidence': scoring_result['total_score'],
-                            'entry_price': entry_price,
-                            'stop_loss': stop_loss,
-                            'take_profit1': tp1,
-                            'take_profit2': tp2,
-                            'risk_reward': self.config.tp1_R_b,
-                            'timestamp': datetime.now(timezone.utc),
-                            'reason': f"상단 돌파 + 숏청산스파이크 + 리테스트 | Z:{z_short:.1f}, LPI:{lpi:.2f}",
-                            'playbook': 'B',
-                            'liquidation_metrics': metrics,
-                            'total_score': scoring_result['total_score'],
-                            'tier': tier_result['final_tier'],
-                            'component_scores': scoring_result['component_scores']
-                        }
-                        
-                        signals.append(signal)
-            
-            # === 숏 신호 후보 생성 ===
-            if or_low > 0 and current_price < or_low:  # 하단 이탈
-                # 기본 조건 확인
-                z_long = metrics.get('z_long', 0)
-                lpi = metrics.get('lpi', 0)
-                
-                if z_long >= self.config.z_spike and lpi <= -self.config.lpi_bias:  # HEADS-UP 기준 (0.6)
-                    # 리테스트 확인
-                    retest_found = False
-                    retest_high = current_price
-                    
-                    if len(price_data) >= 4:
-                        retest_tolerance = (self.config.retest_atr_tol_or_extension if self.config.or_extension 
-                                          else self.config.retest_atr_tol)
-                        
-                        for i in range(1, min(5, len(price_data))):
-                            high_price = price_data['high'].iloc[-i]
-                            if high_price > or_low and high_price <= or_low + atr * retest_tolerance:
-                                retest_found = True
-                                retest_high = max(retest_high, high_price)
-                                break
-                    
-                    if retest_found:
-                        # 신호 생성
-                        entry_price = current_price
-                        stop_loss = retest_high + atr * 0.5
-                        
-                        risk = stop_loss - entry_price
-                        tp1 = entry_price - risk * self.config.tp1_R_b
-                        
-                        if self.config.or_extension:
-                            or_range = or_high - or_low
-                            tp2 = or_low - or_range
-                        else:
-                            tp2 = entry_price - risk * 2.5
-                        
-                        # 스코어링 및 Tier 결정
-                        scoring_result = self.calculate_total_score(
-                            'B', 'SELL', price_data, {}, opening_range, atr, 
-                            entry_price, stop_loss, tp1, metrics
-                        )
-                        
-                        tier_result = self.determine_signal_tier(
-                            scoring_result['total_score'], 'B', metrics, atr
-                        )
-                        
-                        # 후보 상세 로그
-                        self.log_candidate_details('B', 'SELL', metrics, price_data, {}, atr)
-                        
-                        # 스코어링 결과 로그
-                        self.log_scoring_results('B', 'SELL', scoring_result, tier_result)
-                        
-                        # 신호 생성
-                        signal = {
-                            'signal_type': 'SQUEEZE_TREND_CONTINUATION_SHORT',
-                            'action': 'SELL',
-                            'confidence': scoring_result['total_score'],
-                            'entry_price': entry_price,
-                            'stop_loss': stop_loss,
-                            'take_profit1': tp1,
-                            'take_profit2': tp2,
-                            'risk_reward': self.config.tp1_R_b,
-                            'timestamp': datetime.now(timezone.utc),
-                            'reason': f"하단 이탈 + 롱청산스파이크 + 리테스트 | Z:{z_long:.1f}, LPI:{lpi:.2f}",
-                            'playbook': 'B',
-                            'liquidation_metrics': metrics,
-                            'total_score': scoring_result['total_score'],
-                            'tier': tier_result['final_tier'],
-                            'component_scores': scoring_result['component_scores']
-                        }
-                        
-                        signals.append(signal)
-            
-            # 3. 신호 선택 (가장 높은 점수)
-            if signals:
-                best_signal = max(signals, key=lambda x: x['total_score'])
-                print(f"🎯 전략 B 최종 신호: {best_signal['action']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
-                return best_signal
-            
-            # print("🔄 전략 B: 신호 없음 (스퀴즈 추세지속 조건 미충족)")
             return None
             
         except Exception as e:
@@ -2084,125 +1916,6 @@ class AdvancedLiquidationStrategy:
                     'tier': 'HEADS_UP',
                     'component_scores': {}
                 }
-            return None
-            
-        except Exception as e:
-            print(f"❌ 과열-소멸 페이드 분석 오류: {e}")
-            return None
-            
-            signals = []
-            
-            # === 롱 페이드 후보 생성 ===
-            if current_price < vwap_lower:  # 하락 과열
-                # 기본 조건 확인
-                if z_long >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
-                    # 신호 생성
-                    entry_price = current_price
-                    stop_loss = max(
-                        current_price - atr * self.config.stop_atr,
-                        vwap - self.config.vwap_sd_stop * vwap_std
-                    )
-                    
-                    risk = entry_price - stop_loss
-                    tp1 = vwap  # VWAP 터치
-                    tp2 = vwap + self.config.tp2_sigma * vwap_std
-                    
-                    # 스코어링 및 Tier 결정
-                    scoring_result = self.calculate_total_score(
-                        'C', 'BUY', price_data, {'vwap': vwap, 'vwap_std': vwap_std}, {}, atr, 
-                        entry_price, stop_loss, tp1, metrics
-                    )
-                    
-                    tier_result = self.determine_signal_tier(
-                        scoring_result['total_score'], 'C', metrics, atr
-                    )
-                    
-                    # 후보 상세 로그
-                    self.log_candidate_details('C', 'BUY', metrics, price_data, {'vwap': vwap, 'vwap_std': vwap_std}, atr)
-                    
-                    # 스코어링 결과 로그
-                    self.log_scoring_results('C', 'BUY', scoring_result, tier_result)
-                    
-                    # 신호 생성
-                    signal = {
-                        'signal_type': 'OVERHEAT_EXTINCTION_FADE_LONG',
-                        'action': 'BUY',
-                        'confidence': scoring_result['total_score'],
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss,
-                        'take_profit1': tp1,
-                        'take_profit2': tp2,
-                        'risk_reward': self.config.tp1_R_c,
-                        'timestamp': datetime.now(timezone.utc),
-                        'reason': f"VWAP -{vwap_sd_threshold:.1f}σ + 롱청산스파이크 | Z:{z_long:.1f}",
-                        'playbook': 'C',
-                        'liquidation_metrics': metrics,
-                        'total_score': scoring_result['total_score'],
-                        'tier': tier_result['final_tier'],
-                        'component_scores': scoring_result['component_scores']
-                    }
-                    
-                    signals.append(signal)
-            
-            # === 숏 페이드 후보 생성 ===
-            elif current_price > vwap_upper:  # 상승 과열
-                # 기본 조건 확인
-                if z_short >= self.config.z_spike:  # HEADS-UP 기준 (0.6)
-                    # 신호 생성
-                    entry_price = current_price
-                    stop_loss = min(
-                        current_price + atr * self.config.stop_atr,
-                        vwap + self.config.vwap_sd_stop * vwap_std
-                    )
-                    
-                    risk = stop_loss - entry_price
-                    tp1 = vwap  # VWAP 터치
-                    tp2 = vwap - self.config.tp2_sigma * vwap_std
-                    
-                    # 스코어링 및 Tier 결정
-                    scoring_result = self.calculate_total_score(
-                        'C', 'SELL', price_data, {'vwap': vwap, 'vwap_std': vwap_std}, {}, atr, 
-                        entry_price, stop_loss, tp1, metrics
-                    )
-                    
-                    tier_result = self.determine_signal_tier(
-                        scoring_result['total_score'], 'C', metrics, atr
-                    )
-                    
-                    # 후보 상세 로그
-                    self.log_candidate_details('C', 'SELL', metrics, price_data, {'vwap': vwap, 'vwap_std': vwap_std}, atr)
-                    
-                    # 스코어링 결과 로그
-                    self.log_scoring_results('C', 'SELL', scoring_result, tier_result)
-                    
-                    # 신호 생성
-                    signal = {
-                        'signal_type': 'OVERHEAT_EXTINCTION_FADE_SHORT',
-                        'action': 'SELL',
-                        'confidence': scoring_result['total_score'],
-                        'entry_price': entry_price,
-                        'stop_loss': stop_loss,
-                        'take_profit1': tp1,
-                        'take_profit2': tp2,
-                        'risk_reward': self.config.tp1_R_c,
-                        'timestamp': datetime.now(timezone.utc),
-                        'reason': f"VWAP +{vwap_sd_threshold:.1f}σ + 숏청산스파이크 | Z:{z_short:.1f}",
-                        'playbook': 'C',
-                        'liquidation_metrics': metrics,
-                        'total_score': scoring_result['total_score'],
-                        'tier': tier_result['final_tier'],
-                        'component_scores': scoring_result['component_scores']
-                    }
-                    
-                    signals.append(signal)
-            
-            # 3. 신호 선택 (가장 높은 점수)
-            if signals:
-                best_signal = max(signals, key=lambda x: x['total_score'])
-                print(f"🎯 전략 C 최종 신호: {best_signal['action']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
-                return best_signal
-            
-            # print("🔄 전략 C: 신호 없음 (과열-소멸 페이드 조건 미충족)")
             return None
             
         except Exception as e:
@@ -2575,7 +2288,7 @@ class AdvancedLiquidationStrategy:
             return df['close'].iloc[-1], df['close'].iloc[-1] * 0.005
     
     
-    def analyze_bucket_liquidations(self, bucket_data: List[Dict], current_price: float, context: Optional[Dict]=None) -> Optional[Dict]:
+    def analyze_bucket_liquidations(self, bucket_data: List[Dict], current_price: float, key_levels, opening_range, vwap, vwap_std, atr) -> Optional[Dict]:
             """60초 버킷 데이터 분석
             - 기본: 버킷 기반 오더플로우 메트릭만으로 HEADS_UP/SETUP을 생성
             - 확장: context(price_data, key_levels, opening_range, vwap, vwap_std, atr)가 주어지면
@@ -2609,57 +2322,44 @@ class AdvancedLiquidationStrategy:
                 # 로그
                 print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
 
-                # ---- 확장 경로: 충분한 컨텍스트가 있으면 정식 분석으로 위임 ----
-                if context and isinstance(context.get('price_data'), pd.DataFrame):
-                    price_data = context['price_data']
-                    key_levels = context.get('key_levels', {})
-                    opening_range = context.get('opening_range', {})
-                    vwap = context.get('vwap', key_levels.get('vwap'))
-                    vwap_std = context.get('vwap_std', key_levels.get('vwap_std'))
-                    atr = context.get('atr', 0.0)
-
-                    # 내부 메트릭은 self의 상태를 쓰는 루틴과 호환되므로 그대로 사용
-                    # 정식 루틴은 get_current_liquidation_metrics를 호출하므로,
-                    # 여기도 최근 상태 반영을 위해 process_liquidation_event를 병행하는 것이 이상적.
-                    # 여기서는 버킷 기반 Z/LPI만 이용하고, 나머지는 정식 루틴이 price_data를 활용.
-                    return self.analyze_all_strategies(
-                        price_data=price_data,
-                        key_levels=key_levels,
-                        opening_range=opening_range,
-                        vwap=vwap if vwap is not None else key_levels.get('vwap', current_price),
-                        vwap_std=vwap_std if vwap_std is not None else key_levels.get('vwap_std', current_price*0.005),
-                        atr=atr
+                return self.analyze_all_strategies(
+                    price_data=current_price,
+                    key_levels=key_levels,
+                    opening_range=opening_range,
+                    vwap=vwap,
+                    vwap_std=vwap_std,
+                    atr=atr
                     )
 
-                # ---- 기본 경로: 컨텍스트가 없으면 HEADS_UP/SETUP만 생성 ----
-                # z 임계에 따른 tier 힌트
-                if max(z_long, z_short) >= self.config.z_entry:
-                    tier = 'SETUP'  # ENTRY는 컨텍스트(가격구조/VWAP 재진입) 확인 필요 → 컨텍스트 없으면 SETUP까지만
-                elif max(z_long, z_short) >= self.config.z_setup:
-                    tier = 'SETUP'
-                elif max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or is_cascade:
-                    tier = 'HEADS_UP'
-                else:
-                    return None
+        #         # ---- 기본 경로: 컨텍스트가 없으면 HEADS_UP/SETUP만 생성 ----
+        #         # z 임계에 따른 tier 힌트
+        #         if max(z_long, z_short) >= self.config.z_entry:
+        #             tier = 'SETUP'  # ENTRY는 컨텍스트(가격구조/VWAP 재진입) 확인 필요 → 컨텍스트 없으면 SETUP까지만
+        #         elif max(z_long, z_short) >= self.config.z_setup:
+        #             tier = 'SETUP'
+        #         elif max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or is_cascade:
+        #             tier = 'HEADS_UP'
+        #         else:
+        #             return None
 
-                action = 'BUY' if z_short >= z_long else 'SELL'
-                return {
-                    'signal_type': f'LIQ_BUCKET_{tier}',
-                    'action': action,
-                    'confidence': 0.1 if tier == 'HEADS_UP' else 0.3,
-                    'entry_price': current_price,
-                    'stop_loss': current_price,
-                    'take_profit1': current_price,
-                    'take_profit2': current_price,
-                    'risk_reward': 0.0,
-                    'timestamp': datetime.now(timezone.utc),
-                    'reason': f'버킷 기반 {tier}: ZL={z_long:.2f}, ZS={z_short:.2f}, LPI={lpi:.2f}',
-                    'playbook': tier,
-                    'liquidation_metrics': metrics,
-                    'total_score': 0.12 if tier == 'HEADS_UP' else 0.35,
-                    'tier': tier,
-                    'component_scores': {}
-                }
+        #         action = 'BUY' if z_short >= z_long else 'SELL'
+        # return {
+        #             'signal_type': f'LIQ_BUCKET_{tier}',
+        #             'action': action,
+        #             'confidence': 0.1 if tier == 'HEADS_UP' else 0.3,
+        #             'entry_price': current_price,
+        #             'stop_loss': current_price,
+        #             'take_profit1': current_price,
+        #             'take_profit2': current_price,
+        #             'risk_reward': 0.0,
+        #             'timestamp': datetime.now(timezone.utc),
+        #             'reason': f'버킷 기반 {tier}: ZL={z_long:.2f}, ZS={z_short:.2f}, LPI={lpi:.2f}',
+        #             'playbook': tier,
+        #             'liquidation_metrics': metrics,
+        #             'total_score': 0.12 if tier == 'HEADS_UP' else 0.35,
+        #             'tier': tier,
+        #             'component_scores': {}
+        #         }
 
             except Exception as e:
                 print(f"❌ 버킷 분석 오류: {e}")
@@ -2676,17 +2376,17 @@ class AdvancedLiquidationStrategy:
             total_value = sum(item.get('qty_usd', 0) for item in bucket_data)
             long_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'long')
             short_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'short')
-            
+        
             return {
-                'total_count': total_count,
-                'long_count': long_count,
-                'short_count': short_count,
-                'total_value': total_value,
-                'long_value': long_value,
-                'short_value': short_value,
-                'long_ratio': long_count / total_count if total_count > 0 else 0,
-                'short_ratio': short_count / total_count if total_count > 0 else 0
-            }
+                        'total_count': total_count,
+                        'long_count': long_count,
+                        'short_count': short_count,
+                        'total_value': total_value,
+                        'long_value': long_value,
+                        'short_value': short_value,
+                        'long_ratio': long_count / total_count if total_count > 0 else 0,
+                        'short_ratio': short_count / total_count if total_count > 0 else 0
+                    }
             
         except Exception as e:
             print(f"❌ 버킷 메트릭 계산 오류: {e}")
@@ -2702,8 +2402,8 @@ class AdvancedLiquidationStrategy:
             current_time = int(datetime.now(timezone.utc).timestamp())
             window_start = current_time - 60
             
-            recent_long = [item for item in bucket_data if item.get('timestamp', 0) >= window_start and item.get('side') == 'long']
-            recent_short = [item for item in bucket_data if item.get('timestamp', 0) >= window_start and item.get('side') == 'short']
+            recent_long = [item for item in bucket_data if get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'long']
+            recent_short = [item for item in bucket_data if get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'short']
             
             # Z점수 계산 (최근 60초 vs 이전 60초)
             if len(recent_long) > 0 and len(recent_short) > 0:
@@ -2746,7 +2446,7 @@ class AdvancedLiquidationStrategy:
             current_time = int(datetime.now(timezone.utc).timestamp())
             window_start = current_time - 30
             
-            recent_data = [item for item in bucket_data if item.get('timestamp', 0) >= window_start]
+            recent_data = [item for item in bucket_data if get_timestamp_int(item.get('timestamp', 0)) >= window_start]
             if len(recent_data) < 3:
                 return False
             

@@ -20,6 +20,7 @@ except ImportError:
 from indicators.vpvr import vpvr_key_levels
 from indicators.moving_averages import calculate_ema
 from indicators.atr import calculate_atr
+from utils.timestamp_utils import get_timestamp_datetime
 
 
 @dataclass
@@ -173,7 +174,7 @@ class SessionBasedStrategy:
             one_hour_ago = current_time - timedelta(seconds=3600)
             recent_events = [
                 event for event in liquidation_events 
-                if event.get('timestamp', current_time) >= one_hour_ago
+                if get_timestamp_datetime(event.get('timestamp', current_time)) >= one_hour_ago
             ]
             
             if not recent_events:
