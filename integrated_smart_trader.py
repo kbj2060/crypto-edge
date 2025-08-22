@@ -36,11 +36,34 @@ class IntegratedSmartTrader:
         self.bucket_start_time = datetime.datetime.now()
         self.last_60sec_bucket = None
         
+        # 글로벌 지표 시스템 초기화
+        self._init_global_indicators()
+        
         # 고급 청산 전략 초기화
         self._init_advanced_liquidation_strategy()
         
         # 세션 기반 전략 초기화
         self._init_session_strategy()
+    
+    def _init_global_indicators(self):
+        """글로벌 지표 시스템 초기화"""
+        try:
+            print("🚀 글로벌 지표 시스템 초기화 시작...")
+            
+            from indicators.global_indicators import get_global_indicator_manager
+            
+            # 글로벌 지표 매니저 가져오기
+            global_manager = get_global_indicator_manager()
+            
+            # 지표들 초기화
+            global_manager.initialize_indicators()
+            
+            print("🎯 글로벌 지표 시스템 초기화 완료!")
+            
+        except Exception as e:
+            print(f"❌ 글로벌 지표 시스템 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _init_advanced_liquidation_strategy(self):
         """고급 청산 전략 초기화"""

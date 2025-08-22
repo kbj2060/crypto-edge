@@ -17,9 +17,8 @@ try:
 except ImportError:
     # Python < 3.9 fallback
     from backports.zoneinfo import ZoneInfo
-from indicators.vpvr import vpvr_key_levels
+
 from indicators.moving_averages import calculate_ema
-from indicators.atr import calculate_atr
 from utils.timestamp_utils import get_timestamp_datetime
 
 
@@ -104,64 +103,73 @@ class SessionBasedStrategy:
         self.prev_day_hlc = None
         self.last_swing_hl = None
         
-    def calculate_session_vwap(
-        self, df: pd.DataFrame, session_start: datetime, session_end: datetime
-    ) -> Tuple[float, float]:
-        """세션 구간 VWAP 및 표준편차 계산 (반개구간 [start, end), 누적 σ)"""
-        if df.empty:
-            return np.nan, np.nan
-        # 안전장치: tz-aware & 정렬
-        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
-        df = df.sort_index()
+        # 세션 매니저 초기화 확인
+        try:
+            from indicators.opening_range import get_session_manager
+            session_manager = get_session_manager()
+            print(f"✅ 세션 매니저 초기화 완료: {session_manager}")
+        except Exception as e:
+            print(f"⚠️ 세션 매니저 초기화 실패: {e}")
+        
+    # def calculate_session_vwap(
+    #     self, df: pd.DataFrame, session_start: datetime, session_end: datetime
+    # ) -> Tuple[float, float]:
+    #     """세션 구간 VWAP 및 표준편차 계산 (반개구간 [start, end), 누적 σ) - 글로벌 지표로 대체됨"""
+    #     if df.empty:
+    #         return np.nan, np.nan
+    #     # 안전장치: tz-aware & 정렬
+    #     assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
+    #     df = df.sort_index()
 
-        # 세션 구간 반개구간으로 슬라이스 (다음 세션 첫 봉 중복 방지)
-        mask = (df.index >= session_start) & (df.index < session_end)
-        s = df.loc[mask]
-        if s.empty:
-            return np.nan, np.nan
+    #     # 세션 구간 반개구간으로 슬라이스 (다음 세션 첫 봉 중복 방지)
+    #     mask = (df.index >= session_start) & (df.index < session_end)
+    #     s = df.loc[mask]
+    #     if s.empty:
+    #         return np.nan, np.nan
 
-        # VWAP: typical price * volume 가중 (close만 써도 되지만 안정성↑)
-        price = (s["high"] + s["low"] + s["close"]) / 3.0
-        vol = s["volume"].astype("float64")
-        v_sum = np.maximum(vol.sum(), 1e-9)
-        vwap = float((price * vol).sum() / v_sum)
+    #     # VWAP: typical price * volume 가중 (close만 써도 되지만 안정성↑)
+    #     price = (s["high"] + s["low"] + s["close"]) / 3.0
+    #     vol = s["volume"].astype("float64")
+    #     v_sum = np.maximum(vol.sum(), 1e-9)
+    #     vwap = float((price * vol).sum() / v_sum)
 
-        # 세션 누적 표준편차: expanding std의 마지막 값 사용 (ddof=0 권장)
-        # (세션 밴드 = 가격의 분산을 세션 누적 관점으로 측정)
-        std = float(price.expanding().std(ddof=0).iloc[-1])
-        return vwap, std
+    #     # 세션 누적 표준편차: expanding std의 마지막 값 사용 (ddof=0 권장)
+    #     # (세션 밴드 = 가격의 분산을 세션 누적 관점으로 측정)
+    #     std = float(price.expanding().std(ddof=0).iloc[-1])
+    #     return vwap, std
     
-    def _next_session_start(self, session_start_utc: datetime) -> datetime:
-        """session_start 기준, '다음' 런던/뉴욕 오픈 중 가장 이른 UTC 시각"""
-        assert session_start_utc.tzinfo is not None
-        day_utc = session_start_utc
-
-        def local_open_utc(d, tz, h, m):
-            return datetime(d.year, d.month, d.day, h, m, tzinfo=ZoneInfo(tz)).astimezone(ZoneInfo("UTC"))
-
-        # 후보: 같은 날/다음 날의 런던 08:00, 뉴욕 09:30 (현지 기준, DST 자동)
-        cands = []
-        for off in (0, 1):
-            d_ny = (day_utc + timedelta(days=off)).astimezone(ZoneInfo("America/New_York")).date()
-            d_ln = (day_utc + timedelta(days=off)).astimezone(ZoneInfo("Europe/London")).date()
-            cands += [
-                local_open_utc(d_ln, "Europe/London", 8, 0),
-                local_open_utc(d_ny, "America/New_York", 9, 30),
-            ]
-        # session_start보다 이후인 것 중 최솟값
-        nxt = min(t for t in cands if t > session_start_utc)
-        return nxt
-
     def _session_slice(self, df: pd.DataFrame, session_start: datetime) -> pd.DataFrame:
         """세션 시작부터 다음 세션 시작 전까지의 데이터 슬라이스 (세션 경계 정확)"""
         if df.empty:
             return df
-        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
-        df = df.sort_index()
         
-        session_end = self._next_session_start(session_start)
+        # DataFrame 복사 및 인덱스 timezone 처리
+        df_copy = df.copy()
+        
+        # 인덱스가 timezone 정보를 가지고 있지 않은 경우 UTC로 설정
+        if df_copy.index.tz is None:
+            print(f"   ⚠️ DataFrame 인덱스에 timezone 정보가 없음. UTC로 설정합니다.")
+            # 인덱스가 datetime인 경우 UTC timezone 추가
+            if pd.api.types.is_datetime64_any_dtype(df_copy.index):
+                df_copy.index = df_copy.index.tz_localize('UTC')
+            else:
+                print(f"   ❌ DataFrame 인덱스가 datetime 타입이 아닙니다: {type(df_copy.index)}")
+                return df_copy
+        
+        df_copy = df_copy.sort_index()
+        
+        # 세션 매니저에서 다음 세션 시작 시간 가져오기
+        try:
+            from indicators.opening_range import get_session_manager
+            session_manager = get_session_manager()
+            session_end = session_manager.get_next_session_start(session_start)
+        except Exception as e:
+            print(f"   ⚠️ 세션 매니저에서 다음 세션 시작 시간 가져오기 실패: {e}")
+            # 폴백: 기본 계산
+            session_end = session_start + timedelta(hours=24)
+        
         # [start, end) 반개구간
-        return df.loc[(df.index >= session_start) & (df.index < session_end)]
+        return df_copy.loc[(df_copy.index >= session_start) & (df_copy.index < session_end)]
     
     def process_liquidation_stream(self, liquidation_events: List[Dict], 
                                     current_time: datetime) -> Dict[str, Any]:
@@ -695,113 +703,127 @@ class SessionBasedStrategy:
             return None
     
     def get_session_start_time(self, current_time) -> datetime:
-        """가장 최근에 완성된 OR의 세션 시작 시간을 반환"""
+        """가장 최근에 완성된 OR의 세션 시작 시간을 반환 (세션 매니저 사용)"""
         if current_time.tzinfo is None:
             current_time = current_time.replace(tzinfo=pytz.UTC)
         
-        # 현지시간 기준 세션 시작 시간 (DST 자동 처리)
-        ny_tz = pytz.timezone('America/New_York')
-        london_tz = pytz.timezone('Europe/London')
-        
-        # 현재 날짜
-        current_date = current_time.date()
-        
-        # 현지시간 기준으로 세션 시작 시간 생성 (DST 자동 처리)
-        ny_session_local = ny_tz.localize(datetime.combine(current_date, datetime.strptime('09:30', '%H:%M').time()))
-        london_session_local = london_tz.localize(datetime.combine(current_date, datetime.strptime('08:00', '%H:%M').time()))
-        
-        # UTC로 변환
-        today_ny = ny_session_local.astimezone(pytz.UTC)
-        today_london = london_session_local.astimezone(pytz.UTC)
-        
-        # 어제 세션들
-        yesterday = current_date - timedelta(days=1)
-        yesterday_ny = ny_tz.localize(datetime.combine(yesterday, datetime.strptime('09:30', '%H:%M').time())).astimezone(pytz.UTC)
-        yesterday_london = london_tz.localize(datetime.combine(yesterday, datetime.strptime('08:00', '%H:%M').time())).astimezone(pytz.UTC)
-        
-        # OR 완성 시간 계산 (15분 후)
-        or_duration = timedelta(minutes=self.config.or_minutes)
-        
-        # 각 세션의 OR 완성 시간
-        or_completion_times = [
-            (yesterday_ny + or_duration, yesterday_ny, "어제 뉴욕"),
-            (yesterday_london + or_duration, yesterday_london, "어제 런던"),
-            (today_london + or_duration, today_london, "오늘 런던"),
-            (today_ny + or_duration, today_ny, "오늘 뉴욕")
-        ]
-        
-        # 현재 시간보다 이전에 완성된 OR들 중 가장 최근 것 찾기
-        completed_ors = [(completion, start, name) for completion, start, name in or_completion_times 
-                         if completion <= current_time]
-        
-        if not completed_ors:
-            # 완성된 OR가 없으면 어제 뉴욕 세션 반환
-            return yesterday_ny
-        
-        # 가장 최근에 완성된 OR의 세션 시작 시간 반환
-        latest_completion, latest_start, latest_name = max(completed_ors, key=lambda x: x[0])
-        
-        return latest_start
+        try:
+            # 세션 매니저에서 세션 시작 시간 가져오기
+            from indicators.opening_range import get_session_manager
+            session_manager = get_session_manager()
+            
+            # 현재 세션 정보 가져오기
+            session_status = session_manager.get_session_status()
+            current_session = session_status.get('current_session')
+            
+            if current_session:
+                # 현재 활성 세션의 시작 시간 반환
+                session_open_time = session_manager.get_session_open_time()
+                if session_open_time:
+                    return session_open_time
+            
+            # 활성 세션이 없으면 가장 최근 세션 시작 시간 반환
+            session_history = session_manager.get_session_history()
+            if session_history:
+                # 가장 최근 세션 찾기
+                latest_session = max(session_history.keys(), key=lambda k: session_history[k].get('session_open_time', ''))
+                latest_session_info = session_history[latest_session]
+                session_open_time_str = latest_session_info.get('session_open_time')
+                if session_open_time_str:
+                    try:
+                        return datetime.fromisoformat(session_open_time_str.replace('Z', '+00:00'))
+                    except:
+                        pass
+            
+            # 폴백: 기본 세션 시작 시간 계산
+            print(f"   ⚠️ 세션 매니저에서 세션 시작 시간을 가져올 수 없음. 기본값 사용")
+            return current_time.replace(hour=13, minute=30, second=0, microsecond=0) - timedelta(days=1)
+            
+        except Exception as e:
+            print(f"   ⚠️ 세션 매니저 사용 실패: {e}. 기본값 사용")
+            # 폴백: 기본 세션 시작 시간 계산
+            return current_time.replace(hour=13, minute=30, second=0, microsecond=0) - timedelta(days=1)
     
     def _get_session_type(self, session_start: datetime) -> str:
-        """세션 시작 시간으로부터 세션 타입 식별"""
-        # UTC 시간을 뉴욕/런던 현지시간으로 변환하여 판별
-        ny_tz = pytz.timezone('America/New_York')
-        london_tz = pytz.timezone('Europe/London')
-        
-        # UTC를 현지시간으로 변환
-        ny_local = session_start.astimezone(ny_tz)
-        london_local = session_start.astimezone(london_tz)
-        
-        # 현지시간 기준으로 세션 타입 판별
-        ny_session_hour = 9  # 뉴욕 9:30 AM
-        london_session_hour = 8  # 런던 8:00 AM
-        
-        if abs(ny_local.hour - ny_session_hour) <= 1:  # ±1시간 범위
-            return "뉴욕"
-        elif abs(london_local.hour - london_session_hour) <= 1:  # ±1시간 범위
-            return "런던"
-        else:
-            return "알 수 없음"
+        """세션 시작 시간으로부터 세션 타입 식별 (세션 매니저 사용)"""
+        try:
+            # 세션 매니저에서 현재 세션 정보 가져오기
+            from indicators.opening_range import get_session_manager
+            session_manager = get_session_manager()
+            
+            session_status = session_manager.get_session_status()
+            current_session = session_status.get('current_session', 'UNKNOWN')
+            
+            # 세션 이름을 한글로 변환
+            session_name_map = {
+                'EUROPE': '런던',
+                'US': '뉴욕',
+                'EUROPE_ACTIVE': '런던',
+                'US_ACTIVE': '뉴욕'
+            }
+            
+            return session_name_map.get(current_session, current_session)
+            
+        except Exception as e:
+            print(f"   ⚠️ 세션 매니저에서 세션 타입을 가져올 수 없음: {e}")
+            # 폴백: 시간 기반 판별
+            try:
+                ny_tz = pytz.timezone('America/New_York')
+                london_tz = pytz.timezone('Europe/London')
+                
+                ny_local = session_start.astimezone(ny_tz)
+                london_local = session_start.astimezone(london_tz)
+                
+                ny_session_hour = 9  # 뉴욕 9:30 AM
+                london_session_hour = 8  # 런던 8:00 AM
+                
+                if abs(ny_local.hour - ny_session_hour) <= 1:
+                    return "뉴욕"
+                elif abs(london_local.hour - london_session_hour) <= 1:
+                    return "런던"
+                else:
+                    return "알 수 없음"
+            except:
+                return "알 수 없음"
     
-    def calculate_opening_range(
-        self, df: pd.DataFrame, session_start: datetime
-    ) -> Dict[str, float]:
-        """세션 구간 오프닝 레인지 계산 (반개구간, 정확히 OR 분만)"""
-        if df.empty:
-            return {}
-        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
-        df = df.sort_index()
+    # def calculate_opening_range(
+    #     self, df: pd.DataFrame, session_start: datetime
+    # ) -> Dict[str, float]:
+    #     """세션 구간 오프닝 레인지 계산 (반개구간, 정확히 OR 분만) - 글로벌 지표로 대체됨"""
+    #     if df.empty:
+    #         return {}
+    #     assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
+    #     df = df.sort_index()
 
-        or_end = session_start + timedelta(minutes=self.config.or_minutes)
-        mask = (df.index >= session_start) & (df.index < or_end)
-        head = df.loc[mask]
-        bars = len(head)
-        if bars == 0:
-            return {}
+    #     or_end = session_start + timedelta(minutes=self.config.or_minutes)
+    #     mask = (df.index >= session_start) & (df.index < or_end)
+    #     head = df.loc[mask]
+    #     bars = len(head)
+    #     if bars == 0:
+    #         return {}
 
-        h = float(head["high"].max())
-        l = float(head["low"].min())
+    #     h = float(head["high"].max())
+    #     l = float(head["low"].min())
         
-        # 유효성 검사
-        if pd.isna(h) or pd.isna(l) or h <= l:
-            print(f"❌ OR 계산 오류: 유효하지 않은 high/low 값 - high: {h}, low: {l}")
-            return {}
+    #     # 유효성 검사
+    #     if pd.isna(h) or pd.isna(l) or h <= l:
+    #         print(f"❌ OR 계산 오류: 유효하지 않은 high/low 값 - high: {h}, low: {l}")
+    #         return {}
         
-        # 타임프레임을 고려한 봉 수 계산
-        tf_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60}
-        tf_min = tf_map.get(self.config.timeframe, 1)
-        need_bars = max(1, int(np.ceil(self.config.or_minutes / tf_min)))
-        min_bars = max(1, int(np.ceil(self.config.min_or_bars / tf_min)))
+    #     # 타임프레임을 고려한 봉 수 계산
+    #     tf_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60}
+    #     tf_min = tf_map.get(self.config.timeframe, 1)
+    #     need_bars = max(1, int(np.ceil(self.config.or_minutes / tf_min)))
+    #         min_bars = max(1, int(np.ceil(self.config.min_or_bars / tf_min)))
         
-        ready = (bars >= need_bars)     # 완전 OR 확보?
-        partial = (not ready) and (bars >= min_bars)
+    #     ready = (bars >= need_bars)     # 완전 OR 확보?
+    #     partial = (not ready) and (bars >= min_bars)
 
-        return {
-            "high": h, "low": l, "center": (h + l) / 2.0, "range": h - l,
-            "bars": bars, "ready": ready, "partial": partial,
-            "need_bars": need_bars, "min_bars": min_bars, "timeframe": self.config.timeframe
-        }
+    #     return {
+    #         "high": h, "low": l, "center": (h + l) / 2.0, "range": h - l,
+    #         "bars": bars, "ready": ready, "partial": partial,
+    #         "need_bars": need_bars, "min_bars": min_bars, "timeframe": self.config.timeframe
+    #     }
     
     def analyze_playbook_a_opening_drive_pullback(self, df: pd.DataFrame, 
                                                     session_vwap: float,
@@ -1428,10 +1450,40 @@ class SessionBasedStrategy:
             # 세션 시작 시간 확인 (이미 UTC tz-aware)
             session_start = self.get_session_start_time(current_time)
             
-            # 세션 데이터 슬라이스 및 VWAP/OR 계산 (매 호출마다 재계산)
-            df_s = self._session_slice(df, session_start)
-            session_vwap, session_std = self.calculate_session_vwap(df_s, session_start, current_time)
-            or_info = self.calculate_opening_range(df_s, session_start)
+            # --- 글로벌 지표 시스템에서 지표 데이터 가져오기 ---
+            try:
+                from indicators.global_indicators import get_global_indicator_manager
+                global_manager = get_global_indicator_manager()
+                
+                # VWAP 및 VWAP 표준편차 (글로벌 지표에서 가져오기)
+                vwap_indicator = global_manager.get_indicator('vwap')
+                session_vwap = 0.0
+                session_std = 0.0
+                if vwap_indicator:
+                    vwap_status = vwap_indicator.get_vwap_status()
+                    session_vwap = vwap_status.get('current_vwap', 0)
+                    session_std = vwap_status.get('current_vwap_std', 0)
+                
+                # Opening Range 정보 (글로벌 지표에서 가져오기)
+                opening_range_indicator = global_manager.get_indicator('opening_range')
+                or_info = {}
+                if opening_range_indicator:
+                    or_info = opening_range_indicator.get_opening_range_status()
+                
+                # ATR (글로벌 지표에서 가져오기)
+                atr_indicator = global_manager.get_indicator('atr')
+                atr = 0.0
+                if atr_indicator:
+                    atr = atr_indicator.get_atr()
+                
+                print(f"   📊 글로벌 지표 데이터 로드 완료:")
+                print(f"      📊 VWAP: ${session_vwap:.2f}")
+                print(f"      📊 VWAP STD: ${session_std:.2f}")
+                print(f"      🌅 Opening Range: {or_info}")
+                print(f"      📊 ATR: {atr:.3f}")
+                
+            except Exception as e:
+                print(f"⚠️ 글로벌 지표 데이터 가져오기 실패: {e}")
             
             # 인스턴스 변수 업데이트
             self.session_vwap = session_vwap
@@ -1443,16 +1495,15 @@ class SessionBasedStrategy:
             session_type = self._get_session_type(session_start)
             print(f"🔍 세션: {session_start.strftime('%H:%M')} UTC ({session_type})")
 
-            
-            # ATR 계산
-            atr = calculate_atr(df_s, self.config.atr_len)
-            if pd.isna(atr):
+            if atr <= 0:
                 return None
             
             # === 단계형 신호 분석 ===
             best_signal = None
             best_score = 0.0
             
+            # 세션 데이터 슬라이스 (글로벌 지표 사용 시에도 필요)
+            df_s = self._session_slice(df, session_start)
             
             # A: OR가 없거나(strict) 준비 안 됐으면 스킵 또는 티어 제한
             if or_info and (or_info.get("ready") or (not self.config.strict_or and or_info.get("partial"))):

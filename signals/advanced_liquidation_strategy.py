@@ -15,7 +15,7 @@ from datetime import datetime, timedelta, timezone
 from collections import deque
 import pytz
 from indicators.moving_averages import calculate_ema
-from indicators.atr import calculate_atr
+# from indicators.atr import calculate_atr  # ATR3M 클래스 사용으로 변경
 from utils.timestamp_utils import get_timestamp_int
 
 
@@ -2331,35 +2331,6 @@ class AdvancedLiquidationStrategy:
                     atr=atr
                     )
 
-        #         # ---- 기본 경로: 컨텍스트가 없으면 HEADS_UP/SETUP만 생성 ----
-        #         # z 임계에 따른 tier 힌트
-        #         if max(z_long, z_short) >= self.config.z_entry:
-        #             tier = 'SETUP'  # ENTRY는 컨텍스트(가격구조/VWAP 재진입) 확인 필요 → 컨텍스트 없으면 SETUP까지만
-        #         elif max(z_long, z_short) >= self.config.z_setup:
-        #             tier = 'SETUP'
-        #         elif max(z_long, z_short) >= self.config.z_spike or abs(lpi) >= self.config.lpi_bias or is_cascade:
-        #             tier = 'HEADS_UP'
-        #         else:
-        #             return None
-
-        #         action = 'BUY' if z_short >= z_long else 'SELL'
-        # return {
-        #             'signal_type': f'LIQ_BUCKET_{tier}',
-        #             'action': action,
-        #             'confidence': 0.1 if tier == 'HEADS_UP' else 0.3,
-        #             'entry_price': current_price,
-        #             'stop_loss': current_price,
-        #             'take_profit1': current_price,
-        #             'take_profit2': current_price,
-        #             'risk_reward': 0.0,
-        #             'timestamp': datetime.now(timezone.utc),
-        #             'reason': f'버킷 기반 {tier}: ZL={z_long:.2f}, ZS={z_short:.2f}, LPI={lpi:.2f}',
-        #             'playbook': tier,
-        #             'liquidation_metrics': metrics,
-        #             'total_score': 0.12 if tier == 'HEADS_UP' else 0.35,
-        #             'tier': tier,
-        #             'component_scores': {}
-        #         }
 
             except Exception as e:
                 print(f"❌ 버킷 분석 오류: {e}")

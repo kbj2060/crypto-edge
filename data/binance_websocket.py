@@ -3,8 +3,9 @@ import asyncio
 import websockets
 import threading
 import time
+import requests  # pip install requests 필요
 from typing import Dict, List, Callable, Optional
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 import logging
 
 class BinanceWebSocket:
@@ -162,7 +163,7 @@ class BinanceWebSocket:
                 if kline.get('x', True):  # 마감된 캔들만
                     print(f"⏰ 1분봉 마감 감지: {datetime.now().strftime('%H:%M:%S')}")
                     
-                    # 가격 데이터 저장
+                    # 가격 데이터 저장 (지표별 거래량 데이터 분리)
                     price_data = {
                         'timestamp': datetime.now(),
                         'price': float(kline['c']),  # 종가
@@ -170,8 +171,10 @@ class BinanceWebSocket:
                         'high': float(kline['h']),
                         'low': float(kline['l']),
                         'close': float(kline['c']),
-                        'volume': float(kline['v']),
-                        'close_time': kline['t']  # 캔들 종료 시간
+                        'volume': float(kline['v']),      # VWAP용: base volume (ETH)
+                        'quote_volume': float(kline['q']), # VPVR용: quote volume (USDT)
+                        'trade_count': int(kline['n']),    # 거래 횟수
+                        'close_time': kline['t']           # 캔들 종료 시간
                     }
                     
                     # 가격 히스토리에 추가
@@ -185,98 +188,6 @@ class BinanceWebSocket:
                     self.minute_counter += 1
                     
                     # 청산 전략 실행 (매 1분마다)
-                    self.liquidation_bucket = [
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'SELL',  # 롱 청산
-                            'quantity': 0.5,
-                            'price': 3456.78,
-                            'qty_usd': 1728.39,
-                            'time': 1735123456789
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'BUY',   # 숏 청산
-                            'quantity': 1.2,
-                            'price': 3457.12,
-                            'qty_usd': 4148.54,
-                            'time': 1735123459123
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'SELL',  # 롱 청산
-                            'quantity': 0.8,
-                            'price': 3455.90,
-                            'qty_usd': 2764.72,
-                            'time': 1735123461456
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'SELL',  # 롱 청산
-                            'quantity': 2.1,
-                            'price': 3454.33,
-                            'qty_usd': 7254.09,
-                            'time': 1735123463789
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'BUY',   # 숏 청산
-                            'quantity': 0.3,
-                            'price': 3458.67,
-                            'qty_usd': 1037.60,
-                            'time': 1735123465012
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'SELL',  # 롱 청산
-                            'quantity': 1.7,
-                            'price': 3453.21,
-                            'qty_usd': 5870.46,
-                            'time': 1735123467345
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'BUY',   # 숏 청산
-                            'quantity': 0.9,
-                            'price': 3459.84,
-                            'qty_usd': 3113.86,
-                            'time': 1735123469678
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'SELL',  # 롱 청산
-                            'quantity': 3.5,
-                            'price': 3452.90,
-                            'qty_usd': 12085.15,
-                            'time': 1735123471901
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'BUY',   # 숏 청산
-                            'quantity': 0.6,
-                            'price': 3460.12,
-                            'qty_usd': 2076.07,
-                            'time': 1735123474234
-                        },
-                        {
-                            'timestamp': datetime.now(),
-                            'symbol': 'ETHUSDT',
-                            'side': 'SELL',  # 롱 청산
-                            'quantity': 1.4,
-                            'price': 3451.75,
-                            'qty_usd': 4832.45,
-                            'time': 1735123476567
-                        }
-                    ]
                     if self.advanced_liquidation_strategy and self.liquidation_bucket:
                         try:
                             print(f"🎯 청산 전략 실행 시작... (버킷 크기: {len(self.liquidation_bucket)})")
@@ -284,15 +195,96 @@ class BinanceWebSocket:
                             # 현재 가격 가져오기
                             current_price = float(kline['c'])
                             
-                            key_levels = self.advanced_liquidation_strategy.calculate_key_levels(self.price_history)
-                            opening_range = self.advanced_liquidation_strategy.calculate_opening_range(self.price_history)
-                            vwap = self.advanced_liquidation_strategy.calculate_vwap(self.price_history)
-                            vwap_std = self.advanced_liquidation_strategy.calculate_vwap_std(self.price_history)
-                            atr = self.advanced_liquidation_strategy.calculate_atr(self.price_history)
+                            # 글로벌 지표 시스템에서 지표 데이터 가져오기
+                            try:
+                                from indicators.global_indicators import get_global_indicator_manager
+                                import pandas as pd
+                                
+                                global_manager = get_global_indicator_manager()
+                                
+                                # Daily Levels (어제 고가/저가)
+                                daily_levels = global_manager.get_indicator('daily_levels')
+                                key_levels = {}
+                                if daily_levels and daily_levels.is_loaded():
+                                    prev_day_data = daily_levels.get_prev_day_high_low()
+                                    key_levels = {
+                                        'prev_day_high': prev_day_data.get('high', 0),
+                                        'prev_day_low': prev_day_data.get('low', 0)
+                                    }
+                                
+                                # Opening Range (현재 세션 정보)
+                                opening_range = {}
+                                try:
+                                    from indicators.opening_range import get_session_manager
+                                    session_manager = get_session_manager()
+                                    session_config = session_manager.get_indicator_mode_config()
+                                    
+                                    if session_config.get('use_session_mode'):
+                                        opening_range = {
+                                            'session_name': session_config.get('session_name', 'UNKNOWN'),
+                                            'session_start': session_config.get('session_start_time'),
+                                            'elapsed_minutes': session_config.get('elapsed_minutes', 0),
+                                            'session_status': session_config.get('session_status', 'UNKNOWN')
+                                        }
+                                except Exception as e:
+                                    print(f"⚠️ Opening Range 정보 가져오기 실패: {e}")
+                                
+                                # VWAP 및 VWAP 표준편차
+                                vwap_indicator = global_manager.get_indicator('vwap')
+                                vwap = 0.0
+                                vwap_std = 0.0
+                                if vwap_indicator:
+                                    vwap_status = vwap_indicator.get_vwap_status()
+                                    vwap = vwap_status.get('current_vwap', 0)
+                                    vwap_std = vwap_status.get('current_vwap_std', 0)
+                                
+                                # ATR
+                                atr_indicator = global_manager.get_indicator('atr')
+                                atr = 0.0
+                                if atr_indicator:
+                                    atr = atr_indicator.get_atr()
+                                
+                                # price_data를 DataFrame으로 가공
+                                # analyze_all_strategies 함수는 DataFrame을 기대하지만
+                                # 웹소켓에서는 실시간 가격만 받으므로 단일 행 DataFrame 생성
+                                price_data = pd.DataFrame({
+                                    'timestamp': [datetime.now(timezone.utc)],
+                                    'open': [float(kline['o'])],
+                                    'high': [float(kline['h'])],
+                                    'low': [float(kline['l'])],
+                                    'close': [float(kline['c'])],
+                                    'volume': [float(kline['v'])]  # 실제 거래량 사용
+                                })
+                                
+                                print(f"📊 글로벌 지표 데이터 로드 완료:")
+                                print(f"   📅 Key Levels: {key_levels}")
+                                print(f"   🌅 Opening Range: {opening_range}")
+                                print(f"   📊 VWAP: ${vwap:.2f}")
+                                print(f"   📊 VWAP STD: ${vwap_std:.2f}")
+                                print(f"   📊 ATR: {atr:.3f}")
+                                print(f"   📈 Price Data: DataFrame 생성 완료 (행: {len(price_data)})")
+                                
+                            except Exception as e:
+                                print(f"❌ 글로벌 지표 데이터 로드 실패: {e}")
+                                # 기본값으로 설정
+                                key_levels = {}
+                                opening_range = {}
+                                vwap = 0.0
+                                vwap_std = 0.0
+                                atr = 0.0
+                                # 기본 price_data 생성
+                                price_data = pd.DataFrame({
+                                    'timestamp': [datetime.now(timezone.utc)],
+                                    'open': [current_price],
+                                    'high': [current_price],
+                                    'low': [current_price],
+                                    'close': [current_price],
+                                    'volume': [0.0]
+                                })
                             
-                            # 청산 전략 분석
-                            signal = self.advanced_liquidation_strategy.analyze_bucket_liquidations(
-                                self.liquidation_bucket, current_price, key_levels, opening_range, vwap, vwap_std, atr
+                            # 청산 전략 분석 - analyze_all_strategies 호출
+                            signal = self.advanced_liquidation_strategy.analyze_all_strategies(
+                                price_data, key_levels, opening_range, vwap, vwap_std, atr
                             )
                             
                             if signal:
@@ -314,11 +306,138 @@ class BinanceWebSocket:
                         if self.session_strategy:
                             try:
                                 print(f"🎯 세션 전략 실행 시작... (3분봉 시뮬레이션)")
-                                # 여기서 세션 전략 실행 로직 추가
-                                # self.session_strategy.analyze_session(...)
+                                
+                                # 3분봉 데이터 시뮬레이션 (1분봉 3개를 합쳐서 3분봉 생성)
+                                if len(self.price_history) >= 3:
+                                    recent_3_candles = self.price_history[-3:]
+                                    
+                                    # 3분봉 데이터 생성 (OHLCV)
+                                    three_min_data = {
+                                        'timestamp': recent_3_candles[-1]['timestamp'],
+                                        'open': float(recent_3_candles[0]['open']),
+                                        'high': max(float(candle['high']) for candle in recent_3_candles),
+                                        'low': min(float(candle['low']) for candle in recent_3_candles),
+                                        'close': float(recent_3_candles[-1]['close']),
+                                        'volume': sum(float(candle['volume']) for candle in recent_3_candles)
+                                    }
+                                    
+                                    print(f"   📊 3분봉 데이터 생성: O:{three_min_data['open']:.2f} H:{three_min_data['high']:.2f} L:{three_min_data['low']:.2f} C:{three_min_data['close']:.2f} V:{three_min_data['volume']:.2f}")
+                                    
+                                    # 글로벌 지표 시스템에서 지표 데이터 가져오기
+                                    try:
+                                        from indicators.global_indicators import get_global_indicator_manager
+                                        import pandas as pd
+                                        
+                                        global_manager = get_global_indicator_manager()
+                                        
+                                        # 3분봉 데이터를 DataFrame으로 변환 (timezone 정보 포함)
+                                        df_3m = pd.DataFrame([three_min_data])
+                                        df_3m.set_index('timestamp', inplace=True)
+                                        
+                                        # 인덱스에 UTC timezone 정보 추가
+                                        if df_3m.index.tz is None:
+                                            df_3m.index = df_3m.index.tz_localize('UTC')
+                                            print(f"   📊 DataFrame 인덱스에 UTC timezone 설정 완료")
+                                        
+                                        # 글로벌 지표 업데이트
+                                        global_manager.update_all_indicators_with_candle(df_3m.iloc[0])
+                                        
+                                        print(f"   📊 3분봉 데이터 글로벌 지표 업데이트 완료")
+                                        
+                                        # 키 레벨 가져오기
+                                        daily_levels = global_manager.get_indicator('daily_levels')
+                                        key_levels = {}
+                                        if daily_levels and daily_levels.is_loaded():
+                                            prev_day_data = daily_levels.get_prev_day_high_low()
+                                            key_levels = {
+                                                'prev_day_high': prev_day_data.get('high', 0),
+                                                'prev_day_low': prev_day_data.get('low', 0)
+                                            }
+                                        
+                                        # Opening Range 정보 가져오기
+                                        opening_range = {}
+                                        try:
+                                            from indicators.opening_range import get_session_manager
+                                            session_manager = get_session_manager()
+                                            session_config = session_manager.get_indicator_mode_config()
+                                            
+                                            if session_config.get('use_session_mode'):
+                                                opening_range = {
+                                                    'session_name': session_config.get('session_name', 'UNKNOWN'),
+                                                    'session_start': session_config.get('session_start_time'),
+                                                    'elapsed_minutes': session_config.get('elapsed_minutes', 0),
+                                                    'session_status': session_config.get('session_status', 'UNKNOWN')
+                                                }
+                                        except Exception as e:
+                                            print(f"   ⚠️ Opening Range 정보 가져오기 실패: {e}")
+                                        
+                                        # VWAP 및 VWAP 표준편차
+                                        vwap_indicator = global_manager.get_indicator('vwap')
+                                        vwap = 0.0
+                                        vwap_std = 0.0
+                                        if vwap_indicator:
+                                            vwap_status = vwap_indicator.get_vwap_status()
+                                            vwap = vwap_status.get('current_vwap', 0)
+                                            vwap_std = vwap_status.get('current_vwap_std', 0)
+                                        
+                                        # ATR
+                                        atr_indicator = global_manager.get_indicator('atr')
+                                        atr = 0.0
+                                        if atr_indicator:
+                                            atr = atr_indicator.get_atr()
+                                        
+                                        print(f"   📊 글로벌 지표 데이터 로드 완료:")
+                                        print(f"      📅 Key Levels: {key_levels}")
+                                        print(f"      🌅 Opening Range: {opening_range}")
+                                        print(f"      📊 VWAP: ${vwap:.2f}")
+                                        print(f"      📊 VWAP STD: ${vwap_std:.2f}")
+                                        print(f"      📊 ATR: {atr:.3f}")
+                                        
+                                        # 세션 전략 분석 실행 (고급 청산 전략과 동일한 방식)
+                                        print(f"   📊 세션 전략에 전달할 DataFrame 정보:")
+                                        print(f"      📊 인덱스 타입: {type(df_3m.index)}")
+                                        print(f"      📊 인덱스 timezone: {df_3m.index.tz}")
+                                        print(f"      📊 데이터 행 수: {len(df_3m)}")
+                                        
+                                        session_signal = self.session_strategy.analyze_session_strategy(
+                                            df_3m, key_levels, datetime.now(timezone.utc)
+                                        )
+                                        
+                                        if session_signal:
+                                            print(f"   🎯 세션 전략 신호 감지!")
+                                            print(f"      📚 플레이북: {session_signal.get('playbook', 'UNKNOWN')}")
+                                            print(f"      🎯 신호 타입: {session_signal.get('signal_type', 'UNKNOWN')}")
+                                            print(f"      ⚡ 액션: {session_signal.get('action', 'UNKNOWN')}")
+                                            print(f"      🏆 등급: {session_signal.get('stage', 'UNKNOWN')}")
+                                            print(f"      📊 신뢰도: {session_signal.get('confidence', 0):.0%}")
+                                            print(f"      📝 이유: {session_signal.get('reason', 'N/A')}")
+                                            
+                                            # Entry 신호인 경우 추가 정보
+                                            if session_signal.get('stage') == 'ENTRY':
+                                                entry_price = session_signal.get('entry_price', 0)
+                                                stop_loss = session_signal.get('stop_loss', 0)
+                                                take_profit = session_signal.get('take_profit1', 0)
+                                                if entry_price and stop_loss and take_profit:
+                                                    risk = abs(entry_price - stop_loss)
+                                                    reward = abs(take_profit - entry_price)
+                                                    rr_ratio = reward / risk if risk > 0 else 0
+                                                    print(f"      💰 진입가: ${entry_price:.2f}")
+                                                    print(f"      🛑 손절가: ${stop_loss:.2f}")
+                                                    print(f"      🎯 목표가: ${take_profit:.2f}")
+                                                    print(f"      ⚖️  리스크/리워드: {rr_ratio:.2f}")
+                                        else:
+                                            print(f"   📊 세션 전략 신호 없음")
+                                            
+                                    except Exception as e:
+                                        print(f"   ❌ 세션 전략 실행 오류: {e}")
+                                        import traceback
+                                        traceback.print_exc()
+                                
                                 print(f"✅ 세션 전략 실행 완료")
                             except Exception as e:
                                 self.logger.error(f"세션 전략 실행 오류: {e}")
+                                import traceback
+                                traceback.print_exc()
                     
                     # 1분봉 콜백 실행
                     for callback in self.callbacks['kline_1m']:
