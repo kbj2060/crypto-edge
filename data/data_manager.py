@@ -77,7 +77,6 @@ class DataManager:
     
     def update_with_candle(self, candle_data: pd.Series) -> None:
         """새로운 캔들 데이터로 업데이트 (실시간 용)"""
-        try:
             # 데이터 검증
             # required_fields = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume']
             # if not all(field in candle_data for field in required_fields):
@@ -85,29 +84,28 @@ class DataManager:
             #     return
             
             # timestamp를 UTC로 변환
-            timestamp = candle_data['timestamp']
-            if isinstance(timestamp, (int, float)):
-                # 밀리초 타임스탬프인 경우 datetime으로 변환
-                timestamp = pd.to_datetime(timestamp, unit='ms', utc=True)
-            elif timestamp.tzinfo is None:
-                # timezone이 없는 datetime인 경우 UTC로 변환
-                timestamp = self.time_manager.convert_to_utc(timestamp)
-            
-            # # 새로운 캔들 데이터를 DataFrame에 추가
-            new_row = pd.DataFrame([{
-                'open': candle_data['open'],
-                'high': candle_data['high'],
-                'low': candle_data['low'],
-                'close': candle_data['close'],
-                'volume': candle_data['volume'],
-                'quote_volume': candle_data['quote_volume']
-            }], index=[timestamp])
-            
-            self.data = pd.concat([self.data, new_row], ignore_index=False)
-            self.data = self.data.iloc[1:]
-            print(self.data, type(self.data))
-        except Exception as e:
-            print(f"❌ DataManager 캔들 업데이트 오류: {e}")
+        timestamp = candle_data['timestamp']
+        if isinstance(timestamp, (int, float)):
+            # 밀리초 타임스탬프인 경우 datetime으로 변환
+            timestamp = pd.to_datetime(timestamp, unit='ms', utc=True)
+        elif timestamp.tzinfo is None:
+            # timezone이 없는 datetime인 경우 UTC로 변환
+            timestamp = self.time_manager.convert_to_utc(timestamp)
+        
+        # # 새로운 캔들 데이터를 DataFrame에 추가
+        new_row = pd.DataFrame([{
+            'open': candle_data['open'],
+            'high': candle_data['high'],
+            'low': candle_data['low'],
+            'close': candle_data['close'],
+            'volume': candle_data['volume'],
+            'quote_volume': candle_data['quote_volume']
+        }], index=[timestamp])
+        
+        self.data = pd.concat([self.data, new_row], ignore_index=False)
+        self.data = self.data.iloc[1:]
+        print(self.data, type(self.data))
+
     
     def get_dataframe(self) -> pd.DataFrame:
         """전체 3분봉 데이터를 DataFrame으로 반환"""

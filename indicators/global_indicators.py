@@ -195,7 +195,6 @@ class GlobalIndicatorManager:
             print("⚠️ 지표들이 아직 초기화되지 않음. 먼저 초기화하세요.")
             return
         
-        timestamp = candle_data.get('timestamp', datetime.now(timezone.utc))
         print(f"🔄 전체 지표 업데이트 시작...")
         
         data_manager = self.get_data_manager()
@@ -233,8 +232,8 @@ class GlobalIndicatorManager:
             opening_range_status = self._indicators['opening_range'].get_status()
             is_open = opening_range_status.get('is_open', False)
             print(f"   🌅 Opening Range 업데이트: {'개장 중' if is_open else '폐장'}")
-        
-        print(f"✅ 전체 지표 업데이트 완료: {timestamp.strftime('%H:%M:%S')}")
+
+        print(f"✅ 전체 지표 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
             
     
     def get_indicator(self, name: str):
