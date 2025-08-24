@@ -6,15 +6,7 @@
 import pandas as pd
 from data.binance_websocket import BinanceWebSocket
 from config.integrated_config import IntegratedConfig
-from data.loader import build_df
 
-
-class DataLoader:
-    """데이터 로더 클래스"""
-    
-    def load_klines(self, symbol: str, interval: str, limit: int) -> pd.DataFrame:
-        """K라인 데이터 로드"""
-        return build_df(symbol, interval, limit)
 
 
 class TraderCore:
@@ -29,7 +21,6 @@ class TraderCore:
         
         # 핵심 컴포넌트 초기화
         self.websocket = BinanceWebSocket(self.config.symbol)
-        self.data_loader = DataLoader()
     
     def start_websocket(self):
         """웹소켓 시작"""
@@ -43,5 +34,3 @@ class TraderCore:
         """웹소켓 인스턴스 반환"""
         return self.websocket
     
-    def get_data_loader(self) -> DataLoader:
-        return self.data_loader

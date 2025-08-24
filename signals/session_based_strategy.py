@@ -12,11 +12,6 @@ from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import pytz
-try:
-    from zoneinfo import ZoneInfo
-except ImportError:
-    # Python < 3.9 fallback
-    from backports.zoneinfo import ZoneInfo
 
 from indicators.moving_averages import calculate_ema
 from utils.time_manager import get_time_manager
@@ -145,15 +140,15 @@ class SessionBasedStrategy:
         # DataFrame 복사 및 인덱스 timezone 처리
         df_copy = df.copy()
         
-        # 인덱스가 timezone 정보를 가지고 있지 않은 경우 UTC로 설정
-        if df_copy.index.tz is None:
-            print(f"   ⚠️ DataFrame 인덱스에 timezone 정보가 없음. UTC로 설정합니다.")
-            # 인덱스가 datetime인 경우 UTC timezone 추가
-            if pd.api.types.is_datetime64_any_dtype(df_copy.index):
-                df_copy.index = df_copy.index.tz_localize('UTC')
-            else:
-                print(f"   ❌ DataFrame 인덱스가 datetime 타입이 아닙니다: {type(df_copy.index)}")
-                return df_copy
+        # # 인덱스가 timezone 정보를 가지고 있지 않은 경우 UTC로 설정
+        # if df_copy.index is None:
+        #     print(f"   ⚠️ DataFrame 인덱스에 timezone 정보가 없음. UTC로 설정합니다.")
+        #     # 인덱스가 datetime인 경우 UTC timezone 추가
+        #     if pd.api.types.is_datetime64_any_dtype(df_copy.index):
+        #         df_copy.index = df_copy.index.tz_localize('UTC')
+        #     else:
+        #         print(f"   ❌ DataFrame 인덱스가 datetime 타입이 아닙니다: {type(df_copy.index)}")
+        #         return df_copy
         
         df_copy = df_copy.sort_index()
         
@@ -1400,24 +1395,17 @@ class SessionBasedStrategy:
                 
                 # VWAP 및 VWAP 표준편차 (글로벌 지표에서 가져오기)
                 vwap_indicator = global_manager.get_indicator('vwap')
-                session_vwap = 0.0
-                session_std = 0.0
-                if vwap_indicator:
-                    vwap_status = vwap_indicator.get_vwap_status()
-                    session_vwap = vwap_status.get('current_vwap', 0)
-                    session_std = vwap_status.get('current_vwap_std', 0)
+                vwap_status = vwap_indicator.get_status()
+                session_vwap = vwap_status.get('current_vwap')
+                session_std = vwap_status.get('current_vwap_std')
                 
                 # Opening Range 정보 (글로벌 지표에서 가져오기)
                 opening_range_indicator = global_manager.get_indicator('opening_range')
-                or_info = {}
-                if opening_range_indicator:
-                    or_info = opening_range_indicator.get_opening_range_status()
+                or_info = opening_range_indicator.get_status()
                 
                 # ATR (글로벌 지표에서 가져오기)
                 atr_indicator = global_manager.get_indicator('atr')
-                atr = 0.0
-                if atr_indicator:
-                    atr = atr_indicator.get_atr()
+                atr = atr_indicator.get_status().get('current_atr')
                 
                 # 지표 데이터 로드 완료 (출력 없음)
                 

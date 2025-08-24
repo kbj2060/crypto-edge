@@ -19,11 +19,12 @@ class BinanceDataLoader:
         self.base_url = base_url
         self.klines_endpoint = f"{base_url}/fapi/v1/klines"
     
-    def fetch_3m_data(self, 
-                     symbol: str = "ETHUSDT",
-                     start_time: Optional[datetime] = None,
-                     end_time: Optional[datetime] = None,
-                     limit: int = 500) -> Optional[pd.DataFrame]:
+    def fetch_data(self, 
+                        interval: int = 3,
+                        symbol: str = "ETHUSDT",
+                        start_time: Optional[datetime] = None,
+                        end_time: Optional[datetime] = None,
+                    ) -> Optional[pd.DataFrame]:
         """
         3분봉 데이터 가져오기
         
@@ -31,7 +32,6 @@ class BinanceDataLoader:
             symbol: 심볼 (기본값: ETHUSDT)
             start_time: 시작 시간 (UTC)
             end_time: 종료 시간 (UTC)
-            limit: 최대 개수 (기본값: 500, 최대 1500)
         
         Returns:
             DataFrame 또는 None (실패 시)
@@ -40,8 +40,8 @@ class BinanceDataLoader:
             # 파라미터 구성
             params = {
                 'symbol': symbol.upper(),
-                'interval': '3m',
-                'limit': min(limit, 1500)  # 바이낸스 API 제한
+                'interval': f'{interval}m',
+                'limit': 1500
             }
             
             # 시간 범위 지정
@@ -65,6 +65,7 @@ class BinanceDataLoader:
                 return None
             
             # DataFrame 생성
+            print(len(data))
             df = self._parse_klines_data(data)
             
             print(f"✅ 데이터 로드 성공: {len(df)}개 캔들")
@@ -100,7 +101,7 @@ class BinanceDataLoader:
         
         print(f"📅 어제 데이터 요청: {start_time.strftime('%Y-%m-%d')} UTC")
         
-        return self.fetch_3m_data(symbol, start_time, end_time, limit=500)
+        return self.fetch_data(symbol, start_time, end_time)
     
     def fetch_recent_3m(self, symbol: str = "ETHUSDT", hours: int = 24) -> Optional[pd.DataFrame]:
         """
@@ -118,18 +119,17 @@ class BinanceDataLoader:
         
         # 3분봉 개수 계산 (1시간 = 20개)
         candle_count = hours * 20
-        limit = min(candle_count, 1500)
         
         print(f"⏰ 최근 {hours}시간 데이터 요청")
         
-        return self.fetch_3m_data(symbol, start_time, utc_now, limit=limit)
+        return self.fetch_data(interval=3, symbol=symbol, start_time=start_time, end_time=utc_now)
     
     def _parse_klines_data(self, data: List) -> pd.DataFrame:
         """바이낸스 Kline 데이터를 DataFrame으로 파싱"""
         try:
             if not data:
                 return pd.DataFrame()
-            
+
             # 표준 컬럼명으로 DataFrame 생성
             df = pd.DataFrame(data, columns=[
                 'open_time', 'open', 'high', 'low', 'close', 'volume',
@@ -144,7 +144,7 @@ class BinanceDataLoader:
             
             # 시간 컬럼을 datetime으로 변환 (밀리초 timestamp 처리)
             df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True)
-            df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True)
+            df['close_time'] = pd.to_datetime(df['close_time']+1, unit='ms', utc=True)
             
             # close_time을 인덱스로 설정 (3분봉 완료 시점)
             df.set_index('close_time', inplace=True)
@@ -158,6 +158,7 @@ class BinanceDataLoader:
             # 현재 시간보다 미래의 close_time 제거
             current_time = datetime.now(timezone.utc)
             future_candles = df[df.index > current_time]
+
             if not future_candles.empty:
                 print(f"⚠️ 미래 시간 캔들 {len(future_candles)}개 제거: {future_candles.index[0]} ~ {future_candles.index[-1]}")
                 df = df[df.index <= current_time]

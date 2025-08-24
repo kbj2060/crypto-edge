@@ -12,6 +12,8 @@ from typing import Dict, Any, Optional, List
 from datetime import datetime, timezone
 import threading
 
+import pandas as pd
+
 
 # 지표 클래스들 import
 from indicators.opening_range import OpeningRange
@@ -41,7 +43,6 @@ class GlobalIndicatorManager:
         self.indicator_configs = {
             'vpvr': {
                 'class': SessionVPVR,
-                'auto_load': True,
                 'bins': 50,
                 'price_bin_size': 0.05,
                 'lookback': 100
@@ -54,13 +55,11 @@ class GlobalIndicatorManager:
             'daily_levels': {
                 'class': DailyLevels,
                 'symbol': 'ETHUSDT',
-                'auto_load': True
             },
             'vwap': {
                 'class': SessionVWAP,
                 'symbol': 'ETHUSDT'
             },
-
             'opening_range': {
                 'class': OpeningRange,
             }
@@ -75,7 +74,6 @@ class GlobalIndicatorManager:
             bins=vpvr_config['bins'],
             price_bin_size=vpvr_config['price_bin_size'],
             lookback=vpvr_config['lookback'],
-            auto_load=vpvr_config['auto_load']
         )
         
         # DataManager에서 데이터 가져와서 VPVR에 전달
@@ -84,7 +82,7 @@ class GlobalIndicatorManager:
             df = data_manager.get_dataframe()
             if not df.empty:
                 print(f"   📊 DataIndicator에서 데이터 로드: {len(df)}개 캔들")
-                self._indicators['vpvr'].update_with_dataframe(df)
+                # self._indicators['vpvr'].update_with_dataframe(df)
             else:
                 print("   ⚠️ DataManager에 데이터가 없습니다")
         else:
@@ -92,7 +90,7 @@ class GlobalIndicatorManager:
         
         print("   ✅ VPVR 지표 초기화 완료")
 
-    def _initialize_atr_indicator(self, df):
+    def _initialize_atr_indicator(self):
         """ATR 지표 초기화 및 초기 데이터 로딩"""
         atr_config = self.indicator_configs['atr']
         self._indicators['atr'] = atr_config['class'](
@@ -100,51 +98,12 @@ class GlobalIndicatorManager:
             max_candles=atr_config['max_candles']
         )
         
-        # ATR 초기 데이터 로딩 (연속 롤링을 위해 필요)
-        print("🚀 ATR 초기 데이터 자동 로딩 시작...")
-        try:
-            if df is not None and not df.empty:
-                print(f"✅ ATR 초기 데이터 로드 성공: {len(df)}개 캔들")
-                
-                # ATR에 캔들 데이터 주입 (연속 롤링 시작)
-                for _, row in df.iterrows():
-                    candle_data = {
-                        'timestamp': row.name,  # 인덱스가 timestamp
-                        'open': row['open'],
-                        'high': row['high'],
-                        'low': row['low'],
-                        'close': row['close'],
-                        'volume': row['volume']
-                    }
-                    self._indicators['atr'].update_with_candle(candle_data)
-                
-                # ATR 상태 확인
-                atr_value = self._indicators['atr'].get_atr()
-                atr_status = self._indicators['atr'].get_status()
-                is_ready = atr_status.get('is_ready', False)
-                is_mature = atr_status.get('is_mature', False)
-                candles_count = atr_status.get('candles_count', 0)
-                
-                print(f"   📊 ATR 초기화 완료: {atr_value:.3f}")
-                print(f"   ✅ 준비 상태: {is_ready}")
-                print(f"   🎯 성숙 상태: {is_mature}")
-                print(f"   📊 캔들 개수: {candles_count}개")
-                print(f"   🔄 연속 롤링 모드 활성화")
-            else:
-                print("⚠️ ATR 초기 데이터 로드 실패")
-                
-        except Exception as e:
-            print(f"❌ ATR 초기 데이터 로딩 오류: {e}")
-        
         print("   ✅ ATR 지표 초기화 완료")
 
     def _initialize_daily_levels_indicator(self):
         """Daily Levels 지표 초기화"""
         daily_config = self.indicator_configs['daily_levels']
-        self._indicators['daily_levels'] = daily_config['class'](
-            symbol=daily_config['symbol'],
-            auto_load=daily_config['auto_load']
-        )
+        self._indicators['daily_levels'] = daily_config['class']()
         print("   ✅ Daily Levels 지표 초기화 완료")
 
     def _initialize_vwap_indicator(self):
@@ -206,12 +165,10 @@ class GlobalIndicatorManager:
                 
                 print("✅ DataManager가 이미 준비됨 - 중앙 데이터 저장소 사용 가능")
                 
-                # DataManager에서 ATR용 DataFrame 가져오기
-                df = data_manager.get_dataframe()
-                
+            
                 # 🚀 2단계: 나머지 지표들 초기화 (DataManager 완료 후)
                 print("\n🔥 2단계: 나머지 지표들 초기화 시작...")
-                self._initialize_atr_indicator(df)
+                self._initialize_atr_indicator()
                 self._initialize_daily_levels_indicator()
                 self._initialize_vpvr_indicator()
                 self._initialize_vwap_indicator()
@@ -227,83 +184,58 @@ class GlobalIndicatorManager:
                 traceback.print_exc()
                 self._initialized = False
     
-    def update_all_indicators(self, candle_data):
+    def update_all_indicators(self, candle_data: pd.Series):
         """
         새로운 3분봉 데이터로 모든 지표 업데이트
         
         Args:
-            candle_data: 3분봉 캔들 데이터 {
-                'timestamp': datetime,
-                'open': float,
-                'high': float,
-                'low': float,
-                'close': float,
-                'volume': float
-            }
+            candle_data: 3분봉 캔들 데이터프레임 (1개 행) 
         """
         if not self._initialized:
             print("⚠️ 지표들이 아직 초기화되지 않음. 먼저 초기화하세요.")
             return
         
-        try:
-            # pandas Series/DataFrame인 경우 Dict로 변환
-            if hasattr(candle_data, 'to_dict'):
-                candle_dict = candle_data.to_dict()
-                # timestamp가 인덱스인 경우 별도 처리
-                if hasattr(candle_data, 'name') and candle_data.name:
-                    candle_dict['timestamp'] = candle_data.name
-            else:
-                candle_dict = candle_data
+        timestamp = candle_data.get('timestamp', datetime.now(timezone.utc))
+        print(f"🔄 전체 지표 업데이트 시작...")
+        
+        data_manager = self.get_data_manager()
+        data_manager.update_with_candle(candle_data)
+        print(f"   📊 DataManager 업데이트")
+
+        # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
+        if 'atr' in self._indicators:
+            self._indicators['atr'].update_with_candle(candle_data)
+            atr_value = self._indicators['atr'].get_status().get('current_atr')
+            print(f"   📊 ATR 업데이트: {atr_value:.3f}")
+        
+        # 2. VPVR 업데이트
+        if 'vpvr' in self._indicators:
+            self._indicators['vpvr'].update_with_candle(candle_data)
+            vpvr_status = self._indicators['vpvr'].get_status()
+            active_bins = vpvr_status.get('active_bins')
+            print(f"   📈 VPVR 업데이트: 활성 구간 {active_bins}개")
+        
+        # 3. VWAP 업데이트
+        if 'vwap' in self._indicators:
+            self._indicators['vwap'].update_with_candle(candle_data)
+            vwap_status = self._indicators['vwap'].get_status()
+            current_vwap = vwap_status.get('current_vwap')
+            print(f"   📊 VWAP 업데이트: ${current_vwap:.2f}")
+        
+        # 4. Daily Levels는 자동 업데이트 (어제 데이터이므로)
+        if 'daily_levels' in self._indicators:
+            self._indicators['daily_levels'].update_with_candle(candle_data)
+            daily_status = self._indicators['daily_levels'].get_status()
+            print(f"   📅 Daily Levels 상태: {'로드됨' if daily_status else '로드 안됨'}")
+        
+        if 'opening_range' in self._indicators:
+            self._indicators['opening_range'].update_with_candle(candle_data)
+            opening_range_status = self._indicators['opening_range'].get_status()
+            is_open = opening_range_status.get('is_open', False)
+            print(f"   🌅 Opening Range 업데이트: {'개장 중' if is_open else '폐장'}")
+        
+        print(f"✅ 전체 지표 업데이트 완료: {timestamp.strftime('%H:%M:%S')}")
             
-            timestamp = candle_dict.get('timestamp', datetime.now(timezone.utc))
-            print(f"🔄 {timestamp.strftime('%H:%M:%S')} - 전체 지표 업데이트 시작...")
-            
-            # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
-            if 'atr' in self._indicators:
-                self._indicators['atr'].update_with_candle(candle_dict)
-                atr_value = self._indicators['atr'].get_atr()
-                print(f"   📊 ATR 업데이트: {atr_value:.3f}")
-            
-            # 2. VPVR 업데이트
-            if 'vpvr' in self._indicators:
-                self._indicators['vpvr'].update_with_candle(candle_dict)
-                vpvr_status = self._indicators['vpvr'].get_vpvr_status()
-                active_bins = vpvr_status.get('active_bins', 0)
-                print(f"   📈 VPVR 업데이트: 활성 구간 {active_bins}개")
-            
-            # 3. VWAP 업데이트
-            if 'vwap' in self._indicators:
-                self._indicators['vwap'].update_with_candle(candle_dict)
-                vwap_status = self._indicators['vwap'].get_vwap_status()
-                current_vwap = vwap_status.get('current_vwap', 0)
-                print(f"   📊 VWAP 업데이트: ${current_vwap:.2f}")
-            
-            # 4. Daily Levels는 자동 업데이트 (어제 데이터이므로)
-            if 'daily_levels' in self._indicators:
-                daily_status = self._indicators['daily_levels'].is_loaded()
-                print(f"   📅 Daily Levels 상태: {'로드됨' if daily_status else '로드 안됨'}")
-            
-            # 5. DataManager 업데이트 (최근 1000개 캔들 데이터 유지)
-            data_manager = self.get_data_manager()
-            data_manager.update_with_candle(candle_dict)
-            data_status = data_manager.get_status()
-            data_count = data_status.get('candles_count', 0)
-            is_full = data_status.get('is_full', False)
-            print(f"   📊 DataManager 업데이트: {data_count}개 캔들 {'(가득참)' if is_full else ''}")
-            
-            # 6. Opening Range 업데이트
-            if 'opening_range' in self._indicators:
-                self._indicators['opening_range'].update_with_candle(candle_dict)
-                opening_range_status = self._indicators['opening_range'].get_status()
-                is_open = opening_range_status.get('is_open', False)
-                print(f"   🌅 Opening Range 업데이트: {'개장 중' if is_open else '폐장'}")
-            
-            print(f"✅ 전체 지표 업데이트 완료: {timestamp.strftime('%H:%M:%S')}")
-            
-        except Exception as e:
-            print(f"❌ 전체 지표 업데이트 오류: {e}")
-            import traceback
-            traceback.print_exc()
     
     def get_indicator(self, name: str):
         """특정 지표 반환"""

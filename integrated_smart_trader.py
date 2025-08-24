@@ -13,6 +13,7 @@ from typing import Dict, Any, Optional, List
 from core.trader_core import TraderCore
 
 from config.integrated_config import IntegratedConfig
+from data.data_manager import get_data_manager
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -60,7 +61,7 @@ class IntegratedSmartTrader:
             # 초기 데이터 로딩 (전날 00시부터 현재까지)
             print("📊 DataManager 초기 데이터 로딩 시작...")
             data_loaded = data_manager.load_initial_data('ETHUSDT')
-            
+
             if data_loaded:
                 print(f"🎯 중앙 데이터 저장소 준비 완료!")
             else:
@@ -404,11 +405,9 @@ class IntegratedSmartTrader:
                 return None
             
             # 3분봉 데이터 로드
-            df_3m = self.core.get_data_loader().load_klines(
-                self.config.symbol, 
-                self.config.session_timeframe, 
-                1500
-            )
+            data_manager = get_data_manager()
+            df_3m = data_manager.get_dataframe()
+            
             
             if df_3m.empty:
                 return None

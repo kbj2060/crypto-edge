@@ -14,6 +14,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections import deque
 import pytz
+from data.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_global_indicator_manager
 
@@ -1294,8 +1295,8 @@ class AdvancedLiquidationStrategy:
         """전략 A: 스윕&리클레임 분석 (스코어링 방식)"""
         try:
             current_price = price_data['close'].iloc[-1]
-            prev_day_low = key_levels.get('prev_day_low', 0)
-            prev_day_high = key_levels.get('prev_day_high', 0)
+            prev_day_low = key_levels.get('prev_day_low')
+            prev_day_high = key_levels.get('prev_day_high')
             
             signals = []
             
@@ -2332,24 +2333,31 @@ class AdvancedLiquidationStrategy:
                 # 내부에서 지표 데이터 가져오기 (1줄로 간소화)
                 results = self.global_manager.get_all_indicators()
                 
+                vpvr_obj = results.get('vpvr')
+                vpvr = vpvr_obj.get_status()
+
                 # 각 지표 객체에서 실제 데이터 가져오기
                 key_levels_obj = results.get('daily_levels')  # ✅ 'daily_levels'로 수정
-                key_levels = key_levels_obj.get_prev_day_high_low()
-                
+                key_levels = key_levels_obj.get_status()
+                key_levels.update({
+                    'prev_day_high': key_levels.get('prev_day_high'),
+                    'prev_day_low': key_levels.get('prev_day_low'),
+                    'poc': vpvr.get('poc'),
+                    'hvn': vpvr.get('hvn'),
+                    'lvn': vpvr.get('lvn')
+                })
                 opening_range_obj = results.get('opening_range')
-                opening_range = opening_range_obj.get_or()
+                opening_range = opening_range_obj.get_status()
                                 
                 vwap_obj = results.get('vwap').get_current_vwap()
                 vwap = vwap_obj.get('vwap')
                 vwap_std = vwap_obj.get('vwap_std')
                 
                 atr_obj = results.get('atr')
-                atr = atr_obj.get_atr()
+                atr = atr_obj.get_status().get('current_atr')
                 
-                data_obj = results.get('data')
-                data = data_obj.get_dataframe()
-
-                print(key_levels, opening_range, vwap, vwap_std, atr, data)
+                data_manager = get_data_manager()
+                data = data_manager.get_latest_data(count=200)
 
                 return self.analyze_all_strategies(
                     price_data=data,

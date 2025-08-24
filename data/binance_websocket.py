@@ -168,63 +168,81 @@ class BinanceWebSocket:
     
     async def process_kline_1m(self, data: Dict):
         """1분봉 Kline 데이터 처리 - 3분봉 시뮬레이션 포함"""
-        try:
-            if 'k' not in data:  # Kline 이벤트가 아니면 종료
+        if 'k' not in data:  # Kline 이벤트가 아니면 종료
+            return
+            
+        kline = data['k']
+        
+        # 1분봉 마감 체크 (k.x == true)
+        if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
+            return
+            
+        print(f"⏰ 1분봉 마감 감지: {(self.time_manager.get_current_time() + timedelta(seconds=1)).strftime('%H:%M:%S')}")
+        
+        # 가격 데이터 생성 (1분봉은 DataManager에 추가하지 않음)
+        price_data = self._create_price_data(kline)
+        
+        # 1분봉 데이터를 임시 저장 (3분봉 생성용)
+        self._store_1min_data(price_data)
+        
+        # 1분봉 카운터 증가
+        self.minute_counter += 1
+        
+        # 청산 전략 실행 (매 1분마다)
+        if self.advanced_liquidation_strategy:
+            await self._execute_liquidation_strategy(kline)
+        
+        # 세션 전략 실행 (3분마다)
+        if self.minute_counter % 3 == 0:
+            # 3분봉 데이터 생성
+            df_3m = self._create_3min_candle()
+            if df_3m is None:
                 return
-                
-            kline = data['k']
+            await self._execute_session_strategy(df_3m)
+        
+        # 1분봉 콜백 실행
+        self._execute_kline_callbacks(price_data)
             
-            # 1분봉 마감 체크 (k.x == true)
-            if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
-                return
-                
-            print(f"⏰ 1분봉 마감 감지: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
-            
-            # 가격 데이터 생성 및 DataManager에 추가
-            price_data = self._create_price_data(kline)
-            self._add_to_data_manager(price_data)
-            
-            # 1분봉 카운터 증가
-            self.minute_counter += 1
-            
-            # 청산 전략 실행 (매 1분마다)
-            if self.advanced_liquidation_strategy:
-                await self._execute_liquidation_strategy(kline)
-            
-            # 세션 전략 실행 (3분마다)
-            if self.minute_counter % 3 == 0:
-                await self._execute_session_strategy()
-            
-            # 1분봉 콜백 실행
-            self._execute_kline_callbacks(price_data)
-            
-        except Exception as e:
-            self.logger.error(f"1분봉 Kline 데이터 처리 오류: {e}")
     
     def _create_price_data(self, kline: Dict) -> Dict:
         """가격 데이터 생성"""
         return {
-            'timestamp': self.time_manager.get_current_time(),
-            'price': float(kline['c']),  # 종가
             'open': float(kline['o']),
             'high': float(kline['h']),
             'low': float(kline['l']),
             'close': float(kline['c']),
             'volume': float(kline['v']),      # VWAP용: base volume (ETH)
             'quote_volume': float(kline['q']), # VPVR용: quote volume (USDT)
-            'trade_count': int(kline['n']),    # 거래 횟수
-            'close_time': kline['t']           # 캔들 종료 시간
+            'timestamp': kline['t']           # 캔들 종료 시간
         }
     
-    def _add_to_data_manager(self, price_data: Dict):
-        """가격 데이터를 DataManager에 추가"""
+    def _store_1min_data(self, price_data: Dict):
+        """1분봉 데이터를 임시 저장 (3분봉 생성용)"""
         try:
-            data_manager = self.global_manager.get_data_manager()
-            if data_manager and data_manager.is_ready():
-                # 1분봉 데이터를 DataManager에 추가
-                data_manager.update_with_candle(price_data)
+            # 최근 3개 1분봉 데이터 저장
+            if not hasattr(self, '_recent_1min_data'):
+                self._recent_1min_data = []
+            
+            self._recent_1min_data.append(price_data)
+            
+            # 최대 3개까지만 유지
+            if len(self._recent_1min_data) > 3:
+                self._recent_1min_data = self._recent_1min_data[-3:]
+                
         except Exception as e:
-            self.logger.error(f"DataManager 업데이트 오류: {e}")
+            self.logger.error(f"1분봉 데이터 임시 저장 오류: {e}")
+    
+    # def _add_3min_to_data_manager(self, df_3m: pd.DataFrame):
+    #     """3분봉 데이터를 DataManager에 추가"""
+    #     try:
+    #         data_manager = self.global_manager.get_data_manager()
+    #         if data_manager and data_manager.is_ready():
+    #             # 3분봉 데이터를 DataManager에 추가
+    #             candle_data:pd.DataFrame = df_3m.iloc[[0]]
+    #             print(candle_data, type(candle_data))
+    #             data_manager.update_with_candle(candle_data)
+    #     except Exception as e:
+    #         self.logger.error(f"DataManager 3분봉 업데이트 오류: {e}")
     
     async def _execute_liquidation_strategy(self, kline: Dict):
         """청산 전략 실행"""
@@ -247,45 +265,33 @@ class BinanceWebSocket:
         except Exception as e:
             self.logger.error(f"청산 전략 실행 오류: {e}")
     
-    async def _execute_session_strategy(self):
+    async def _execute_session_strategy(self, df_3m: pd.DataFrame):
         """세션 전략 실행"""
         if not self.session_strategy:
             return
-            
-        try:
-            # 3분봉 데이터 생성
-            df_3m = self._create_3min_candle()
-            if df_3m is None:
-                return
-            
-            # 글로벌 지표 업데이트
-            self.global_manager.update_all_indicators(df_3m.iloc[0])
-            
-            # 전략 분석에 필요한 데이터 수집
-            strategy_data = self._collect_strategy_data()
-            
-            # 세션 전략 분석 실행
-            session_signal = self.session_strategy.analyze_session_strategy(
-                df_3m, strategy_data['key_levels'], self.time_manager.get_current_time()
-            )
-            
-            # 신호 결과 출력
-            self._print_session_signal(session_signal)
-            
-        except Exception as e:
-            self.logger.error(f"세션 전략 실행 오류: {e}")
+        
+        # 글로벌 지표 업데이트
+        self.global_manager.update_all_indicators(df_3m.iloc[0])
+        
+        # 전략 분석에 필요한 데이터 수집
+        strategy_data = self._collect_strategy_data()
+        
+        # 세션 전략 분석 실행
+        session_signal = self.session_strategy.analyze_session_strategy(
+            df_3m, strategy_data['key_levels'], self.time_manager.get_current_time()
+        )
+        
+        # 신호 결과 출력
+        self._print_session_signal(session_signal)
     
     def _create_3min_candle(self) -> Optional[pd.DataFrame]:
-        """3분봉 데이터 생성 (DataManager 사용)"""
+        """3분봉 데이터 생성 (저장된 1분봉 데이터 사용)"""
         try:
-            # DataManager에서 최근 3개 캔들 가져오기
-            data_manager = self.global_manager.get_data_manager()
-            if not data_manager or not data_manager.is_ready():
+            # 저장된 1분봉 데이터 확인
+            if not hasattr(self, '_recent_1min_data') or len(self._recent_1min_data) < 3:
                 return None
             
-            recent_3_candles = data_manager.get_latest_data(count=3)
-            if not recent_3_candles or len(recent_3_candles) < 3:
-                return None
+            recent_3_candles = self._recent_1min_data[-3:]
             
             # 3분봉 데이터 생성 (OHLCV)
             three_min_data = {
@@ -294,15 +300,13 @@ class BinanceWebSocket:
                 'high': max(float(candle['high']) for candle in recent_3_candles),
                 'low': min(float(candle['low']) for candle in recent_3_candles),
                 'close': float(recent_3_candles[-1]['close']),
-                'volume': sum(float(candle['volume']) for candle in recent_3_candles)
+                'volume': sum(float(candle['volume']) for candle in recent_3_candles),
+                'quote_volume': sum(float(candle['quote_volume']) for candle in recent_3_candles)
             }
             
             # DataFrame 생성 및 timezone 설정
             df_3m = pd.DataFrame([three_min_data])
             df_3m.set_index('timestamp', inplace=True)
-            
-            if df_3m.index.tz is None:
-                df_3m.index = df_3m.index.tz_localize('UTC')
             
             return df_3m
             
@@ -323,18 +327,21 @@ class BinanceWebSocket:
         try:
             # 키 레벨 (Daily Levels)
             daily_levels = self.global_manager.get_indicator('daily_levels')
-            if daily_levels and daily_levels.is_loaded():
-                prev_day_data = daily_levels.get_prev_day_high_low()
+            if daily_levels:
+                prev_day_data = daily_levels.get_status()
                 strategy_data['key_levels'] = {
-                    'prev_day_high': prev_day_data.get('high', 0),
-                    'prev_day_low': prev_day_data.get('low', 0)
+                    'prev_day_high': prev_day_data.get('prev_day_high'),
+                    'prev_day_low': prev_day_data.get('prev_day_low')
                 }
             
             # Opening Range 정보
             try:
                 session_config = self.time_manager.get_indicator_mode_config()
+                opening_range = self.global_manager.get_indicator('opening_range').get_status()
                 if session_config.get('use_session_mode'):
                     strategy_data['opening_range'] = {
+                        'high': opening_range.get('high'),
+                        'low': opening_range.get('low'),
                         'session_name': session_config.get('session_name', 'UNKNOWN'),
                         'session_start': session_config.get('session_start_time'),
                         'elapsed_minutes': session_config.get('elapsed_minutes', 0),
@@ -346,14 +353,14 @@ class BinanceWebSocket:
             # VWAP 및 VWAP 표준편차
             vwap_indicator = self.global_manager.get_indicator('vwap')
             if vwap_indicator:
-                vwap_status = vwap_indicator.get_vwap_status()
-                strategy_data['vwap'] = vwap_status.get('current_vwap', 0)
-                strategy_data['vwap_std'] = vwap_status.get('current_vwap_std', 0)
+                vwap_status = vwap_indicator.get_status()
+                strategy_data['vwap'] = vwap_status.get('current_vwap')
+                strategy_data['vwap_std'] = vwap_status.get('current_vwap_std')
             
             # ATR
             atr_indicator = self.global_manager.get_indicator('atr')
             if atr_indicator:
-                strategy_data['atr'] = atr_indicator.get_atr()
+                strategy_data['atr'] = atr_indicator.get_status().get('current_atr')
                 
         except Exception as e:
             self.logger.error(f"전략 데이터 수집 오류: {e}")

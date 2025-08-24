@@ -208,3 +208,22 @@ Stop: +2.5σ 바깥(or 0.35×ATR), TP1= VWAP, TP2= −0.5σ
 - Fail-safe:
   - 캐스케이드(같은 방향 z≥3, 10~20초 내 ≥2회) 감지 시 페이드류 Entry 금지(Setup까지만)
   - 강스파이크 후 15~30초 쿨다운
+
+
+
+key_levels = {
+    "prev_day_high": 2668.4,
+    "prev_day_low": 2546.7,
+    "poc": 2612.0,
+    "hvn": 2625.8,
+    "lvn": 2598.3
+}
+
+opening_range = {
+    "high": 2621.4,  # 13:30–14:00 UTC
+    "low": 2607.2
+}
+
+vwap = 2615.6       # 세션(13:30 UTC 앵커) VWAP
+vwap_std = 3.8      # σ (가격 단위)
+atr = 6.1           # 3m ATR(14)

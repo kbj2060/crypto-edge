@@ -33,14 +33,14 @@ class DataManager:
         if hasattr(self, '_initialized'):
             return
             
-        self.max_candles = 1000
-        self.data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])  # DataFrame으로 초기화
+        self.data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])  # 3분봉 데이터
         self._data_loaded = False
         self.time_manager = get_time_manager()
         self.dataloader = BinanceDataLoader()
         self._initialized = True
         
-        print(f"🚀 DataManager 싱글톤 초기화: 최대 {self.max_candles}개 캔들 관리")
+        print(f"🚀 DataManager 싱글톤 초기화: 3분봉 캔들 관리")
+        
     
     def load_initial_data(self, symbol: str = 'ETHUSDT') -> bool:
         """초기 데이터 로딩 (전날 00시부터 현재까지)"""
@@ -52,62 +52,65 @@ class DataManager:
             yesterday_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
             
             print(f"📊 데이터 기간: 전날 00시({yesterday_start.strftime('%Y-%m-%d %H:%M')}) ~ 현재({current_time.strftime('%Y-%m-%d %H:%M')})")
-            print(f"🎯 목표: {self.max_candles}개 캔들 데이터 로딩")
+            print(f"🎯 목표: 전체 기간 3분봉 데이터 로딩")
             
-            df = self.dataloader.fetch_3m_data(
+            # 3분봉 데이터 직접 가져오기 (긴 기간은 자동으로 여러 번에 나누어 요청)
+            df_3m = self.dataloader.fetch_data(
+                interval=3,
                 symbol=symbol,
                 start_time=yesterday_start,
-                end_time=current_time,
-                limit=self.max_candles
+                end_time=current_time
             )
             
-            if df is not None and not df.empty:
-                print(f"✅ DataManager: {len(df)}개 데이터 로드 성공")
-                # DataFrame을 직접 저장
-                self.data = df.copy()
+            if df_3m is not None and not df_3m.empty:
+                print(f"✅ DataManager: {len(df_3m)}개 3분봉 데이터 로드 성공")
+                self.data = df_3m.copy()
                 self._data_loaded = True
                 return True
             else:
-                print("❌ DataManager: 데이터 로드 실패")
+                print("❌ DataManager: 3분봉 데이터 로드 실패")
                 return False
                 
         except Exception as e:
             print(f"❌ DataManager 초기 로딩 오류: {e}")
             return False
     
-    def update_with_candle(self, candle_data: Dict[str, Any]) -> None:
+    def update_with_candle(self, candle_data: pd.Series) -> None:
         """새로운 캔들 데이터로 업데이트 (실시간 용)"""
         try:
             # 데이터 검증
-            required_fields = ['close_time', 'open', 'high', 'low', 'close', 'volume', 'quote_volume']
-            if not all(field in candle_data for field in required_fields):
-                print(f"⚠️ DataManager: 필수 필드 누락 - {required_fields}")
-                return
+            # required_fields = ['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume']
+            # if not all(field in candle_data for field in required_fields):
+            #     print(f"⚠️ DataManager: 필수 필드 누락 - {required_fields}")
+            #     return
             
             # timestamp를 UTC로 변환
-            timestamp = candle_data['close_time']
+            timestamp = candle_data['timestamp']
             if isinstance(timestamp, (int, float)):
                 # 밀리초 타임스탬프인 경우 datetime으로 변환
                 timestamp = pd.to_datetime(timestamp, unit='ms', utc=True)
-                candle_data['close_time'] = timestamp
             elif timestamp.tzinfo is None:
                 # timezone이 없는 datetime인 경우 UTC로 변환
                 timestamp = self.time_manager.convert_to_utc(timestamp)
-                candle_data['close_time'] = timestamp
             
-            # 새로운 캔들 데이터를 DataFrame에 추가
-            new_row = pd.DataFrame([candle_data], index=[timestamp])
+            # # 새로운 캔들 데이터를 DataFrame에 추가
+            new_row = pd.DataFrame([{
+                'open': candle_data['open'],
+                'high': candle_data['high'],
+                'low': candle_data['low'],
+                'close': candle_data['close'],
+                'volume': candle_data['volume'],
+                'quote_volume': candle_data['quote_volume']
+            }], index=[timestamp])
+            
             self.data = pd.concat([self.data, new_row], ignore_index=False)
-            
-            # 최대 캔들 수 제한
-            if len(self.data) > self.max_candles:
-                self.data = self.data.tail(self.max_candles)
-            
+            self.data = self.data.iloc[1:]
+            print(self.data, type(self.data))
         except Exception as e:
             print(f"❌ DataManager 캔들 업데이트 오류: {e}")
     
     def get_dataframe(self) -> pd.DataFrame:
-        """전체 데이터를 DataFrame으로 반환"""
+        """전체 3분봉 데이터를 DataFrame으로 반환"""
         try:
             if self.data.empty:
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
@@ -119,50 +122,24 @@ class DataManager:
             print(f"❌ DataManager DataFrame 반환 오류: {e}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     
-    def get_latest_data(self, count: int = 1) -> Optional[Dict[str, Any]]:
-        """최신 캔들 데이터 반환"""
+    def get_latest_data(self, count: int = 1) -> pd.DataFrame:
+        """최신 3분봉 데이터를 DataFrame으로 반환"""
         try:
             if self.data.empty:
-                return None
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
             
-            if count == 1:
-                # 마지막 행을 딕셔너리로 변환
-                last_row = self.data.iloc[-1]
-                return {
-                    'timestamp': self.data.index[-1],
-                    'open': float(last_row['open']),
-                    'high': float(last_row['high']),
-                    'low': float(last_row['low']),
-                    'close': float(last_row['close']),
-                    'volume': float(last_row['volume']),
-                    'quote_volume': float(last_row['quote_volume'])
-                }
-            else:
-                # 마지막 N개 행을 딕셔너리 리스트로 변환
-                latest_data = []
-                for i in range(min(count, len(self.data))):
-                    idx = -(i + 1)
-                    row = self.data.iloc[idx]
-                    latest_data.append({
-                        'timestamp': self.data.index[idx],
-                        'open': float(row['open']),
-                        'high': float(row['high']),
-                        'low': float(row['low']),
-                        'close': float(row['close']),
-                        'volume': float(row['volume']),
-                        'quote_volume': float(row['quote_volume'])
-                    })
-                return latest_data
+            latest_df = self.data.tail(count).copy()
+            return latest_df
                 
         except Exception as e:
             print(f"❌ DataManager 최신 데이터 조회 오류: {e}")
-            return None
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     
-    def get_data_range(self, start_time: datetime, end_time: datetime) -> List[Dict[str, Any]]:
-        """특정 시간 범위의 데이터 반환"""
+    def get_data_range(self, start_time: datetime, end_time: datetime) -> pd.DataFrame:
+        """특정 시간 범위의 3분봉 데이터를 DataFrame으로 반환"""
         try:
             if self.data.empty:
-                return []
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
             
             # 시간대 변환
             if start_time.tzinfo is None:
@@ -174,24 +151,11 @@ class DataManager:
             mask = (self.data.index >= start_time) & (self.data.index <= end_time)
             filtered_df = self.data[mask]
             
-            # 딕셔너리 리스트로 변환
-            filtered_data = []
-            for timestamp, row in filtered_df.iterrows():
-                filtered_data.append({
-                    'timestamp': timestamp,
-                    'open': float(row['open']),
-                    'high': float(row['high']),
-                    'low': float(row['low']),
-                    'close': float(row['close']),
-                    'volume': float(row['volume']),
-                    'quote_volume': float(row['quote_volume'])
-                })
-            
-            return filtered_data
+            return filtered_df.copy()
             
         except Exception as e:
             print(f"❌ DataManager 시간 범위 조회 오류: {e}")
-            return []
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     
     def is_ready(self) -> bool:
         """데이터가 준비되었는지 확인"""
@@ -201,7 +165,7 @@ class DataManager:
         """모든 데이터 초기화"""
         self.data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
         self._data_loaded = False
-        print("🔄 DataManager: 모든 데이터 초기화 완료")
+        print("🔄 DataManager: 모든 데이터 초기화 완료 (3분봉)")
 
 
 # 전역 DataManager 인스턴스 생성 함수

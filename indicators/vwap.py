@@ -114,7 +114,8 @@ class SessionVWAP:
                 print(f"📊 세션 외 시간: 이전 세션 종료 시점({self.time_manager.format_datetime(previous_session_end)})부터 현재({self.time_manager.format_datetime(current_time_utc)})까지 데이터 로딩")
                 
                 # 이전 세션 종료 시점부터 현재까지의 데이터 가져오기
-                df = dataloader.fetch_3m_data(
+                df = dataloader.fetch_data(
+                    interval=3,
                     symbol=self.symbol,
                     start_time=previous_session_end,
                     end_time=current_time_utc
@@ -227,7 +228,7 @@ class SessionVWAP:
         except Exception as e:
             print(f"❌ VWAP DataFrame 업데이트 오류: {e}")
 
-    def update_with_candle(self, candle_data: Dict[str, Any]):
+    def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 VWAP 업데이트"""
         try:
             # 세션 상태 업데이트

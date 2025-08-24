@@ -4,52 +4,57 @@
 Note: 어제 데이터는 공용 데이터와 별개이므로 개별 API 호출 유지
 """
 
-from data.binance_dataloader import BinanceDataLoader
-from typing import Dict
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict
+
+import pandas as pd
+
+from data.data_manager import get_data_manager
+from utils.time_manager import get_time_manager
 
 
 class DailyLevels:
     """어제 3분봉 데이터의 high, low만 관리하는 간단한 클래스"""
     
-    def __init__(self, symbol: str = "ETHUSDT", auto_load: bool = True):
-        self.dataloader = BinanceDataLoader()
-        self.symbol = symbol
+    def __init__(self):
+        self.time_manager = get_time_manager()
         self.prev_day_high = 0.0
         self.prev_day_low = 0.0
-        self._loaded = False
         
         # 자동으로 데이터 로드
-        if auto_load:
-            self.fetch_prev_day_levels(symbol)
+        self._initialize_levels()
     
-    def fetch_prev_day_levels(self, symbol: str = "ETHUSDT") -> bool:
-        """어제 데이터에서 high, low만 가져오기"""
-        try:
-            df = self.dataloader.fetch_prev_day_3m(symbol)
-            
-            if df is None or df.empty:
-                print("❌ 어제 3분봉 데이터 로드 실패")
-                return False
-            
-            # high, low만 계산
-            self.prev_day_high = float(df['high'].max())
-            self.prev_day_low = float(df['low'].min())
-            self._loaded = True
-            
-            print(f"✅ 어제 레벨 로드 완료: 고가 ${self.prev_day_high:.2f}, 저가 ${self.prev_day_low:.2f}")
-            return True
-            
-        except Exception as e:
-            print(f"❌ 어제 레벨 로드 오류: {e}")
-            return False
+    def _initialize_levels(self):
+        # high, low만 계산
+        df = self.get_data()
+
+        self.prev_day_high = float(df['high'].max())
+        self.prev_day_low = float(df['low'].min())
+
+    def get_data(self) -> pd.DataFrame:
+        """OR 시간 정보 반환"""
+        data_manager = get_data_manager()
+        
+        if not data_manager.is_ready():
+            print("⚠️ DataManager가 준비되지 않았습니다")
+            return {}
+        
+        utc_now = datetime.now(timezone.utc)
+        prev_day = utc_now - timedelta(days=1)
+        
+        start_time = prev_day.replace(hour=0, minute=0, second=0, microsecond=0)
+        end_time = prev_day.replace(hour=23, minute=59, second=59, microsecond=999999)
+
+        start_utc = self.time_manager.ensure_utc(start_time)
+        end_utc = self.time_manager.ensure_utc(end_time)
+
+        df = data_manager.get_data_range(start_utc, end_utc)
+
+        return df.copy()
     
-    def get_prev_day_high_low(self) -> Dict[str, float]:
+    def get_status(self) -> Dict[str, float]:
         """어제 고가/저가 반환"""
         return {
-            'high':self.prev_day_high, 
-            'low':self.prev_day_low
+            'prev_day_high':self.prev_day_high,
+            'prev_day_low':self.prev_day_low
             }
-    
-    def is_loaded(self) -> bool:
-        """데이터 로드 여부 확인"""
-        return self._loaded

@@ -12,6 +12,10 @@ from typing import Dict
 from datetime import datetime, timezone
 from collections import deque
 
+import pandas as pd
+
+from data.data_manager import get_data_manager
+
 
 class ATR3M:
     """3분봉 실시간 ATR 관리 클래스 - 연속 롤링 방식"""
@@ -21,45 +25,70 @@ class ATR3M:
         self.max_candles = max_candles
         
         # 캔들 데이터 저장 (롤링 윈도우)
-        self.candles = deque(maxlen=max_candles)
-        self.true_ranges = deque(maxlen=length)
+        self.candles = []
+        self.true_ranges = []  # deque 대신 list 사용
+        
         
         # ATR 값
         self.current_atr = 0.0
         self.last_update_time = None
-        
+
+        self._initialize_atr()
         print(f"🚀 ATR3M 초기화 완료 (기간: {length}, 연속 롤링 모드)")
     
-    def update_with_candle(self, candle_data: Dict[str, any]):
+    def _initialize_atr(self):
+        df = self.get_data()
+        self.current_atr = self.calculate_atr_from_dataframe(df)
+
+    def get_data(self) -> pd.DataFrame:
+        """OR 시간 정보 반환"""
+        data_manager = get_data_manager()
+        
+        if not data_manager.is_ready():
+            print("⚠️ DataManager가 준비되지 않았습니다")
+            return {}
+        
+        df = data_manager.get_latest_data(self.max_candles)
+        return df.copy()
+    
+    def update_with_candle(self, candle_data: pd.Series):
         """새로운 3분봉으로 ATR 업데이트 - 연속 롤링"""
-        try:
-            # 캔들 데이터 저장
-            candle = {
-                'high': float(candle_data['high']),
-                'low': float(candle_data['low']),
-                'close': float(candle_data['close'])
-            }
-            self.candles.append(candle)
+        last_row = candle_data.iloc[-1]
+        timestamp = last_row.index[0]
+
+        # 캔들 데이터 저장
+        candle_df = pd.DataFrame([{
+            'high': float(last_row['high']),
+            'low': float(last_row['low']),
+            'close': float(last_row['close'])
+        }], index=[timestamp])
+
+        self.candles.append(candle_df)
+
+        # 최대 캔들 개수 제한
+        if len(self.candles) > self.max_candles:
+            self.candles = self.candles[-self.max_candles:]
+        
+        # True Range 계산 (최소 2개 캔들 필요)
+        if len(self.candles) >= 2:
+            current = self.candles[-1].iloc[0]  # DataFrame에서 첫 번째 행 추출
+            previous = self.candles[-2].iloc[0]  # DataFrame에서 첫 번째 행 추출
             
-            # True Range 계산 (최소 2개 캔들 필요)
-            if len(self.candles) >= 2:
-                current = self.candles[-1]
-                previous = self.candles[-2]
-                
-                # True Range 계산
-                tr1 = current['high'] - current['low']
-                tr2 = abs(current['high'] - previous['close'])
-                tr3 = abs(current['low'] - previous['close'])
-                
-                true_range = max(tr1, tr2, tr3)
-                self.true_ranges.append(true_range)
-                
-                # ATR 계산
-                self._calculate_atr()
-                self.last_update_time = datetime.now(timezone.utc)
-                
-        except Exception as e:
-            print(f"❌ ATR 업데이트 오류: {e}")
+            # True Range 계산
+            tr1 = current['high'] - current['low']
+            tr2 = abs(current['high'] - previous['close'])
+            tr3 = abs(current['low'] - previous['close'])
+            
+            true_range = max(tr1, tr2, tr3)
+            self.true_ranges.append(true_range)
+            
+            # 최대 true_ranges 개수 제한
+            if len(self.true_ranges) > self.length:
+                self.true_ranges = self.true_ranges[-self.length:]
+            
+            # ATR 계산
+            self._calculate_atr()
+            self.last_update_time = datetime.now(timezone.utc)
     
     def _calculate_atr(self):
         """Wilder's smoothing으로 ATR 계산"""
@@ -73,10 +102,59 @@ class ATR3M:
             current_tr = self.true_ranges[-1]
             self.current_atr = ((self.length - 1) * prev_atr + current_tr) / self.length
     
-    def get_atr(self) -> float:
-        """ATR 값 반환"""
-        return self.current_atr
-    
+    def calculate_atr_from_dataframe(self, df: pd.DataFrame) -> float:
+        """
+        200개의 최근 데이터프레임에서 ATR 계산
+        
+        Args:
+            df: OHLCV 데이터프레임 (high, low, close 컬럼 필요)
+            period: ATR 기간 (기본값: 14)
+            
+        Returns:
+            float: 계산된 ATR 값
+        """
+        if df.empty or len(df) < self.length:
+            return 0.0
+        
+        try:
+            # 최근 200개 데이터만 사용
+            recent_df = df.copy()
+            
+            # True Range 계산
+            high_low = recent_df['high'] - recent_df['low']
+            high_close_prev = abs(recent_df['high'] - recent_df['close'].shift(1))
+            low_close_prev = abs(recent_df['low'] - recent_df['close'].shift(1))
+            
+            # True Range는 세 값 중 최대값
+            true_ranges_list = pd.concat([high_low, high_close_prev, low_close_prev], axis=1).max(axis=1)
+            
+            # 첫 번째 값은 NaN이므로 제거
+            true_ranges_list = true_ranges_list.dropna()
+            
+            if len(true_ranges_list) < self.length:
+                return 0.0
+            
+            # list 초기화
+            self.true_ranges.clear()
+            
+            # Wilder's smoothing으로 ATR 계산
+            self.current_atr = true_ranges_list.iloc[:self.length].mean()  # 초기값은 단순 평균
+            
+            # list에 값들 추가
+            for i in range(self.length):
+                self.true_ranges.append(true_ranges_list.iloc[i])
+            
+            # 나머지 값들로 smoothing
+            for i in range(self.length, len(true_ranges_list)):
+                self.current_atr = ((self.length - 1) * self.current_atr + true_ranges_list.iloc[i]) / self.length
+                self.true_ranges.append(true_ranges_list.iloc[i])
+            
+            return float(self.current_atr)
+            
+        except Exception as e:
+            print(f"❌ DataFrame에서 ATR 계산 오류: {e}")
+            return 0.0
+
     def is_ready(self) -> bool:
         """ATR 계산 준비 여부"""
         return len(self.true_ranges) >= 1

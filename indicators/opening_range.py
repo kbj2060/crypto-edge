@@ -26,26 +26,30 @@ class OpeningRange:
     공용 데이터를 사용하여 효율적으로 OR을 계산합니다.
     """
     
-    def __init__(self, or_minutes: int = DEFAULT_OR_MINUTES):
+    def __init__(self, or_minutes: int = DEFAULT_OR_MINUTES, symbol: str = "ETHUSDT"):
         """
         OpeningRange 초기화
         
         Args:
             or_minutes: OR 완성에 필요한 분 (기본: 30분)
         """
+        self.symbol = symbol
         self.or_minutes = or_minutes
         self.time_manager = get_time_manager()
         self._or = {}
         self._current_session_start = None
 
-        self.caculate_or()
+        self._initialize_or()
         
         print(f"🚀 OpeningRange 초기화 완료 (OR 분: {or_minutes}분)")
         
-    def caculate_or(self):
+    def _initialize_or(self):
         """OR 계산"""
         current_session_start = self._get_or_time()
-        self.calculate_opening_range(current_session_start, current_session_start + timedelta(minutes=self.or_minutes))
+        self.calculate_opening_range(
+            current_session_start + timedelta(seconds=1), 
+            current_session_start + timedelta(minutes=self.or_minutes)
+            )
         
     def _get_or_time(self):
         """세션 상태 초기화"""
@@ -96,12 +100,12 @@ class OpeningRange:
         """간단한 OR 데이터 반환"""
         return self._or.copy() if self._or else {}
     
-    def update_with_candle(self, candle_data: Dict[str, Any]):
+    def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 업데이트 (호환성용)"""
-        # 실시간 업데이트는 현재 구현하지 않음
+        # TODO: 실시간 업데이트 구현
         pass
 
-    def get_data(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
+    def get_data(self, start_time: datetime, end_time: datetime) ->  pd.DataFrame:
         """OR 시간 정보 반환"""
         data_manager = get_data_manager()
         if not data_manager.is_ready():
@@ -131,14 +135,9 @@ class OpeningRange:
             Dict: OR 정보
         """
         try:
-            or_data = self.get_data(start_time, end_time)
-            
-            if or_data:
-                # 딕셔너리 리스트를 DataFrame으로 변환
-                df = pd.DataFrame(or_data)
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
-                df.set_index('timestamp', inplace=True)
-                
+            df = self.get_data(start_time, end_time)
+
+            if not df.empty:
                 start_utc = self.time_manager.ensure_utc(start_time)
                 end_utc = self.time_manager.ensure_utc(end_time)
 
@@ -152,12 +151,12 @@ class OpeningRange:
                     'or_minutes': self.or_minutes,
                     'high': or_high,
                     'low': or_low,
-                    'candle_count': len(or_data),
+                    'candle_count': len(df),
                     'is_completed': True,
                     'calculation_time': self.time_manager.get_current_time().isoformat()
                 }
                 
-                print(f"✅ OR 데이터 계산 완료: {or_high:.2f}~{or_low:.2f} ({len(or_data)}개 캔들)")
+                print(f"✅ OR 데이터 계산 완료: {or_high:.2f}~{or_low:.2f} ({len(df)}개 캔들)")
                 return self._or
             else:
                 print(f"⚠️ 지정된 기간에 해당하는 데이터가 없습니다: {start_utc} ~ {end_utc}")

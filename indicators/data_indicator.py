@@ -57,8 +57,8 @@ class DataIndicator:
                 timestamp = candle_data['timestamp'] = self.time_manager.convert_to_utc(timestamp)
             
             # 새로운 캔들 데이터 추가 (FIFO 방식)
-            self.data.append(candle_data)
-            
+            self.data = pd.concat([self.data, candle_data], ignore_index=False)
+
             # 초기화 상태 업데이트
             if not self._initialized and len(self.data) >= 10:  # 최소 10개 캔들
                 self._initialized = True
@@ -101,8 +101,6 @@ class DataIndicator:
 
         except Exception as e:
             print(f"❌ Data Indicator 벌크 업데이트 오류: {e}")
-    
-
     
     def get_dataframe(self) -> pd.DataFrame:
         """
