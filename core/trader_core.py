@@ -23,6 +23,10 @@ class TraderCore:
     def __init__(self, config: IntegratedConfig):
         self.config = config
         
+        # TimeManager 초기화
+        from utils.time_manager import get_time_manager
+        self.time_manager = get_time_manager()
+        
         # 핵심 컴포넌트 초기화
         self.websocket = BinanceWebSocket(self.config.symbol)
         self.data_loader = DataLoader()

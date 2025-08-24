@@ -14,10 +14,8 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from collections import deque
 import pytz
-from indicators.moving_averages import calculate_ema
-# from indicators.atr import calculate_atr  # ATR3M 클래스 사용으로 변경
-from utils.timestamp_utils import get_timestamp_int
-
+from utils.time_manager import get_time_manager
+from indicators.global_indicators import get_global_indicator_manager
 
 @dataclass
 class AdvancedLiquidationConfig:
@@ -41,6 +39,7 @@ class AdvancedLiquidationConfig:
     z_strong: float = 2.2  # 강한 스파이크 임계값 (1.8 → 2.2)
     z_medium: float = 1.6  # 중간 스파이크 임계값 (1.2 → 1.6)
     lpi_bias: float = 0.15      # LPI 바이어스 임계값 (0.10 → 0.15)
+    lpi_min: float = 0.6
     
     # 캐스케이드 설정 (지속성 강조)
     cascade_seconds: int = 30  # 지난 30초 안에 (20초 → 30초)
@@ -110,6 +109,12 @@ class AdvancedLiquidationStrategy:
     
     def __init__(self, config: AdvancedLiquidationConfig):
         self.config = config
+        
+        # 글로벌 지표 매니저 초기화
+        self.global_manager = get_global_indicator_manager()
+        
+        # TimeManager 초기화
+        self.time_manager = get_time_manager()
         
         # 청산 데이터 저장소
         self.liquidation_bins = deque(maxlen=config.background_window_min * 60)  # 1분 = 60초
@@ -2288,49 +2293,72 @@ class AdvancedLiquidationStrategy:
             return df['close'].iloc[-1], df['close'].iloc[-1] * 0.005
     
     
-    def analyze_bucket_liquidations(self, bucket_data: List[Dict], current_price: float, key_levels, opening_range, vwap, vwap_std, atr) -> Optional[Dict]:
+    def analyze_bucket_liquidations(self, bucket_data: List[Dict]) -> Optional[Dict]:
             """60초 버킷 데이터 분석
             - 기본: 버킷 기반 오더플로우 메트릭만으로 HEADS_UP/SETUP을 생성
             - 확장: context(price_data, key_levels, opening_range, vwap, vwap_std, atr)가 주어지면
                     정식 분석 루틴(analyze_all_strategies)으로 위임하여 ENTRY까지 평가
             """
             try:
-                if not bucket_data:
-                    return None
+                if bucket_data:
+                    # 버킷 데이터로 메트릭 계산
+                    metrics = self._calculate_bucket_metrics(bucket_data)
 
-                # 버킷 데이터로 메트릭 계산
-                metrics = self._calculate_bucket_metrics(bucket_data)
+                    # 워밍업 체크
+                    if not self._check_basic_warmup(metrics):
+                        return None
 
-                # 워밍업 체크
-                if not self._check_basic_warmup(metrics):
-                    return None
+                    # Z점수 및 LPI 계산 (USD 노션널 기반, 60초 스케일)
+                    z_long, z_short, lpi = self._calculate_z_and_lpi(bucket_data)
+                    metrics.update({
+                        'z_long': z_long,
+                        'z_short': z_short,
+                        'lpi': lpi
+                    })
 
-                # Z점수 및 LPI 계산 (USD 노션널 기반, 60초 스케일)
-                z_long, z_short, lpi = self._calculate_z_and_lpi(bucket_data)
-                metrics.update({
-                    'z_long': z_long,
-                    'z_short': z_short,
-                    'lpi': lpi
-                })
+                    # 캐스케이드/쿨다운 체크
+                    is_cascade = self._check_cascade_condition(bucket_data)
+                    metrics['is_cascade'] = is_cascade
+                    cooldown_info = self._check_cooldown_condition(metrics)
+                    metrics['cooldown_info'] = cooldown_info
+                    
+                    print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
+                    
+                    # 🚫 고급청산전략 차단 조건 체크
+                    if self._should_block_strategy(cooldown_info, z_long, z_short, lpi, is_cascade):
+                        print(f"🚫 고급청산전략 차단됨 - 차단 조건 충족")
+                        return None
 
-                # 캐스케이드/쿨다운 체크
-                is_cascade = self._check_cascade_condition(bucket_data)
-                metrics['is_cascade'] = is_cascade
-                cooldown_info = self._check_cooldown_condition(metrics)
-                metrics['cooldown_info'] = cooldown_info
+                # 내부에서 지표 데이터 가져오기 (1줄로 간소화)
+                results = self.global_manager.get_all_indicators()
+                
+                # 각 지표 객체에서 실제 데이터 가져오기
+                key_levels_obj = results.get('daily_levels')  # ✅ 'daily_levels'로 수정
+                key_levels = key_levels_obj.get_prev_day_high_low()
+                
+                opening_range_obj = results.get('opening_range')
+                opening_range = opening_range_obj.get_or()
+                                
+                vwap_obj = results.get('vwap').get_current_vwap()
+                vwap = vwap_obj.get('vwap')
+                vwap_std = vwap_obj.get('vwap_std')
+                
+                atr_obj = results.get('atr')
+                atr = atr_obj.get_atr()
+                
+                data_obj = results.get('data')
+                data = data_obj.get_dataframe()
 
-                # 로그
-                print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
+                print(key_levels, opening_range, vwap, vwap_std, atr, data)
 
                 return self.analyze_all_strategies(
-                    price_data=current_price,
+                    price_data=data,
                     key_levels=key_levels,
                     opening_range=opening_range,
                     vwap=vwap,
                     vwap_std=vwap_std,
                     atr=atr
                     )
-
 
             except Exception as e:
                 print(f"❌ 버킷 분석 오류: {e}")
@@ -2341,12 +2369,13 @@ class AdvancedLiquidationStrategy:
         """버킷 데이터로 기본 메트릭 계산"""
         try:
             total_count = len(bucket_data)
-            long_count = sum(1 for item in bucket_data if item.get('side') == 'long')
-            short_count = sum(1 for item in bucket_data if item.get('side') == 'short')
+            # side 매핑: SELL(롱 청산) → long, BUY(숏 청산) → short
+            long_count = sum(1 for item in bucket_data if item.get('side') == 'SELL')
+            short_count = sum(1 for item in bucket_data if item.get('side') == 'BUY')
             
             total_value = sum(item.get('qty_usd', 0) for item in bucket_data)
-            long_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'long')
-            short_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'short')
+            long_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'SELL')
+            short_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'BUY')
         
             return {
                         'total_count': total_count,
@@ -2370,11 +2399,13 @@ class AdvancedLiquidationStrategy:
                 return 0.0, 0.0, 0.0
             
             # 최근 60초 데이터로 Z점수 계산
-            current_time = int(datetime.now(timezone.utc).timestamp())
+            time_manager = get_time_manager()
+            current_time = time_manager.get_current_timestamp_int()
             window_start = current_time - 60
             
-            recent_long = [item for item in bucket_data if get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'long']
-            recent_short = [item for item in bucket_data if get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'short']
+            # 청산 데이터 side 매핑: SELL(롱 청산) → long, BUY(숏 청산) → short
+            recent_long = [item for item in bucket_data if time_manager.get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'SELL']
+            recent_short = [item for item in bucket_data if time_manager.get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'BUY']
             
             # Z점수 계산 (최근 60초 vs 이전 60초)
             if len(recent_long) > 0 and len(recent_short) > 0:
@@ -2414,18 +2445,20 @@ class AdvancedLiquidationStrategy:
                 return False
             
             # 최근 30초 내 같은 방향 청산이 연속으로 발생하는지 체크
-            current_time = int(datetime.now(timezone.utc).timestamp())
+            time_manager = get_time_manager()
+            current_time = time_manager.get_current_timestamp_int()
             window_start = current_time - 30
             
-            recent_data = [item for item in bucket_data if get_timestamp_int(item.get('timestamp', 0)) >= window_start]
+            recent_data = [item for item in bucket_data if time_manager.get_timestamp_int(item.get('timestamp', 0)) >= window_start]
+            
             if len(recent_data) < 3:
                 return False
             
             # 같은 방향 청산이 연속으로 발생하는지 확인
             sides = [item.get('side') for item in recent_data]
             if len(sides) >= 3:
-                # 최근 3개가 모두 같은 방향인지 체크
-                if all(side == 'long' for side in sides[-3:]) or all(side == 'short' for side in sides[-3:]):
+                # 최근 3개가 모두 같은 방향인지 체크 (SELL=롱청산, BUY=숏청산)
+                if all(side == 'SELL' for side in sides[-3:]) or all(side == 'BUY' for side in sides[-3:]):
                     return True
             
             return False
@@ -2433,6 +2466,46 @@ class AdvancedLiquidationStrategy:
         except Exception as e:
             print(f"❌ 캐스케이드 조건 체크 오류: {e}")
             return False
+    
+    def _should_block_strategy(self, cooldown_info: Dict[str, Any], z_long: float, z_short: float, lpi: float, is_cascade: bool) -> bool:
+        """
+        고급청산전략을 차단할지 여부 결정
+        
+        Args:
+            cooldown_info: 쿨다운 정보
+            z_long: 롱 청산 Z점수
+            z_short: 숏 청산 Z점수
+            lpi: Liquidation Pressure Index
+            is_cascade: 캐스케이드 여부
+            
+        Returns:
+            True: 전략 차단, False: 전략 실행
+        """
+        # 1. 쿨다운 차단 체크
+        if cooldown_info.get('blocked', False):
+            print(f"   🚫 쿨다운 차단: {cooldown_info.get('reason', '알 수 없는 이유')}")
+            return True
+        
+        # 2. Z점수 설정값 미달 체크 (z_setup = 2.0)
+        z_setup = 2.0
+        max_z = max(z_long, z_short)
+        if max_z < z_setup:
+            print(f"   🚫 Z점수 부족: 최대 Z점수 {max_z:.2f} < 설정값 {z_setup}")
+            return True
+        
+        # 3. LPI 최소값 미달 체크
+        lpi_min = self.config.lpi_min  # config에서 가져오기
+        if lpi < lpi_min:
+            print(f"   🚫 LPI 부족: LPI {lpi:.3f} < 최소값 {lpi_min}")
+            return True
+        
+        # 4. 캐스케이드 차단 체크
+        if is_cascade:
+            print(f"   🚫 캐스케이드 감지: 전략 차단")
+            return True
+        
+        # 모든 차단 조건을 통과
+        return False
     
     def _check_cooldown_condition(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
         """쿨다운 조건 체크"""
@@ -2466,3 +2539,4 @@ class AdvancedLiquidationStrategy:
         except Exception as e:
             print(f"❌ 쿨다운 조건 체크 오류: {e}")
             return {'active': False, 'penalty': 0.0, 'reason': ''}
+

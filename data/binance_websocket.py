@@ -6,29 +6,42 @@ import time
 import requests  # pip install requests 필요
 from typing import Dict, List, Callable, Optional
 from datetime import datetime, timedelta, timezone
+import pandas as pd
 import logging
+
+# Global Indicator Manager import
+from indicators.global_indicators import get_global_indicator_manager
+# Time Manager import
+from utils.time_manager import get_time_manager
 
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
     
     def __init__(self, symbol: str = "ETHUSDT"):
+        """웹소켓 초기화"""
         self.symbol = symbol.lower()
         self.ws_url = "wss://fstream.binance.com/ws"
         self.running = False
+        
+        # 콜백 함수들
         self.callbacks = {
             'liquidation': [],
             'kline_1m': []   # 1분봉 Kline 콜백만 사용
         }
         
+        # TimeManager 초기화
+        self.time_manager = get_time_manager()
+        
+        # Global Indicator Manager 초기화
+        self.global_manager = get_global_indicator_manager()
+        
         # 데이터 저장소
         self.liquidations = []
-        self.price_history = []  # 가격 히스토리 추가
         self.liquidation_bucket = []  # 청산 버킷 추가
-        self.bucket_start_time = datetime.now()  # 버킷 시작 시간
+        self.bucket_start_time = self.time_manager.get_current_time()  # 버킷 시작 시간
         
         # 설정
         self.max_liquidations = 1000  # 최대 저장 청산 데이터 수
-        self.max_price_history = 1000  # 최대 저장 가격 데이터 수
         
         # 전략 실행기 (나중에 설정)
         self.session_strategy = None
@@ -126,7 +139,7 @@ class BinanceWebSocket:
                 qty_usd = float(data['o']['q']) * float(data['o']['p'])
                 
                 liquidation = {
-                    'timestamp': datetime.now(),
+                    'timestamp': self.time_manager.get_current_time(),
                     'symbol': data['o']['s'],
                     'side': data['o']['S'],  # BUY/SELL
                     'quantity': float(data['o']['q']),
@@ -156,298 +169,224 @@ class BinanceWebSocket:
     async def process_kline_1m(self, data: Dict):
         """1분봉 Kline 데이터 처리 - 3분봉 시뮬레이션 포함"""
         try:
-            if 'k' in data:  # Kline 이벤트
-                kline = data['k']
+            if 'k' not in data:  # Kline 이벤트가 아니면 종료
+                return
                 
-                # 1분봉 마감 체크 (k.x == true)
-                if kline.get('x', True):  # 마감된 캔들만
-                    print(f"⏰ 1분봉 마감 감지: {datetime.now().strftime('%H:%M:%S')}")
-                    
-                    # 가격 데이터 저장 (지표별 거래량 데이터 분리)
-                    price_data = {
-                        'timestamp': datetime.now(),
-                        'price': float(kline['c']),  # 종가
-                        'open': float(kline['o']),
-                        'high': float(kline['h']),
-                        'low': float(kline['l']),
-                        'close': float(kline['c']),
-                        'volume': float(kline['v']),      # VWAP용: base volume (ETH)
-                        'quote_volume': float(kline['q']), # VPVR용: quote volume (USDT)
-                        'trade_count': int(kline['n']),    # 거래 횟수
-                        'close_time': kline['t']           # 캔들 종료 시간
-                    }
-                    
-                    # 가격 히스토리에 추가
-                    self.price_history.append(price_data)
-                    
-                    # 최대 개수 제한
-                    if len(self.price_history) > self.max_price_history:
-                        self.price_history.pop(0)
-                    
-                    # 1분봉 카운터 증가
-                    self.minute_counter += 1
-                    
-                    # 청산 전략 실행 (매 1분마다)
-                    if self.advanced_liquidation_strategy and self.liquidation_bucket:
-                        try:
-                            print(f"🎯 청산 전략 실행 시작... (버킷 크기: {len(self.liquidation_bucket)})")
-                            
-                            # 현재 가격 가져오기
-                            current_price = float(kline['c'])
-                            
-                            # 글로벌 지표 시스템에서 지표 데이터 가져오기
-                            try:
-                                from indicators.global_indicators import get_global_indicator_manager
-                                import pandas as pd
-                                
-                                global_manager = get_global_indicator_manager()
-                                
-                                # Daily Levels (어제 고가/저가)
-                                daily_levels = global_manager.get_indicator('daily_levels')
-                                key_levels = {}
-                                if daily_levels and daily_levels.is_loaded():
-                                    prev_day_data = daily_levels.get_prev_day_high_low()
-                                    key_levels = {
-                                        'prev_day_high': prev_day_data.get('high', 0),
-                                        'prev_day_low': prev_day_data.get('low', 0)
-                                    }
-                                
-                                # Opening Range (현재 세션 정보)
-                                opening_range = {}
-                                try:
-                                    from indicators.opening_range import get_session_manager
-                                    session_manager = get_session_manager()
-                                    session_config = session_manager.get_indicator_mode_config()
-                                    
-                                    if session_config.get('use_session_mode'):
-                                        opening_range = {
-                                            'session_name': session_config.get('session_name', 'UNKNOWN'),
-                                            'session_start': session_config.get('session_start_time'),
-                                            'elapsed_minutes': session_config.get('elapsed_minutes', 0),
-                                            'session_status': session_config.get('session_status', 'UNKNOWN')
-                                        }
-                                except Exception as e:
-                                    print(f"⚠️ Opening Range 정보 가져오기 실패: {e}")
-                                
-                                # VWAP 및 VWAP 표준편차
-                                vwap_indicator = global_manager.get_indicator('vwap')
-                                vwap = 0.0
-                                vwap_std = 0.0
-                                if vwap_indicator:
-                                    vwap_status = vwap_indicator.get_vwap_status()
-                                    vwap = vwap_status.get('current_vwap', 0)
-                                    vwap_std = vwap_status.get('current_vwap_std', 0)
-                                
-                                # ATR
-                                atr_indicator = global_manager.get_indicator('atr')
-                                atr = 0.0
-                                if atr_indicator:
-                                    atr = atr_indicator.get_atr()
-                                
-                                # price_data를 DataFrame으로 가공
-                                # analyze_all_strategies 함수는 DataFrame을 기대하지만
-                                # 웹소켓에서는 실시간 가격만 받으므로 단일 행 DataFrame 생성
-                                price_data = pd.DataFrame({
-                                    'timestamp': [datetime.now(timezone.utc)],
-                                    'open': [float(kline['o'])],
-                                    'high': [float(kline['h'])],
-                                    'low': [float(kline['l'])],
-                                    'close': [float(kline['c'])],
-                                    'volume': [float(kline['v'])]  # 실제 거래량 사용
-                                })
-                                
-                                print(f"📊 글로벌 지표 데이터 로드 완료:")
-                                print(f"   📅 Key Levels: {key_levels}")
-                                print(f"   🌅 Opening Range: {opening_range}")
-                                print(f"   📊 VWAP: ${vwap:.2f}")
-                                print(f"   📊 VWAP STD: ${vwap_std:.2f}")
-                                print(f"   📊 ATR: {atr:.3f}")
-                                print(f"   📈 Price Data: DataFrame 생성 완료 (행: {len(price_data)})")
-                                
-                            except Exception as e:
-                                print(f"❌ 글로벌 지표 데이터 로드 실패: {e}")
-                                # 기본값으로 설정
-                                key_levels = {}
-                                opening_range = {}
-                                vwap = 0.0
-                                vwap_std = 0.0
-                                atr = 0.0
-                                # 기본 price_data 생성
-                                price_data = pd.DataFrame({
-                                    'timestamp': [datetime.now(timezone.utc)],
-                                    'open': [current_price],
-                                    'high': [current_price],
-                                    'low': [current_price],
-                                    'close': [current_price],
-                                    'volume': [0.0]
-                                })
-                            
-                            # 청산 전략 분석 - analyze_all_strategies 호출
-                            signal = self.advanced_liquidation_strategy.analyze_all_strategies(
-                                price_data, key_levels, opening_range, vwap, vwap_std, atr
-                            )
-                            
-                            if signal:
-                                print(f"⚡ 청산 신호 감지: {signal.get('action', 'UNKNOWN')} - {signal.get('tier', 'UNKNOWN')}")
-                                # 여기서 신호 출력 로직 추가
-                            else:
-                                print(f"📊 청산 신호 없음")
-                            
-                            # 버킷 초기화
-                            self.liquidation_bucket = []
-                            self.bucket_start_time = datetime.now()
-                            print(f"🔄 청산 버킷 초기화 완료")
-                            
-                        except Exception as e:
-                            self.logger.error(f"청산 전략 실행 오류: {e}")
-                    
-                    # 세션 전략 실행 (3분마다 - 3분봉 시뮬레이션)
-                    if self.minute_counter % 3 == 0:
-                        if self.session_strategy:
-                            try:
-                                print(f"🎯 세션 전략 실행 시작... (3분봉 시뮬레이션)")
-                                
-                                # 3분봉 데이터 시뮬레이션 (1분봉 3개를 합쳐서 3분봉 생성)
-                                if len(self.price_history) >= 3:
-                                    recent_3_candles = self.price_history[-3:]
-                                    
-                                    # 3분봉 데이터 생성 (OHLCV)
-                                    three_min_data = {
-                                        'timestamp': recent_3_candles[-1]['timestamp'],
-                                        'open': float(recent_3_candles[0]['open']),
-                                        'high': max(float(candle['high']) for candle in recent_3_candles),
-                                        'low': min(float(candle['low']) for candle in recent_3_candles),
-                                        'close': float(recent_3_candles[-1]['close']),
-                                        'volume': sum(float(candle['volume']) for candle in recent_3_candles)
-                                    }
-                                    
-                                    print(f"   📊 3분봉 데이터 생성: O:{three_min_data['open']:.2f} H:{three_min_data['high']:.2f} L:{three_min_data['low']:.2f} C:{three_min_data['close']:.2f} V:{three_min_data['volume']:.2f}")
-                                    
-                                    # 글로벌 지표 시스템에서 지표 데이터 가져오기
-                                    try:
-                                        from indicators.global_indicators import get_global_indicator_manager
-                                        import pandas as pd
-                                        
-                                        global_manager = get_global_indicator_manager()
-                                        
-                                        # 3분봉 데이터를 DataFrame으로 변환 (timezone 정보 포함)
-                                        df_3m = pd.DataFrame([three_min_data])
-                                        df_3m.set_index('timestamp', inplace=True)
-                                        
-                                        # 인덱스에 UTC timezone 정보 추가
-                                        if df_3m.index.tz is None:
-                                            df_3m.index = df_3m.index.tz_localize('UTC')
-                                            print(f"   📊 DataFrame 인덱스에 UTC timezone 설정 완료")
-                                        
-                                        # 글로벌 지표 업데이트
-                                        global_manager.update_all_indicators_with_candle(df_3m.iloc[0])
-                                        
-                                        print(f"   📊 3분봉 데이터 글로벌 지표 업데이트 완료")
-                                        
-                                        # 키 레벨 가져오기
-                                        daily_levels = global_manager.get_indicator('daily_levels')
-                                        key_levels = {}
-                                        if daily_levels and daily_levels.is_loaded():
-                                            prev_day_data = daily_levels.get_prev_day_high_low()
-                                            key_levels = {
-                                                'prev_day_high': prev_day_data.get('high', 0),
-                                                'prev_day_low': prev_day_data.get('low', 0)
-                                            }
-                                        
-                                        # Opening Range 정보 가져오기
-                                        opening_range = {}
-                                        try:
-                                            from indicators.opening_range import get_session_manager
-                                            session_manager = get_session_manager()
-                                            session_config = session_manager.get_indicator_mode_config()
-                                            
-                                            if session_config.get('use_session_mode'):
-                                                opening_range = {
-                                                    'session_name': session_config.get('session_name', 'UNKNOWN'),
-                                                    'session_start': session_config.get('session_start_time'),
-                                                    'elapsed_minutes': session_config.get('elapsed_minutes', 0),
-                                                    'session_status': session_config.get('session_status', 'UNKNOWN')
-                                                }
-                                        except Exception as e:
-                                            print(f"   ⚠️ Opening Range 정보 가져오기 실패: {e}")
-                                        
-                                        # VWAP 및 VWAP 표준편차
-                                        vwap_indicator = global_manager.get_indicator('vwap')
-                                        vwap = 0.0
-                                        vwap_std = 0.0
-                                        if vwap_indicator:
-                                            vwap_status = vwap_indicator.get_vwap_status()
-                                            vwap = vwap_status.get('current_vwap', 0)
-                                            vwap_std = vwap_status.get('current_vwap_std', 0)
-                                        
-                                        # ATR
-                                        atr_indicator = global_manager.get_indicator('atr')
-                                        atr = 0.0
-                                        if atr_indicator:
-                                            atr = atr_indicator.get_atr()
-                                        
-                                        print(f"   📊 글로벌 지표 데이터 로드 완료:")
-                                        print(f"      📅 Key Levels: {key_levels}")
-                                        print(f"      🌅 Opening Range: {opening_range}")
-                                        print(f"      📊 VWAP: ${vwap:.2f}")
-                                        print(f"      📊 VWAP STD: ${vwap_std:.2f}")
-                                        print(f"      📊 ATR: {atr:.3f}")
-                                        
-                                        # 세션 전략 분석 실행 (고급 청산 전략과 동일한 방식)
-                                        print(f"   📊 세션 전략에 전달할 DataFrame 정보:")
-                                        print(f"      📊 인덱스 타입: {type(df_3m.index)}")
-                                        print(f"      📊 인덱스 timezone: {df_3m.index.tz}")
-                                        print(f"      📊 데이터 행 수: {len(df_3m)}")
-                                        
-                                        session_signal = self.session_strategy.analyze_session_strategy(
-                                            df_3m, key_levels, datetime.now(timezone.utc)
-                                        )
-                                        
-                                        if session_signal:
-                                            print(f"   🎯 세션 전략 신호 감지!")
-                                            print(f"      📚 플레이북: {session_signal.get('playbook', 'UNKNOWN')}")
-                                            print(f"      🎯 신호 타입: {session_signal.get('signal_type', 'UNKNOWN')}")
-                                            print(f"      ⚡ 액션: {session_signal.get('action', 'UNKNOWN')}")
-                                            print(f"      🏆 등급: {session_signal.get('stage', 'UNKNOWN')}")
-                                            print(f"      📊 신뢰도: {session_signal.get('confidence', 0):.0%}")
-                                            print(f"      📝 이유: {session_signal.get('reason', 'N/A')}")
-                                            
-                                            # Entry 신호인 경우 추가 정보
-                                            if session_signal.get('stage') == 'ENTRY':
-                                                entry_price = session_signal.get('entry_price', 0)
-                                                stop_loss = session_signal.get('stop_loss', 0)
-                                                take_profit = session_signal.get('take_profit1', 0)
-                                                if entry_price and stop_loss and take_profit:
-                                                    risk = abs(entry_price - stop_loss)
-                                                    reward = abs(take_profit - entry_price)
-                                                    rr_ratio = reward / risk if risk > 0 else 0
-                                                    print(f"      💰 진입가: ${entry_price:.2f}")
-                                                    print(f"      🛑 손절가: ${stop_loss:.2f}")
-                                                    print(f"      🎯 목표가: ${take_profit:.2f}")
-                                                    print(f"      ⚖️  리스크/리워드: {rr_ratio:.2f}")
-                                        else:
-                                            print(f"   📊 세션 전략 신호 없음")
-                                            
-                                    except Exception as e:
-                                        print(f"   ❌ 세션 전략 실행 오류: {e}")
-                                        import traceback
-                                        traceback.print_exc()
-                                
-                                print(f"✅ 세션 전략 실행 완료")
-                            except Exception as e:
-                                self.logger.error(f"세션 전략 실행 오류: {e}")
-                                import traceback
-                                traceback.print_exc()
-                    
-                    # 1분봉 콜백 실행
-                    for callback in self.callbacks['kline_1m']:
-                        try:
-                            callback(price_data)
-                        except Exception as e:
-                            self.logger.error(f"1분봉 Kline 콜백 실행 오류: {e}")
-        
+            kline = data['k']
+            
+            # 1분봉 마감 체크 (k.x == true)
+            if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
+                return
+                
+            print(f"⏰ 1분봉 마감 감지: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
+            
+            # 가격 데이터 생성 및 DataManager에 추가
+            price_data = self._create_price_data(kline)
+            self._add_to_data_manager(price_data)
+            
+            # 1분봉 카운터 증가
+            self.minute_counter += 1
+            
+            # 청산 전략 실행 (매 1분마다)
+            if self.advanced_liquidation_strategy:
+                await self._execute_liquidation_strategy(kline)
+            
+            # 세션 전략 실행 (3분마다)
+            if self.minute_counter % 3 == 0:
+                await self._execute_session_strategy()
+            
+            # 1분봉 콜백 실행
+            self._execute_kline_callbacks(price_data)
+            
         except Exception as e:
             self.logger.error(f"1분봉 Kline 데이터 처리 오류: {e}")
+    
+    def _create_price_data(self, kline: Dict) -> Dict:
+        """가격 데이터 생성"""
+        return {
+            'timestamp': self.time_manager.get_current_time(),
+            'price': float(kline['c']),  # 종가
+            'open': float(kline['o']),
+            'high': float(kline['h']),
+            'low': float(kline['l']),
+            'close': float(kline['c']),
+            'volume': float(kline['v']),      # VWAP용: base volume (ETH)
+            'quote_volume': float(kline['q']), # VPVR용: quote volume (USDT)
+            'trade_count': int(kline['n']),    # 거래 횟수
+            'close_time': kline['t']           # 캔들 종료 시간
+        }
+    
+    def _add_to_data_manager(self, price_data: Dict):
+        """가격 데이터를 DataManager에 추가"""
+        try:
+            data_manager = self.global_manager.get_data_manager()
+            if data_manager and data_manager.is_ready():
+                # 1분봉 데이터를 DataManager에 추가
+                data_manager.update_with_candle(price_data)
+        except Exception as e:
+            self.logger.error(f"DataManager 업데이트 오류: {e}")
+    
+    async def _execute_liquidation_strategy(self, kline: Dict):
+        """청산 전략 실행"""
+        try:
+            print(f"🎯 청산 전략 실행 시작... (버킷 크기: {len(self.liquidation_bucket)})")
+            
+            # 청산 전략 분석
+            signal = self.advanced_liquidation_strategy.analyze_bucket_liquidations(self.liquidation_bucket)
+            
+            if signal:
+                print(f"⚡ 청산 신호 감지: {signal.get('action', 'UNKNOWN')} - {signal.get('tier', 'UNKNOWN')}")
+            else:
+                print(f"📊 청산 신호 없음")
+            
+            # 버킷 초기화
+            self.liquidation_bucket = []
+            self.bucket_start_time = self.time_manager.get_current_time()
+            print(f"🔄 청산 버킷 초기화 완료")
+            
+        except Exception as e:
+            self.logger.error(f"청산 전략 실행 오류: {e}")
+    
+    async def _execute_session_strategy(self):
+        """세션 전략 실행"""
+        if not self.session_strategy:
+            return
+            
+        try:
+            # 3분봉 데이터 생성
+            df_3m = self._create_3min_candle()
+            if df_3m is None:
+                return
+            
+            # 글로벌 지표 업데이트
+            self.global_manager.update_all_indicators(df_3m.iloc[0])
+            
+            # 전략 분석에 필요한 데이터 수집
+            strategy_data = self._collect_strategy_data()
+            
+            # 세션 전략 분석 실행
+            session_signal = self.session_strategy.analyze_session_strategy(
+                df_3m, strategy_data['key_levels'], self.time_manager.get_current_time()
+            )
+            
+            # 신호 결과 출력
+            self._print_session_signal(session_signal)
+            
+        except Exception as e:
+            self.logger.error(f"세션 전략 실행 오류: {e}")
+    
+    def _create_3min_candle(self) -> Optional[pd.DataFrame]:
+        """3분봉 데이터 생성 (DataManager 사용)"""
+        try:
+            # DataManager에서 최근 3개 캔들 가져오기
+            data_manager = self.global_manager.get_data_manager()
+            if not data_manager or not data_manager.is_ready():
+                return None
+            
+            recent_3_candles = data_manager.get_latest_data(count=3)
+            if not recent_3_candles or len(recent_3_candles) < 3:
+                return None
+            
+            # 3분봉 데이터 생성 (OHLCV)
+            three_min_data = {
+                'timestamp': recent_3_candles[-1]['timestamp'],
+                'open': float(recent_3_candles[0]['open']),
+                'high': max(float(candle['high']) for candle in recent_3_candles),
+                'low': min(float(candle['low']) for candle in recent_3_candles),
+                'close': float(recent_3_candles[-1]['close']),
+                'volume': sum(float(candle['volume']) for candle in recent_3_candles)
+            }
+            
+            # DataFrame 생성 및 timezone 설정
+            df_3m = pd.DataFrame([three_min_data])
+            df_3m.set_index('timestamp', inplace=True)
+            
+            if df_3m.index.tz is None:
+                df_3m.index = df_3m.index.tz_localize('UTC')
+            
+            return df_3m
+            
+        except Exception as e:
+            self.logger.error(f"3분봉 데이터 생성 오류: {e}")
+            return None
+    
+    def _collect_strategy_data(self) -> Dict:
+        """전략 분석에 필요한 데이터 수집"""
+        strategy_data = {
+            'key_levels': {},
+            'opening_range': {},
+            'vwap': 0.0,
+            'vwap_std': 0.0,
+            'atr': 0.0
+        }
+        
+        try:
+            # 키 레벨 (Daily Levels)
+            daily_levels = self.global_manager.get_indicator('daily_levels')
+            if daily_levels and daily_levels.is_loaded():
+                prev_day_data = daily_levels.get_prev_day_high_low()
+                strategy_data['key_levels'] = {
+                    'prev_day_high': prev_day_data.get('high', 0),
+                    'prev_day_low': prev_day_data.get('low', 0)
+                }
+            
+            # Opening Range 정보
+            try:
+                session_config = self.time_manager.get_indicator_mode_config()
+                if session_config.get('use_session_mode'):
+                    strategy_data['opening_range'] = {
+                        'session_name': session_config.get('session_name', 'UNKNOWN'),
+                        'session_start': session_config.get('session_start_time'),
+                        'elapsed_minutes': session_config.get('elapsed_minutes', 0),
+                        'session_status': session_config.get('session_status', 'UNKNOWN')
+                    }
+            except Exception:
+                pass
+            
+            # VWAP 및 VWAP 표준편차
+            vwap_indicator = self.global_manager.get_indicator('vwap')
+            if vwap_indicator:
+                vwap_status = vwap_indicator.get_vwap_status()
+                strategy_data['vwap'] = vwap_status.get('current_vwap', 0)
+                strategy_data['vwap_std'] = vwap_status.get('current_vwap_std', 0)
+            
+            # ATR
+            atr_indicator = self.global_manager.get_indicator('atr')
+            if atr_indicator:
+                strategy_data['atr'] = atr_indicator.get_atr()
+                
+        except Exception as e:
+            self.logger.error(f"전략 데이터 수집 오류: {e}")
+        
+        return strategy_data
+    
+    def _print_session_signal(self, session_signal: Optional[Dict]):
+        """세션 전략 신호 결과 출력"""
+        if not session_signal:
+            print(f"📊 세션 전략 신호 없음")
+            return
+        
+        print(f"🎯 세션 전략 신호: {session_signal.get('playbook', 'UNKNOWN')} {session_signal.get('side', 'UNKNOWN')} | {session_signal.get('stage', 'UNKNOWN')} | {session_signal.get('confidence', 0):.0%}")
+        
+        # Entry 신호인 경우 핵심 정보만
+        if session_signal.get('stage') == 'ENTRY':
+            entry_price = session_signal.get('entry_price', 0)
+            stop_loss = session_signal.get('stop_loss', 0)
+            take_profit = session_signal.get('take_profit1', 0)
+            
+            if entry_price and stop_loss and take_profit:
+                risk = abs(entry_price - stop_loss)
+                reward = abs(take_profit - entry_price)
+                rr_ratio = reward / risk if risk > 0 else 0
+                print(f"💰 진입: ${entry_price:.2f} | 손절: ${stop_loss:.2f} | 목표: ${take_profit:.2f} | R/R: {rr_ratio:.2f}")
+    
+    def _execute_kline_callbacks(self, price_data: Dict):
+        """1분봉 Kline 콜백 실행"""
+        for callback in self.callbacks['kline_1m']:
+            try:
+                callback(price_data)
+            except Exception as e:
+                self.logger.error(f"1분봉 Kline 콜백 실행 오류: {e}")
     
     async def start(self):
         """웹소켓 스트림 시작"""

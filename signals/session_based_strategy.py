@@ -19,7 +19,7 @@ except ImportError:
     from backports.zoneinfo import ZoneInfo
 
 from indicators.moving_averages import calculate_ema
-from utils.timestamp_utils import get_timestamp_datetime
+from utils.time_manager import get_time_manager
 
 
 @dataclass
@@ -105,11 +105,10 @@ class SessionBasedStrategy:
         
         # 세션 매니저 초기화 확인
         try:
-            from indicators.opening_range import get_session_manager
-            session_manager = get_session_manager()
-            print(f"✅ 세션 매니저 초기화 완료: {session_manager}")
+            from utils.time_manager import get_time_manager
+            self.time_manager = get_time_manager()
         except Exception as e:
-            print(f"⚠️ 세션 매니저 초기화 실패: {e}")
+            pass
         
     # def calculate_session_vwap(
     #     self, df: pd.DataFrame, session_start: datetime, session_end: datetime
@@ -137,7 +136,7 @@ class SessionBasedStrategy:
     #     # (세션 밴드 = 가격의 분산을 세션 누적 관점으로 측정)
     #     std = float(price.expanding().std(ddof=0).iloc[-1])
     #     return vwap, std
-    
+
     def _session_slice(self, df: pd.DataFrame, session_start: datetime) -> pd.DataFrame:
         """세션 시작부터 다음 세션 시작 전까지의 데이터 슬라이스 (세션 경계 정확)"""
         if df.empty:
@@ -160,9 +159,9 @@ class SessionBasedStrategy:
         
         # 세션 매니저에서 다음 세션 시작 시간 가져오기
         try:
-            from indicators.opening_range import get_session_manager
-            session_manager = get_session_manager()
-            session_end = session_manager.get_next_session_start(session_start)
+            from utils.time_manager import get_time_manager
+            time_manager = get_time_manager()
+            session_end = time_manager.get_next_session_start(session_start)
         except Exception as e:
             print(f"   ⚠️ 세션 매니저에서 다음 세션 시작 시간 가져오기 실패: {e}")
             # 폴백: 기본 계산
@@ -182,7 +181,7 @@ class SessionBasedStrategy:
             one_hour_ago = current_time - timedelta(seconds=3600)
             recent_events = [
                 event for event in liquidation_events 
-                if get_timestamp_datetime(event.get('timestamp', current_time)) >= one_hour_ago
+                if self.time_manager.get_timestamp_datetime(event.get('timestamp', current_time)) >= one_hour_ago
             ]
             
             if not recent_events:
@@ -501,7 +500,7 @@ class SessionBasedStrategy:
             # === 세션 타이밍 (0.10) ===
             # 세션 시작 시간과의 거리로 계산
             if getattr(self, 'session_start_time', None):
-                now_ts = current_time or (df.index[-1] if hasattr(df.index, 'tz') else datetime.utcnow().replace(tzinfo=pytz.UTC))
+                now_ts = current_time or (df.index[-1] if hasattr(df.index, 'tz') else self.time_manager.get_current_time())
                 time_diff = abs((now_ts - self.session_start_time).total_seconds() / 60)  # 분 단위
                 # 세션 시작 ±90분 내: 최고점, ±180분 내: 중간점, 그 외: 낮은 점수
                 if time_diff <= 90:
@@ -623,6 +622,10 @@ class SessionBasedStrategy:
             if current_time is None:
                 current_time = datetime.now().replace(tzinfo=pytz.UTC)
             
+            # current_time이 없으면 현재 시간 사용
+            if current_time is None:
+                current_time = self.time_manager.get_current_time()
+            
             # === Gate 확인 ===
             gates_passed, gate_results = self.check_gates(
                 df, session_vwap, opening_range, atr, playbook, side, key_levels
@@ -665,6 +668,7 @@ class SessionBasedStrategy:
                 'playbook': playbook,
                 'side': side,
                 'timestamp': datetime.now(),
+                'timestamp': self.time_manager.get_current_time(),
                 'gate_results': gate_results,
                 'stage': signal_type
             }
@@ -709,21 +713,16 @@ class SessionBasedStrategy:
         
         try:
             # 세션 매니저에서 세션 시작 시간 가져오기
-            from indicators.opening_range import get_session_manager
-            session_manager = get_session_manager()
+            from utils.time_manager import get_time_manager
+            time_manager = get_time_manager()
+            session_start_tuple = time_manager.get_session_open_time()
             
-            # 현재 세션 정보 가져오기
-            session_status = session_manager.get_session_status()
-            current_session = session_status.get('current_session')
-            
-            if current_session:
-                # 현재 활성 세션의 시작 시간 반환
-                session_open_time = session_manager.get_session_open_time()
-                if session_open_time:
-                    return session_open_time
+            if session_start_tuple:
+                # 현재 활성 세션의 시작 시간 반환 (튜플의 첫 번째 요소가 datetime)
+                return session_start_tuple[0]
             
             # 활성 세션이 없으면 가장 최근 세션 시작 시간 반환
-            session_history = session_manager.get_session_history()
+            session_history = time_manager.get_session_history()
             if session_history:
                 # 가장 최근 세션 찾기
                 latest_session = max(session_history.keys(), key=lambda k: session_history[k].get('session_open_time', ''))
@@ -744,86 +743,24 @@ class SessionBasedStrategy:
             # 폴백: 기본 세션 시작 시간 계산
             return current_time.replace(hour=13, minute=30, second=0, microsecond=0) - timedelta(days=1)
     
-    def _get_session_type(self, session_start: datetime) -> str:
+    def _get_session_type(self) -> str:
         """세션 시작 시간으로부터 세션 타입 식별 (세션 매니저 사용)"""
-        try:
             # 세션 매니저에서 현재 세션 정보 가져오기
-            from indicators.opening_range import get_session_manager
-            session_manager = get_session_manager()
-            
-            session_status = session_manager.get_session_status()
-            current_session = session_status.get('current_session', 'UNKNOWN')
-            
-            # 세션 이름을 한글로 변환
-            session_name_map = {
-                'EUROPE': '런던',
-                'US': '뉴욕',
-                'EUROPE_ACTIVE': '런던',
-                'US_ACTIVE': '뉴욕'
-            }
-            
-            return session_name_map.get(current_session, current_session)
-            
-        except Exception as e:
-            print(f"   ⚠️ 세션 매니저에서 세션 타입을 가져올 수 없음: {e}")
-            # 폴백: 시간 기반 판별
-            try:
-                ny_tz = pytz.timezone('America/New_York')
-                london_tz = pytz.timezone('Europe/London')
-                
-                ny_local = session_start.astimezone(ny_tz)
-                london_local = session_start.astimezone(london_tz)
-                
-                ny_session_hour = 9  # 뉴욕 9:30 AM
-                london_session_hour = 8  # 런던 8:00 AM
-                
-                if abs(ny_local.hour - ny_session_hour) <= 1:
-                    return "뉴욕"
-                elif abs(london_local.hour - london_session_hour) <= 1:
-                    return "런던"
-                else:
-                    return "알 수 없음"
-            except:
-                return "알 수 없음"
-    
-    # def calculate_opening_range(
-    #     self, df: pd.DataFrame, session_start: datetime
-    # ) -> Dict[str, float]:
-    #     """세션 구간 오프닝 레인지 계산 (반개구간, 정확히 OR 분만) - 글로벌 지표로 대체됨"""
-    #     if df.empty:
-    #         return {}
-    #     assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
-    #     df = df.sort_index()
-
-    #     or_end = session_start + timedelta(minutes=self.config.or_minutes)
-    #     mask = (df.index >= session_start) & (df.index < or_end)
-    #     head = df.loc[mask]
-    #     bars = len(head)
-    #     if bars == 0:
-    #         return {}
-
-    #     h = float(head["high"].max())
-    #     l = float(head["low"].min())
+        from utils.time_manager import get_time_manager
+        time_manager = get_time_manager()
         
-    #     # 유효성 검사
-    #     if pd.isna(h) or pd.isna(l) or h <= l:
-    #         print(f"❌ OR 계산 오류: 유효하지 않은 high/low 값 - high: {h}, low: {l}")
-    #         return {}
+        session_status = time_manager.get_session_status()
+        current_session = session_status.get('current_session', 'UNKNOWN')
         
-    #     # 타임프레임을 고려한 봉 수 계산
-    #     tf_map = {'1m': 1, '3m': 3, '5m': 5, '15m': 15, '30m': 30, '1h': 60}
-    #     tf_min = tf_map.get(self.config.timeframe, 1)
-    #     need_bars = max(1, int(np.ceil(self.config.or_minutes / tf_min)))
-    #         min_bars = max(1, int(np.ceil(self.config.min_or_bars / tf_min)))
+        # 세션 이름을 한글로 변환
+        session_name_map = {
+            'EUROPE': '런던',
+            'US': '뉴욕',
+            'EUROPE_ACTIVE': '런던',
+            'US_ACTIVE': '뉴욕'
+        }
         
-    #     ready = (bars >= need_bars)     # 완전 OR 확보?
-    #     partial = (not ready) and (bars >= min_bars)
-
-    #     return {
-    #         "high": h, "low": l, "center": (h + l) / 2.0, "range": h - l,
-    #         "bars": bars, "ready": ready, "partial": partial,
-    #         "need_bars": need_bars, "min_bars": min_bars, "timeframe": self.config.timeframe
-    #     }
+        return session_name_map.get(current_session, current_session)
     
     def analyze_playbook_a_opening_drive_pullback(self, df: pd.DataFrame, 
                                                     session_vwap: float,
@@ -1014,6 +951,7 @@ class SessionBasedStrategy:
                 'take_profit2': tp2,
                 'risk_reward': self.config.tp1_R,
                 'timestamp': datetime.now(),
+                'timestamp': self.time_manager.get_current_time(),
                 'reason': f"OR 상단 돌파 후 풀백 롱 | 진행: {drive_return:.1f}ATR, 풀백: {pullback_depth:.1f}ATR",
                 'playbook': 'A',
                 'partial_out': self.config.partial_out,
@@ -1132,6 +1070,7 @@ class SessionBasedStrategy:
                 'take_profit2': tp2,
                 'risk_reward': self.config.tp1_R,
                 'timestamp': datetime.now(),
+                'timestamp': self.time_manager.get_current_time(),
                 'reason': f"OR 하단 이탈 후 되돌림 숏 | 진행: {drive_return:.1f}ATR, 되돌림: {pullback_depth:.1f}ATR",
                 'playbook': 'A',
                 'partial_out': self.config.partial_out,
@@ -1213,6 +1152,7 @@ class SessionBasedStrategy:
                             'take_profit2': tp2,
                             'risk_reward': 1.5,
                             'timestamp': datetime.now(),
+                            'timestamp': self.time_manager.get_current_time(),
                             'reason': f"전일저가 스윕 후 리클레임 롱 | 스윕깊이: {sweep_depth_long:.1f}ATR",
                             'playbook': 'B',
                             'partial_out': self.config.partial_out,
@@ -1278,6 +1218,7 @@ class SessionBasedStrategy:
                             'take_profit2': tp2,
                             'risk_reward': 1.5,
                             'timestamp': datetime.now(),
+                            'timestamp': self.time_manager.get_current_time(),
                             'reason': f"전일고가 스윕 후 리클레임 숏 | 스윕깊이: {sweep_depth_short:.1f}ATR",
                             'playbook': 'B',
                             'partial_out': self.config.partial_out,
@@ -1358,6 +1299,7 @@ class SessionBasedStrategy:
                         'take_profit2': tp2,
                         'risk_reward': 1.2,
                         'timestamp': datetime.now(),
+                        'timestamp': self.time_manager.get_current_time(),
                         'reason': f"VWAP 과매도 페이드 롱 | 진입: -{self.config.sd_k_enter}σ, 재진입: -{self.config.sd_k_reenter}σ",
                         'playbook': 'C',
                         'partial_out': self.config.partial_out,
@@ -1423,6 +1365,7 @@ class SessionBasedStrategy:
                         'take_profit2': tp2,
                         'risk_reward': 1.2,
                         'timestamp': datetime.now(),
+                        'timestamp': self.time_manager.get_current_time(),
                         'reason': f"VWAP 과매수 페이드 숏 | 진입: +{self.config.sd_k_enter}σ, 재진입: +{self.config.sd_k_reenter}σ",
                         'playbook': 'C',
                         'partial_out': self.config.partial_out,
@@ -1476,14 +1419,14 @@ class SessionBasedStrategy:
                 if atr_indicator:
                     atr = atr_indicator.get_atr()
                 
-                print(f"   📊 글로벌 지표 데이터 로드 완료:")
-                print(f"      📊 VWAP: ${session_vwap:.2f}")
-                print(f"      📊 VWAP STD: ${session_std:.2f}")
-                print(f"      🌅 Opening Range: {or_info}")
-                print(f"      📊 ATR: {atr:.3f}")
+                # 지표 데이터 로드 완료 (출력 없음)
                 
             except Exception as e:
-                print(f"⚠️ 글로벌 지표 데이터 가져오기 실패: {e}")
+                # 폴백: 기본값 사용
+                session_vwap = 0.0
+                session_std = 0.0
+                or_info = {}
+                atr = 15.0  # 기본값
             
             # 인스턴스 변수 업데이트
             self.session_vwap = session_vwap
@@ -1492,9 +1435,6 @@ class SessionBasedStrategy:
             self.session_start_time = session_start  # 세션 시작 시간 저장
 
             # --- 세션 정보 출력 (간단하게) ---
-            session_type = self._get_session_type(session_start)
-            print(f"🔍 세션: {session_start.strftime('%H:%M')} UTC ({session_type})")
-
             if atr <= 0:
                 return None
             
@@ -1533,9 +1473,8 @@ class SessionBasedStrategy:
                     if sig and sig["score"] > best_score:
                         best_signal, best_score = sig, sig["score"]
             
-            # 최고 점수 신호 반환 (간단하게)
+            # 최고 점수 신호 반환
             if best_signal:
-                print(f"🎯 신호: {best_signal['playbook']} {best_signal['side']} | {best_signal['stage']} | {best_signal['confidence']:.0%}")
                 return best_signal
             
             return None

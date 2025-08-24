@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 어제 3분봉 데이터의 high, low만 가져오는 간단한 클래스
+Note: 어제 데이터는 공용 데이터와 별개이므로 개별 API 호출 유지
 """
 
 from data.binance_dataloader import BinanceDataLoader

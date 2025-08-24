@@ -12,7 +12,6 @@ import pandas as pd
 from typing import Dict, Any, Optional, List
 from core.trader_core import TraderCore
 
-from utils.trader_utils import get_next_5min_candle_time
 from config.integrated_config import IntegratedConfig
 
 class IntegratedSmartTrader:
@@ -33,29 +32,58 @@ class IntegratedSmartTrader:
         
         # 청산 버킷 관리 (60초 단위)
         self.liquidation_bucket = []
-        self.bucket_start_time = datetime.datetime.now()
+        self.bucket_start_time = self.core.time_manager.get_current_time()
         self.last_60sec_bucket = None
         
-        # 글로벌 지표 시스템 초기화
+        # 🚀 1단계: DataManager 우선 초기화 (데이터 준비)
+        self._init_data_manager()
+        
+        # 🚀 2단계: 글로벌 지표 시스템 초기화
         self._init_global_indicators()
         
-        # 고급 청산 전략 초기화
+        # 🚀 3단계: 고급 청산 전략 초기화
         self._init_advanced_liquidation_strategy()
         
-        # 세션 기반 전략 초기화
+        # 🚀 4단계: 세션 기반 전략 초기화
         self._init_session_strategy()
+    
+    def _init_data_manager(self):
+        """DataManager 우선 초기화 (데이터 준비)"""
+        try:
+            print("🚀 1단계: DataManager 우선 초기화 시작...")
+            
+            from data.data_manager import get_data_manager
+            
+            # DataManager 싱글톤 인스턴스 가져오기
+            data_manager = get_data_manager()
+            
+            # 초기 데이터 로딩 (전날 00시부터 현재까지)
+            print("📊 DataManager 초기 데이터 로딩 시작...")
+            data_loaded = data_manager.load_initial_data('ETHUSDT')
+            
+            if data_loaded:
+                print(f"🎯 중앙 데이터 저장소 준비 완료!")
+            else:
+                print("❌ DataManager 초기화 실패")
+                raise Exception("DataManager 초기 데이터 로딩 실패")
+                
+        except Exception as e:
+            print(f"❌ DataManager 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            raise  # 상위로 에러 전파하여 프로그램 중단
     
     def _init_global_indicators(self):
         """글로벌 지표 시스템 초기화"""
         try:
-            print("🚀 글로벌 지표 시스템 초기화 시작...")
+            print("🚀 2단계: 글로벌 지표 시스템 초기화 시작...")
             
             from indicators.global_indicators import get_global_indicator_manager
             
             # 글로벌 지표 매니저 가져오기
             global_manager = get_global_indicator_manager()
             
-            # 지표들 초기화
+            # 지표들 초기화 (DataManager가 이미 준비된 상태)
             global_manager.initialize_indicators()
             
             print("🎯 글로벌 지표 시스템 초기화 완료!")
@@ -291,7 +319,7 @@ class IntegratedSmartTrader:
     def _handle_3m_kline_close(self, data: Dict):
         """3분봉 마감 이벤트 처리"""
         try:
-            if self._is_or_completed(datetime.datetime.now()):
+            if self._is_or_completed(self.core.time_manager.get_current_time()):
                 print(f"\n⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감! 세션 전략 분석 시작")
                 
                 session_signal = self._analyze_session_strategy()
@@ -560,7 +588,32 @@ class IntegratedSmartTrader:
     def _print_startup_info(self):
         """시작 정보 출력"""
         print(f"🚀 {self.config.symbol} 통합 스마트 트레이더 시작!")
-        print(f"📊 세션: {'활성' if self.config.enable_session_strategy else '비활성'}")
+        
+        # 현재 세션 정보 출력
+        try:
+            from utils.time_manager import get_time_manager
+            time_manager = get_time_manager()
+            
+            # 현재 세션 상태 확인
+            session_config = time_manager.get_indicator_mode_config()
+            
+            if session_config['use_session_mode']:
+                session_name = session_config.get('session_name', 'UNKNOWN')
+                session_start = session_config.get('session_start_time')
+                elapsed_minutes = session_config.get('elapsed_minutes', 0)
+                session_status = session_config.get('session_status', 'UNKNOWN')
+                
+                print(f"📊 현재 세션: {session_name}")
+                print(f"🕐 세션 시작: {session_start}")
+                print(f"⏱️ 경과 시간: {elapsed_minutes:.1f}분")
+                print(f"📈 세션 상태: {session_status}")
+            else:
+                print(f"📊 현재 세션: 세션 외 시간 (룩백 모드)")
+                
+        except Exception as e:
+            print(f"⚠️ 세션 정보 출력 오류: {e}")
+        
+        print(f"📊 세션 전략: {'활성' if self.config.enable_session_strategy else '비활성'}")
         print(f"⏰ 세션 전략: 1분봉 기반 3분마다 실행 (OR 30분 완성 후)")
         print(f"⚡ 청산 전략: 1분봉마다 실행")
         print("=" * 60)

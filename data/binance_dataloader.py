@@ -125,60 +125,49 @@ class BinanceDataLoader:
         return self.fetch_3m_data(symbol, start_time, utc_now, limit=limit)
     
     def _parse_klines_data(self, data: List) -> pd.DataFrame:
-        """
-        바이낸스 klines 데이터를 DataFrame으로 변환
-        
-        바이낸스 API 응답 형식:
-        [0: open_time, 1: open, 2: high, 3: low, 4: close, 5: volume,
-         6: close_time, 7: quote_volume, 8: trades, 9: taker_buy_base, 10: taker_buy_quote, 11: ignore]
-        """
-        df_data = []
-        
-        for candle in data:
-            candle_info = {
-                'open': float(candle[1]),
-                'high': float(candle[2]),
-                'low': float(candle[3]),
-                'close': float(candle[4]),
-                'volume': float(candle[5]),  # base asset volume (ETH)
-                'quote_volume': float(candle[7]),  # USDT volume
-                'trades': int(candle[8]),  # number of trades
-                'taker_buy_base': float(candle[9]),  # taker buy base volume
-                'taker_buy_quote': float(candle[10]),  # taker buy quote volume
-                # 추가 계산 필드
-                'avg_price': (float(candle[2]) + float(candle[3]) + float(candle[4])) / 3,  # HLC 평균
-                'price_range': float(candle[2]) - float(candle[3]),  # 고가-저가
-                'body_size': abs(float(candle[4]) - float(candle[1])),  # 몸통 크기
-                'upper_wick': float(candle[2]) - max(float(candle[1]), float(candle[4])),  # 위꼬리
-                'lower_wick': min(float(candle[1]), float(candle[4])) - float(candle[3])   # 아래꼬리
-            }
+        """바이낸스 Kline 데이터를 DataFrame으로 파싱"""
+        try:
+            if not data:
+                return pd.DataFrame()
             
-            # 거래량 관련 계산
-            if candle_info['volume'] > 0:
-                candle_info['vwap'] = candle_info['quote_volume'] / candle_info['volume']  # 거래량가중평균가
-                candle_info['avg_trade_size'] = candle_info['volume'] / candle_info['trades']  # 평균 거래 크기
-            else:
-                candle_info['vwap'] = candle_info['close']
-                candle_info['avg_trade_size'] = 0
+            # 표준 컬럼명으로 DataFrame 생성
+            df = pd.DataFrame(data, columns=[
+                'open_time', 'open', 'high', 'low', 'close', 'volume',
+                'close_time', 'quote_volume', 'trades_count', 'taker_buy_base',
+                'taker_buy_quote', 'ignore'
+            ])
             
-            # 매수/매도 비율 계산
-            if candle_info['volume'] > 0:
-                candle_info['buy_ratio'] = candle_info['taker_buy_base'] / candle_info['volume']
-                candle_info['sell_ratio'] = 1 - candle_info['buy_ratio']
-            else:
-                candle_info['buy_ratio'] = 0.5
-                candle_info['sell_ratio'] = 0.5
+            # 숫자 컬럼을 float로 변환
+            numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
+            for col in numeric_columns:
+                df[col] = pd.to_numeric(df[col], errors='coerce')
             
-            df_data.append(candle_info)
-        
-        # DataFrame 생성 (close_time을 인덱스로 사용)
-        df = pd.DataFrame(df_data)
-        
-        # close_time을 인덱스로 설정
-        close_times = [datetime.fromtimestamp(candle[6] / 1000, tz=timezone.utc) for candle in data]
-        df.index = pd.DatetimeIndex(close_times, name='close_time')
-        
-        return df
+            # 시간 컬럼을 datetime으로 변환 (밀리초 timestamp 처리)
+            df['open_time'] = pd.to_datetime(df['open_time'], unit='ms', utc=True)
+            df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True)
+            
+            # close_time을 인덱스로 설정 (3분봉 완료 시점)
+            df.set_index('close_time', inplace=True)
+            df.index.name = 'timestamp'  
+            # 필요한 컬럼만 선택 (표준 OHLCV 구조)
+            df = df[['open', 'high', 'low', 'close', 'volume', 'quote_volume']]
+            
+            # 3분봉 데이터 검증 및 필터링
+            df = df.sort_index()
+            
+            # 현재 시간보다 미래의 close_time 제거
+            current_time = datetime.now(timezone.utc)
+            future_candles = df[df.index > current_time]
+            if not future_candles.empty:
+                print(f"⚠️ 미래 시간 캔들 {len(future_candles)}개 제거: {future_candles.index[0]} ~ {future_candles.index[-1]}")
+                df = df[df.index <= current_time]
+            
+            print(f"✅ 필터링 완료: {len(df)}개 캔들")
+            return df
+            
+        except Exception as e:
+            print(f"❌ Kline 데이터 파싱 오류: {e}")
+            return pd.DataFrame()
     
     def get_data_info(self, df: pd.DataFrame) -> Dict:
         """
