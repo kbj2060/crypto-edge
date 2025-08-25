@@ -140,39 +140,28 @@ class SessionBasedStrategy:
         # DataFrame 복사 및 인덱스 timezone 처리
         df_copy = df.copy()
         
-        # 인덱스가 datetime 타입이 아닌 경우 처리
+        # TimeManager를 사용하여 인덱스 정규화
         if not pd.api.types.is_datetime64_any_dtype(df_copy.index):
-            print(f"   ⚠️ DataFrame 인덱스가 datetime 타입이 아닙니다: {type(df_copy.index)}")
+            print(f"   🔄 TimeManager를 사용하여 인덱스 정규화 중...")
             
-            # 인덱스가 숫자(밀리초 타임스탬프)인 경우 직접 변환
-            if pd.api.types.is_numeric_dtype(df_copy.index):
-                try:
-                    print(f"   🔄 숫자 인덱스를 datetime으로 변환 중...")
-                    df_copy.index = pd.to_datetime(df_copy.index, unit='ms', utc=True)
-                    print(f"   ✅ 인덱스 변환 완료: {df_copy.index.dtype}")
-                except Exception as e:
-                    print(f"   ❌ 숫자 인덱스를 datetime으로 변환할 수 없습니다: {e}")
-                    return df_copy
-            else:
-                # timestamp 컬럼이 있는지 확인
-                if 'timestamp' in df_copy.columns:
-                    df_copy = df_copy.set_index('timestamp')
-                elif 'close_time' in df_copy.columns:
-                    df_copy = df_copy.set_index('close_time')
-                else:
-                    print(f"   ❌ timestamp 또는 close_time 컬럼을 찾을 수 없습니다")
-                    return df_copy
+            try:
+                # TimeManager를 사용하여 인덱스 변환
+                from utils.time_manager import get_time_manager
+                time_manager = get_time_manager()
                 
                 # 인덱스를 datetime으로 변환
-                try:
-                    df_copy.index = pd.to_datetime(df_copy.index, utc=True)
-                except Exception as e:
-                    print(f"   ❌ 인덱스를 datetime으로 변환할 수 없습니다: {e}")
-                    return df_copy
-        
-        # timezone 정보가 없는 경우 UTC로 설정
-        if df_copy.index.tz is None:
-            df_copy.index = df_copy.index.tz_localize('UTC')
+                normalized_index = []
+                for idx in df_copy.index:
+                    # TimeManager를 사용하여 timestamp 정규화
+                    normalized_timestamp = time_manager.extract_and_normalize_timestamp({'timestamp': idx})
+                    normalized_index.append(normalized_timestamp)
+                
+                df_copy.index = pd.DatetimeIndex(normalized_index)
+                print(f"   ✅ TimeManager를 사용한 인덱스 정규화 완료: {df_copy.index.dtype}")
+                
+            except Exception as e:
+                print(f"   ❌ TimeManager를 사용한 인덱스 정규화 실패: {e}")
+                return df_copy
         
         df_copy = df_copy.sort_index()
         
@@ -1428,7 +1417,7 @@ class SessionBasedStrategy:
         df_s = self._session_slice(df, session_start)
         
         # A: OR가 없거나(strict) 준비 안 됐으면 스킵 또는 티어 제한
-        if or_info and (or_info.get("ready") or (not self.config.strict_or and or_info.get("partial"))):
+        if or_info:
             for side in ["LONG","SHORT"]:
                 sig = self.analyze_staged_signal(df_s, session_vwap, or_info, atr, 'A', side, key_levels, current_time)
                 # 부분 OR이면 티어 캡 적용

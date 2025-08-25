@@ -10,6 +10,7 @@
 """
 
 import pytz
+import pandas as pd
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Dict, Any, Tuple, List, Union
 from dataclasses import dataclass
@@ -635,6 +636,73 @@ class TimeManager:
     def get_current_timestamp_datetime(self) -> datetime:
         """현재 시간을 datetime으로 반환"""
         return self.get_current_time()
+    
+    def extract_and_normalize_timestamp(self, candle_data: Any) -> datetime:
+        """
+        캔들 데이터에서 timestamp를 추출하여 정규화된 UTC datetime으로 반환
+        
+        Args:
+            candle_data: Series, DataFrame, Dict 등 다양한 형태의 캔들 데이터
+            
+        Returns:
+            datetime: 정규화된 UTC datetime
+        """
+        try:
+            timestamp = None
+            
+            # 1. Series의 name 속성 사용 (가장 우선)
+            if hasattr(candle_data, 'name') and candle_data.name is not None:
+                timestamp = candle_data.name
+            
+            # 2. index가 있는 경우 첫 번째 인덱스 사용
+            elif hasattr(candle_data, 'index') and len(candle_data.index) > 0:
+                timestamp = candle_data.index[0]
+            
+            # 3. timestamp 키가 있는 경우
+            elif hasattr(candle_data, 'get') and candle_data.get('timestamp'):
+                timestamp = candle_data.get('timestamp')
+            
+            # 4. 기본값으로 현재 시간 사용
+            if timestamp is None:
+                return self.get_current_time()
+            
+            # timestamp가 이미 datetime 객체인 경우
+            if isinstance(timestamp, datetime):
+                # timezone이 없으면 UTC로 설정
+                if timestamp.tzinfo is None:
+                    return timestamp.replace(tzinfo=timezone.utc)
+                return timestamp
+            
+            # timestamp가 다른 타입인 경우 변환
+            if hasattr(timestamp, 'to_pydatetime'):
+                # pandas Timestamp인 경우
+                dt = timestamp.to_pydatetime()
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
+            
+            # 숫자인 경우 (밀리초 타임스탬프)
+            if isinstance(timestamp, (int, float)):
+                # 13자리면 밀리초, 10자리면 초 단위
+                if len(str(int(timestamp))) == 13:
+                    return datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+                else:
+                    return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+            
+            # 문자열인 경우
+            if isinstance(timestamp, str):
+                try:
+                    dt = pd.to_datetime(timestamp, utc=True)
+                    return dt.to_pydatetime()
+                except:
+                    pass
+            
+            # 모든 변환 실패 시 현재 시간 반환
+            return self.get_current_time()
+            
+        except Exception as e:
+            print(f"⚠️ TimeManager timestamp 추출 오류: {e}, 현재 시간 사용")
+            return self.get_current_time()
     
     # =============================================================================
     # 유틸리티 메서드
