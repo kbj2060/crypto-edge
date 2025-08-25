@@ -50,7 +50,7 @@ class BinanceDataLoader:
             if end_time:
                 params['endTime'] = int(end_time.timestamp() * 1000)
             
-            print(f"📡 바이낸스 API 요청: {symbol} 3분봉 데이터")
+            print(f"📡 바이낸스 API 요청: {symbol} {interval}분봉 데이터")
             if start_time and end_time:
                 print(f"🕐 기간: {start_time.strftime('%Y-%m-%d %H:%M')} ~ {end_time.strftime('%Y-%m-%d %H:%M')} UTC")
             
@@ -65,12 +65,19 @@ class BinanceDataLoader:
                 return None
             
             # DataFrame 생성
-            print(len(data))
+            print(f"📊 API 응답 데이터: {len(data)}개")
             df = self._parse_klines_data(data)
             
+            if df.empty:
+                print("⚠️ 파싱된 데이터가 비어있습니다")
+                return None
+            
             print(f"✅ 데이터 로드 성공: {len(df)}개 캔들")
-            print(f"📊 기간: {df.index[0]} ~ {df.index[-1]}")
-            print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
+            if len(df) > 0:
+                print(f"📊 기간: {df.index[0]} ~ {df.index[-1]}")
+                print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
+            else:
+                print("📊 데이터가 없습니다")
             
             return df
             
@@ -162,6 +169,10 @@ class BinanceDataLoader:
             if not future_candles.empty:
                 print(f"⚠️ 미래 시간 캔들 {len(future_candles)}개 제거: {future_candles.index[0]} ~ {future_candles.index[-1]}")
                 df = df[df.index <= current_time]
+            
+            if df.empty:
+                print("⚠️ 미래 시간 필터링 후 데이터가 없습니다")
+                return df
             
             print(f"✅ 필터링 완료: {len(df)}개 캔들")
             return df

@@ -68,7 +68,7 @@ class SessionVWAP:
                 return
             
             # 세션 시작부터 현재까지의 3분봉 데이터 가져오기
-            current_time = datetime.now(timezone.utc)
+            current_time = self.time_manager.get_current_time()
             
             # 세션 시작 시간을 datetime 객체로 변환
             if isinstance(session_start, str):

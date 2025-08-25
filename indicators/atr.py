@@ -176,7 +176,7 @@ class ATR3M:
     def get_status(self) -> Dict[str, any]:
         """ATR 상태 정보 반환"""
         return {
-            'current_atr': self.current_atr,
+            'atr': self.current_atr,
             'is_ready': self.is_ready(),
             'is_mature': self.is_mature(),
             'candles_count': self.get_candles_count(),

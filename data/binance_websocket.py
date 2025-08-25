@@ -10,9 +10,12 @@ import pandas as pd
 import logging
 
 # Global Indicator Manager import
+from data.data_manager import get_data_manager
 from indicators.global_indicators import get_global_indicator_manager
 # Time Manager import
 from utils.time_manager import get_time_manager
+# Binance Data Loader import
+from data.binance_dataloader import BinanceDataLoader
 
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
@@ -35,6 +38,11 @@ class BinanceWebSocket:
         # Global Indicator Manager 초기화
         self.global_manager = get_global_indicator_manager()
         
+        self.data_manager = get_data_manager()
+
+        # Binance Data Loader 초기화
+        self.data_loader = BinanceDataLoader()
+        
         # 데이터 저장소
         self.liquidations = []
         self.liquidation_bucket = []  # 청산 버킷 추가
@@ -47,8 +55,9 @@ class BinanceWebSocket:
         self.session_strategy = None
         self.advanced_liquidation_strategy = None
         
-        # 1분봉 카운터 (3분봉 시뮬레이션용)
-        self.minute_counter = 0
+        # 진행 중인 3분봉 데이터 관리
+        self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
+        self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
         
         # 로깅 설정
         logging.basicConfig(level=logging.INFO)
@@ -168,29 +177,25 @@ class BinanceWebSocket:
         if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
             return
             
-        print(f"⏰ 1분봉 마감 감지: {(self.time_manager.get_current_time() + timedelta(seconds=1)).strftime('%H:%M:%S')}")
+        print(f"⏰ OPEN TIME : {(self.time_manager.get_current_time() + timedelta(seconds=1)).strftime('%H:%M:%S')}")
         
         # 가격 데이터 생성 (1분봉은 DataManager에 추가하지 않음)
         price_data = self._create_price_data(kline)
-        
+
         # 1분봉 데이터를 임시 저장 (3분봉 생성용)
         self._store_1min_data(price_data)
-        
-        # 1분봉 카운터 증가
-        self.minute_counter += 1
         
         # 청산 전략 실행 (매 1분마다)
         if self.advanced_liquidation_strategy:
             await self._execute_liquidation_strategy()
         
-        # 세션 전략 실행 (3분마다)
-        if self.minute_counter % 3 == 0:
+        # 세션 전략 실행 (정확한 3분봉 마감 시간에)
+        if self._is_3min_candle_close():
             # 3분봉 데이터 생성
-            df_3m = self._create_3min_candle()
-            if df_3m is None:
-                return
-            await self._execute_session_strategy(df_3m)
-        
+            series_3m = await self._create_3min_candle()
+            self.data_manager.update_with_candle(series_3m)
+            await self._execute_session_strategy(series_3m)
+
         # 1분봉 콜백 실행
         self._execute_kline_callbacks(price_data)
             
@@ -206,6 +211,18 @@ class BinanceWebSocket:
             'quote_volume': float(kline['q']), # VPVR용: quote volume (USDT)
             'timestamp': kline['t']           # 캔들 종료 시간
         }
+    
+    def _is_3min_candle_close(self) -> bool:
+        """현재 시간이 3분봉 마감 시간인지 체크 (51분, 54분, 57분, 00분...)"""
+        try:
+            time.sleep(1)
+            current_time = self.time_manager.get_current_time()
+            current_minute = current_time.minute
+
+            return current_minute % 3 == 0
+        except Exception as e:
+            self.logger.error(f"3분봉 마감 시간 체크 오류: {e}")
+            return False
     
     def _store_1min_data(self, price_data: Dict):
         """1분봉 데이터를 임시 저장 (3분봉 생성용)"""
@@ -241,49 +258,128 @@ class BinanceWebSocket:
         print(f"🔄 청산 버킷 초기화 완료")
             
     
-    async def _execute_session_strategy(self, df_3m: pd.DataFrame):
+    async def _execute_session_strategy(self, series_3m: pd.Series):
         """세션 전략 실행"""
         if not self.session_strategy:
             return
-        print(df_3m)
-        # 글로벌 지표 업데이트
-        self.global_manager.update_all_indicators(df_3m.reset_index().iloc[0])
+        
+        # Series를 DataFrame으로 변환
+        if not series_3m.empty:
+            # 글로벌 지표 업데이트
+            self.global_manager.update_all_indicators(series_3m)
+        else:
+            print("⚠️ 3분봉 데이터가 비어있음")
+            return
+        
+        # Series를 DataFrame으로 변환 (name을 인덱스로 사용)
+        df_3m = pd.DataFrame([series_3m.values], 
+                            columns=series_3m.index, 
+                            index=[series_3m.name])
         
         # 전략 분석에 필요한 데이터 수집
         strategy_data = self._collect_strategy_data()
         
-        # 세션 전략 분석 실행
+        # 세션 전략 분석 실행 (DataFrame 사용)
         session_signal = self.session_strategy.analyze_session_strategy(
             df_3m, strategy_data['key_levels'], self.time_manager.get_current_time()
         )
         
         # 신호 결과 출력
-        self._print_session_signal(session_signal)
+        self._print_session_strategy(session_signal)
     
-    def _create_3min_candle(self) -> Optional[pd.DataFrame]:
-        """3분봉 데이터 생성 (저장된 1분봉 데이터 사용)"""
+    async def _create_3min_candle(self) -> Optional[pd.Series]:
+        """3분봉 데이터 생성 (첫 3분봉 마감 시 API 사용, 이후 웹소켓으로 수집)"""
         try:
-            # 저장된 1분봉 데이터 확인
-            if not hasattr(self, '_recent_1min_data') or len(self._recent_1min_data) < 3:
-                return None
+            # 1. 첫 3분봉 마감이면 바이낸스 API에서 데이터 가져오기
+            if not self._first_3min_candle_closed:
+                print("🔄 첫 3분봉 마감 - 바이낸스 API에서 3분봉 데이터 가져오는 중...")
+                
+                # 현재 시간 기준으로 마지막 완성된 3분봉 데이터 가져오기
+                current_time = self.time_manager.get_current_time()
+                
+                # 현재 진행 중인 3분봉의 시작 시간 계산 (수정됨)
+                current_minute = current_time.minute
+                
+                current_candle_start = current_time.replace(
+                    minute=(current_minute // 3) * 3,
+                    second=0, 
+                    microsecond=0
+                )
+                
+                # 마지막 완성된 3분봉은 현재 진행 중인 3분봉의 이전 3분봉
+                # 예: 19:29분이면 19:24:00 ~ 19:26:59 UTC 3분봉을 가져와야 함
+                last_completed_start = current_candle_start - timedelta(minutes=3)
+                last_completed_end = current_candle_start - timedelta(seconds=1)  # 19:26:59
+                # 바이낸스 API에서 마지막 완성된 3분봉 데이터 가져오기
+                df_3m = self.data_loader.fetch_data(
+                    interval=3,  # 3분봉 직접 요청
+                    symbol=self.symbol.upper(),
+                    start_time=last_completed_start,
+                    end_time=last_completed_end
+                )
+                
+                if df_3m is not None and not df_3m.empty:
+                    # 가장 최근 3분봉 사용
+                    latest_3m = pd.Series(df_3m.iloc[-1])
+                    
+                    # 3분봉 데이터를 Series로 변환
+                    result_series = pd.Series({
+                        'open': float(latest_3m['open']),
+                        'high': float(latest_3m['high']),
+                        'low': float(latest_3m['low']),
+                        'close': float(latest_3m['close']),
+                        'volume': float(latest_3m['volume']),
+                        'quote_volume': float(latest_3m['quote_volume'])
+                    }, name=latest_3m.name)  # timestamp를 name으로 설정
+                
+                    # 첫 3분봉 마감 완료 표시
+                    self._first_3min_candle_closed = True
+                    
+                    self._recent_1min_data = []
+
+                    return result_series
+                else:
+                    print("❌ 첫 3분봉 API 데이터 로드 실패")
+                    return None
             
-            recent_3_candles = self._recent_1min_data[-3:]
-            print(recent_3_candles)
-            # 3분봉 데이터 생성 (OHLCV)
-            df_3m = pd.DataFrame([{
-                'open': float(recent_3_candles[0]['open']),
-                'high': max(float(candle['high']) for candle in recent_3_candles),
-                'low': min(float(candle['low']) for candle in recent_3_candles),
-                'close': float(recent_3_candles[-1]['close']),
-                'volume': sum(float(candle['volume']) for candle in recent_3_candles),
-                'quote_volume': sum(float(candle['quote_volume']) for candle in recent_3_candles)
-            }], index=[recent_3_candles[-1]['timestamp']])
-            
-            return df_3m
+            # 웹소켓 데이터로 3분봉 생성
+            if len(self._recent_1min_data) >= 3:
+                recent_3_candles = self._recent_1min_data[-3:]
+                
+                # 3분봉 데이터 계산
+                open_price = recent_3_candles[0]['open']
+                high_price = max(candle['high'] for candle in recent_3_candles)
+                low_price = min(candle['low'] for candle in recent_3_candles)
+                close_price = recent_3_candles[-1]['close']
+                total_volume = sum(candle['volume'] for candle in recent_3_candles)
+                total_quote_volume = sum(candle['quote_volume'] for candle in recent_3_candles)
+                
+                # 🔧 수정: 사용된 1분봉 데이터의 마지막 시간을 기준으로 3분봉 마감 시간 계산
+                last_1min_timestamp = self.time_manager.get_timestamp_datetime(recent_3_candles[-1]['timestamp'])
+                
+                # 3분봉 마감 시간 = 마지막 1분봉 시간 (이미 3분봉 구간의 마지막)
+                # API 데이터와 동일한 형식으로 통일: XX:XX:00
+                accurate_timestamp = last_1min_timestamp.replace(
+                    second=0,
+                    microsecond=0
+                )
+                
+                # 3분봉 데이터를 Series로 생성
+                result_series = pd.Series({
+                    'open': open_price,
+                    'high': high_price,
+                    'low': low_price,
+                    'close': close_price,
+                    'volume': total_volume,
+                    'quote_volume': total_quote_volume
+                }, name=accurate_timestamp)
+                
+                return result_series
             
         except Exception as e:
             self.logger.error(f"3분봉 데이터 생성 오류: {e}")
             return None
+
     
     def _collect_strategy_data(self) -> Dict:
         """전략 분석에 필요한 데이터 수집"""
@@ -325,20 +421,20 @@ class BinanceWebSocket:
             vwap_indicator = self.global_manager.get_indicator('vwap')
             if vwap_indicator:
                 vwap_status = vwap_indicator.get_status()
-                strategy_data['vwap'] = vwap_status.get('current_vwap')
-                strategy_data['vwap_std'] = vwap_status.get('current_vwap_std')
+                strategy_data['vwap'] = vwap_status.get('vwap')
+                strategy_data['vwap_std'] = vwap_status.get('vwap_std')
             
             # ATR
             atr_indicator = self.global_manager.get_indicator('atr')
             if atr_indicator:
-                strategy_data['atr'] = atr_indicator.get_status().get('current_atr')
+                strategy_data['atr'] = atr_indicator.get_status().get('atr')
                 
         except Exception as e:
             self.logger.error(f"전략 데이터 수집 오류: {e}")
         
         return strategy_data
     
-    def _print_session_signal(self, session_signal: Optional[Dict]):
+    def _print_session_strategy(self, session_signal: Optional[Dict]):
         """세션 전략 신호 결과 출력"""
         if not session_signal:
             print(f"📊 세션 전략 신호 없음")
@@ -370,6 +466,10 @@ class BinanceWebSocket:
         """웹소켓 스트림 시작"""
         self.running = True
         self.logger.info("웹소켓 스트림 시작")
+        
+        # 첫 3분봉 마감까지 웹소켓으로 1분봉 데이터 수집
+        print("🔄 웹소켓 시작 - 첫 3분봉 마감까지 1분봉 데이터 수집 중...")
+        print("💡 첫 3분봉 마감 시 바이낸스 API에서 데이터를 가져오고, 이후에는 웹소켓 데이터만 사용합니다")
         
         # 여러 스트림을 동시에 실행
         tasks = [

@@ -81,32 +81,45 @@ class DataManager:
             print(f"❌ DataManager 초기 로딩 오류: {e}")
             return False
     
-
-    
     def update_with_candle(self, candle_data: pd.Series) -> None:
         """새로운 캔들 데이터로 업데이트 (실시간 용)"""
         try:
-            # TimeManager를 사용하여 timestamp 추출 및 정규화
-            timestamp = self.time_manager.extract_and_normalize_timestamp(candle_data)
+            if candle_data is None:
+                print("⚠️ DataManager: 빈 캔들 데이터로 업데이트 시도")
+                return
             
+            # Series에서 직접 값 가져오기
+            open_price = float(candle_data['open'])
+            high_price = float(candle_data['high'])
+            low_price = float(candle_data['low'])
+            close_price = float(candle_data['close'])
+            volume = float(candle_data['volume'])
+            quote_volume = float(candle_data['quote_volume'])
+                        
             # 새로운 캔들 데이터를 DataFrame에 추가
             new_row = pd.DataFrame([{
-                'open': candle_data['open'],
-                'high': candle_data['high'],
-                'low': candle_data['low'],
-                'close': candle_data['close'],
-                'volume': candle_data['volume'],
-                'quote_volume': candle_data['quote_volume']
-            }], index=[timestamp])
+                'open': open_price,
+                'high': high_price,
+                'low': low_price,
+                'close': close_price,
+                'volume': volume,
+                'quote_volume': quote_volume
+            }], index=[candle_data.name])
             
+            # 기존 데이터에 추가 (인덱스 중복 방지)
             self.data = pd.concat([self.data, new_row], ignore_index=False)
+            
+            # 중복된 인덱스 제거 (최신 데이터 유지)
+            self.data = self.data[~self.data.index.duplicated(keep='last')]
             
             # 최대 1000개 캔들 유지
             if len(self.data) > 1000:
                 self.data = self.data.tail(1000)
-                
+                                
         except Exception as e:
             print(f"❌ DataManager 캔들 업데이트 오류: {e}")
+            import traceback
+            traceback.print_exc()
 
     
     def get_dataframe(self) -> pd.DataFrame:

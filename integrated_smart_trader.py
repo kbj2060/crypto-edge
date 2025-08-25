@@ -198,19 +198,18 @@ class IntegratedSmartTrader:
                 return []
             
             for item in data_items:                    
-                # 타임스탬프 처리 (UST -> KST 변환)
+                # 타임스탬프 처리 (UTC datetime으로 변환)
                 timestamp = item.get('timestamp')
                 
-                # datetime 문자열을 UTC 타임스탬프로 변환 후 KST로 조정
+                # datetime 문자열을 UTC datetime으로 변환
                 # '2025-08-21 16:06:51.478000' 형식 파싱
                 dt = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S.%f')
-                utc_timestamp = dt.timestamp()
-                kst_timestamp = utc_timestamp + (9 * 3600)  # UTC+9
-                timestamp = int(kst_timestamp)
+                # UTC timezone 설정
+                utc_dt = dt.replace(tzinfo=datetime.timezone.utc)
                 
                 # 변환된 데이터 생성
                 converted_data = {
-                    'timestamp': timestamp,
+                    'timestamp': utc_dt,
                     'symbol': item.get('symbol', self.config.symbol),
                     'side': item.get('side', 'unknown'),
                     'size': item.get('size', 0.0),
@@ -278,8 +277,11 @@ class IntegratedSmartTrader:
                     print(f"🔄 {repeat+1}번째 워밍업 라운드 시작...")
                 
                 for i, data in enumerate(liquidation_data):
+                    # timestamp를 안전하게 처리 (TimeManager 사용)
+                    utc_timestamp = self.core.time_manager.get_timestamp_datetime(data.get('timestamp'))
+                    
                     liquidation_event = {
-                        'timestamp': data.get('timestamp', int(time.time())),
+                        'timestamp': utc_timestamp,
                         'side': data.get('side', 'unknown'),
                         'qty_usd': data.get('size', 0.0) * data.get('price', 0.0)
                     }
@@ -308,16 +310,7 @@ class IntegratedSmartTrader:
         print("✅ 웹소켓에서 직접 전략 실행하도록 설정 완료")
         print("   - 1분봉마다: 청산 전략 실행")
         print("   - 3분마다: 세션 전략 실행 (1분봉 시뮬레이션)")
-    
-    def _handle_liquidation_event(self, data: Dict):
-        """청산 이벤트 처리"""
-        try:
-            self._process_advanced_liquidation_event(data)
-                
-        except Exception as e:
-            print(f"❌ 청산 이벤트 처리 오류: {e}")
-            import traceback
-            traceback.print_exc()
+
     
     # def _handle_3m_kline_close(self, data: Dict):
     #     """3분봉 마감 이벤트 처리"""
@@ -365,40 +358,6 @@ class IntegratedSmartTrader:
     #         print(f"❌ OR 완성 체크 오류: {e}")
     #         return False
     
-    """_summary_
-    바이낸스 청산 이벤트 형식
-    data = {'timestamp': datetime.datetime(2025, 8, 22, 1, 42, 47, 173880), 
-        'symbol': 'ETHUSDT', 'side': 'BUY', 
-        'quantity': 0.048, 'price': 4255.65, 'qty_usd': 204.2712, 'time': 1755794568097}
-    """ 
-    def _process_advanced_liquidation_event(self, data: Dict):
-        """고급 청산 전략 이벤트 처리"""
-        try:
-            # 바이낸스 청산 데이터 형식 처리
-            side = 'short' if data.get('side') == 'BUY' else 'long'
-
-            # 타임스탬프 안전하게 변환
-            timestamp = data.get('timestamp', time.time())
-            timestamp = int(timestamp.timestamp())
-            
-            liquidation_event = {
-                'timestamp': timestamp,
-                'side': side,
-                'qty_usd': data.get('size', 0.0)*data.get('price', 0.0)
-            }
-            
-            # 60초 버킷에 청산 이벤트 추가
-            if not hasattr(self, 'liquidation_bucket'):
-                self.liquidation_bucket = []
-            # bucket_start_time은 __init__에서만 설정하고 여기서는 재설정하지 않음
-                
-            self.liquidation_bucket.append(liquidation_event)
-            
-            # 고급 청산 전략에 이벤트 전달 (실시간 처리용)
-            self._adv_liquidation_strategy.process_liquidation_event(liquidation_event)
-            
-        except Exception as e:
-            print(f"❌ 고급 청산 이벤트 처리 오류: {e}")
     
     # def _analyze_session_strategy(self) -> Optional[Dict]:
     #     """세션 기반 전략 분석"""

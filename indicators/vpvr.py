@@ -313,7 +313,7 @@ class SessionVPVR:
             price_based_size = 0.0005 * price
             
             # 3. 3분 ATR의 20% (ATR 객체에서 직접 가져오기)
-            atr_value = self.atr.get_status().get('current_atr')
+            atr_value = self.atr.get_status().get('atr')
             atr_size = atr_value * 0.2
             
             # 4. 최종 bin 크기 계산
@@ -369,7 +369,7 @@ class SessionVPVR:
             
             # 기존 ATR 정보
             status['atr_status'] = {
-                'current_atr': self.atr.get_status(),
+                'atr': self.atr.get_status(),
                 'is_ready': self.atr.is_ready(),
                 'is_mature': len(self.atr.true_ranges) >= self.atr.length,
                 'candles_count': len(self.atr.candles)

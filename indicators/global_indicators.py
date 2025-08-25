@@ -175,7 +175,7 @@ class GlobalIndicatorManager:
         # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
         if 'atr' in self._indicators:
             self._indicators['atr'].update_with_candle(candle_data)
-            atr_value = self._indicators['atr'].get_status().get('current_atr')
+            atr_value = self._indicators['atr'].get_status().get('atr')
             print(f"   📊 ATR 업데이트: {atr_value:.3f}")
         
         # 2. VPVR 업데이트

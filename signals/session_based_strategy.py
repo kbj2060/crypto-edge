@@ -1395,7 +1395,7 @@ class SessionBasedStrategy:
         
         # ATR (글로벌 지표에서 가져오기)
         atr_indicator = global_manager.get_indicator('atr')
-        atr = atr_indicator.get_status().get('current_atr')
+        atr = atr_indicator.get_status().get('atr')
         
         # 지표 데이터 로드 완료 (출력 없음)
         

@@ -146,42 +146,38 @@ class AdvancedLiquidationStrategy:
     """    
     def process_liquidation_event(self, event: Dict) -> None:
         """청산 이벤트 처리"""
-        try:
-            timestamp = event.get('timestamp', 0)
-            side = event.get('side', 'unknown')
-            qty_usd = event.get('qty_usd', 0.0)
-            
-            if qty_usd <= 0:
-                return
-            
-            # UTC 시간으로 통일 (timezone-aware)
-            current_time = datetime.fromtimestamp(timestamp, tz=timezone.utc)
-            
-            # 세션 상태 확인
-            self._check_session_status(current_time)
-            
-            # 1초 bin에 추가
-            bin_key = int(timestamp)
-            
-            # 청산 이벤트 side 매핑 (포지션 청산 방향)
-            if side.lower() in ['long', 'sell']:
-                # 롱 포지션 청산 → 롱 청산 데이터에 추가
-                self._add_to_bin(self.long_bins, bin_key, qty_usd)
-            elif side.lower() in ['short', 'buy']:
-                # 숏 포지션 청산 → 숏 청산 데이터에 추가
-                self._add_to_bin(self.short_bins, bin_key, qty_usd)
-            else:
-                print(f"⚠️ 알 수 없는 side: {side}, 이벤트 무시")
-                return
-            
-            # 청산 bin에도 추가
-            self._add_to_bin(self.liquidation_bins, bin_key, qty_usd)
-            
-            # 백그라운드 통계 업데이트
-            self._update_background_stats()
-            
-        except Exception as e:
-            print(f"❌ 청산 이벤트 처리 오류: {e}")
+        timestamp = event.get('timestamp')
+        side = event.get('side')
+        qty_usd = event.get('qty_usd')
+        
+        if qty_usd <= 0:
+            return
+        
+        # UTC 시간으로 통일 (timezone-aware)
+        current_time = self.time_manager.get_timestamp_datetime(timestamp)
+        
+        # 세션 상태 확인
+        self._check_session_status(current_time)
+        
+        # 1초 bin에 추가 (TimeManager 사용)
+        bin_key = self.time_manager.get_timestamp_int(timestamp)
+        
+        # 청산 이벤트 side 매핑 (포지션 청산 방향)
+        if side.lower() in ['long', 'sell']:
+            # 롱 포지션 청산 → 롱 청산 데이터에 추가
+            self._add_to_bin(self.long_bins, bin_key, qty_usd)
+        elif side.lower() in ['short', 'buy']:
+            # 숏 포지션 청산 → 숏 청산 데이터에 추가
+            self._add_to_bin(self.short_bins, bin_key, qty_usd)
+        else:
+            print(f"⚠️ 알 수 없는 side: {side}, 이벤트 무시")
+            return
+        
+        # 청산 bin에도 추가
+        self._add_to_bin(self.liquidation_bins, bin_key, qty_usd)
+        
+        # 백그라운드 통계 업데이트
+        self._update_background_stats()
     
     def _add_to_bin(self, bin_deque: deque, bin_key: int, value: float) -> None:
         """bin에 값 추가"""
@@ -676,8 +672,8 @@ class AdvancedLiquidationStrategy:
             is_cascade = metrics.get('is_cascade', False)
             if is_cascade:
                 # 캐스케이드 지분 확인 (최근 20~30초)
-                current_time = datetime.now(timezone.utc)
-                window_start = int(current_time.timestamp()) - 25  # 25초 윈도우
+                current_time = self.time_manager.get_current_time()
+                window_start = current_time - timedelta(seconds=25)  # 25초 윈도우
                 
                 if side == 'long':
                     cascade_liquidation = sum(val for ts, val in self.long_bins if ts >= window_start)
@@ -848,8 +844,8 @@ class AdvancedLiquidationStrategy:
             total_bins = len(self.liquidation_bins)
             if total_bins > 0:
                 # 최근 60초 내 빈 bin 확인
-                current_time = datetime.now(timezone.utc)
-                window_start = int(current_time.timestamp()) - 60
+                current_time = self.time_manager.get_current_time()
+                window_start = current_time - timedelta(seconds=60)
                 
                 filled_bins = sum(1 for ts, val in self.liquidation_bins if ts >= window_start and val > 0)
                 total_recent_bins = sum(1 for ts, _ in self.liquidation_bins if ts >= window_start)
@@ -1123,8 +1119,8 @@ class AdvancedLiquidationStrategy:
     def get_current_liquidation_metrics(self) -> Dict[str, Any]:
         """현재 청산 지표 계산"""
         try:
-            # UTC 시간으로 통일
-            current_time = datetime.now(timezone.utc)
+            # UTC 시간으로 통일 (TimeManager 사용)
+            current_time = self.time_manager.get_current_time()
             current_timestamp = int(current_time.timestamp())
             
             # 30초 윈도우 계산
@@ -2060,8 +2056,8 @@ class AdvancedLiquidationStrategy:
         """스파이크 후 감소 확인 (SETUP/ENTRY 임계값 분리)"""
         try:
             # 10초 평균 청산 계산
-            current_time = datetime.now(timezone.utc)
-            window_start = int(current_time.timestamp()) - 10
+            current_time = self.time_manager.get_current_time()
+            window_start = current_time - timedelta(seconds=10)
             
             if side == 'long':
                 current_10s = sum(val for ts, val in self.long_bins if ts >= window_start)
@@ -2098,8 +2094,8 @@ class AdvancedLiquidationStrategy:
     def _check_additional_long_liquidation(self) -> bool:
         """추가 롱 청산 확인 (10초 누적)"""
         try:
-            current_time = datetime.now(timezone.utc)
-            window_start = int(current_time.timestamp()) - 10
+            current_time = self.time_manager.get_current_time()
+            window_start = current_time - timedelta(seconds=10)
             
             # 10초 누적 롱 청산
             long_10s = sum(val for ts, val in self.long_bins if ts >= window_start)
@@ -2122,8 +2118,8 @@ class AdvancedLiquidationStrategy:
     def _check_additional_short_liquidation(self) -> bool:
         """추가 숏 청산 확인 (10초 누적)"""
         try:
-            current_time = datetime.now(timezone.utc)
-            window_start = int(current_time.timestamp()) - 10
+            current_time = self.time_manager.get_current_time()
+            window_start = current_time - timedelta(seconds=10)
             
             # 10초 누적 숏 청산
             short_10s = sum(val for ts, val in self.short_bins if ts >= window_start)
@@ -2163,7 +2159,7 @@ class AdvancedLiquidationStrategy:
             max_z = max(z_long, z_short)
             
             if max_z >= self.config.z_medium:
-                self.last_strong_spike_time = datetime.now(timezone.utc)
+                self.last_strong_spike_time = self.time_manager.get_current_time()
                 self.last_spike_strength = max_z  # 스파이크 강도 기록
             
             # 모든 전략에서 신호 후보 수집 (pre-Gate)
@@ -2317,15 +2313,13 @@ class AdvancedLiquidationStrategy:
                 })
 
                 # 캐스케이드/쿨다운 체크
-                is_cascade = self._check_cascade_condition(bucket_data)
-                metrics['is_cascade'] = is_cascade
                 cooldown_info = self._check_cooldown_condition(metrics)
                 metrics['cooldown_info'] = cooldown_info
                 
-                print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
+                print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}")
                 
                 # 🚫 고급청산전략 차단 조건 체크
-                if self._should_block_strategy(cooldown_info, z_long, z_short, lpi, is_cascade):
+                if self._should_block_strategy(z_long, z_short, lpi):
                     print(f"🚫 고급청산전략 차단됨 - 차단 조건 충족")
                     return None
 
@@ -2353,7 +2347,7 @@ class AdvancedLiquidationStrategy:
             vwap_std = vwap_obj.get('vwap_std')
             
             atr_obj = results.get('atr')
-            atr = atr_obj.get_status().get('current_atr')
+            atr = atr_obj.get_status().get('atr')
             
             data_manager = get_data_manager()
             data = data_manager.get_latest_data(count=200)
@@ -2395,40 +2389,41 @@ class AdvancedLiquidationStrategy:
             print(f"❌ 버킷 메트릭 계산 오류: {e}")
             return {}
     
-    def _calculate_z_and_lpi(self, bucket_data: List[Dict]) -> Tuple[float, float, float]:
-        """Z점수와 LPI 계산"""
+    def _calculate_z_and_lpi(self, bucket_data):
         try:
-            if not bucket_data:
-                return 0.0, 0.0, 0.0
-            
-            # 최근 60초 데이터로 Z점수 계산
-            time_manager = get_time_manager()
-            current_time = time_manager.get_current_timestamp_int()
-            window_start = current_time - 60
-            
-            # 청산 데이터 side 매핑: SELL(롱 청산) → long, BUY(숏 청산) → short
-            recent_long = [item for item in bucket_data if time_manager.get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'SELL']
-            recent_short = [item for item in bucket_data if time_manager.get_timestamp_int(item.get('timestamp', 0)) >= window_start and item.get('side') == 'BUY']
-            
-            # Z점수 계산 (최근 60초 vs 이전 60초)
-            if len(recent_long) > 0 and len(recent_short) > 0:
-                z_long = len(recent_long) / max(len(recent_short), 1)
-                z_short = len(recent_short) / max(len(recent_long), 1)
-            else:
-                z_long = len(recent_long) / 10.0  # 기본값
-                z_short = len(recent_short) / 10.0  # 기본값
-            
-            # LPI 계산
-            total_recent = len(recent_long) + len(recent_short)
-            if total_recent > 0:
-                lpi = (len(recent_long) - len(recent_short)) / total_recent
-            else:
-                lpi = 0.0
-            
+            tm = self.time_manager
+            now = tm.get_current_time()
+            ws = now - timedelta(seconds=self.config.agg_window_sec)
+
+            long_usd = sum(
+                item.get('qty_usd', 0.0)
+                for item in bucket_data
+                if tm.extract_and_normalize_timestamp(item) >= ws
+                and str(item.get('side','')).lower() in ('long','sell')
+            )
+            short_usd = sum(
+                item.get('qty_usd', 0.0)
+                for item in bucket_data
+                if tm.extract_and_normalize_timestamp(item) >= ws
+                and str(item.get('side','')).lower() in ('short','buy')
+            )
+
+            # μ, σ를 집계윈도우에 맞게 스케일
+            k = self.config.agg_window_sec
+            mu_l = self.mu_long * k
+            mu_s = self.mu_short * k
+            sig_l = self.sigma_long * (k ** 0.5)
+            sig_s = self.sigma_short * (k ** 0.5)
+
+            z_long = abs((long_usd  - mu_l) / max(sig_l, 1e-9)) if self.sigma_long  > 0 else 0.0
+            z_short= abs((short_usd - mu_s) / max(sig_s, 1e-9)) if self.sigma_short > 0 else 0.0
+
+            total = long_usd + short_usd
+            lpi = (short_usd - long_usd) / (total + 1e-9)   # +: 숏청산 우세 → BUY 바이어스
+
             return z_long, z_short, lpi
-            
         except Exception as e:
-            print(f"❌ Z점수/LPI 계산 오류: {e}")
+            print(f"❌ Z/LPI 계산 오류: {e}")
             return 0.0, 0.0, 0.0
     
     def _check_basic_warmup(self, metrics: Dict[str, Any]) -> bool:
@@ -2449,10 +2444,10 @@ class AdvancedLiquidationStrategy:
             
             # 최근 30초 내 같은 방향 청산이 연속으로 발생하는지 체크
             time_manager = get_time_manager()
-            current_time = time_manager.get_current_timestamp_int()
-            window_start = current_time - 30
+            current_time = time_manager.get_current_time()
+            window_start = current_time - timedelta(seconds=30)
             
-            recent_data = [item for item in bucket_data if time_manager.get_timestamp_int(item.get('timestamp', 0)) >= window_start]
+            recent_data = [item for item in bucket_data if time_manager.extract_and_normalize_timestamp(item) >= window_start]
             
             if len(recent_data) < 3:
                 return False
@@ -2470,44 +2465,17 @@ class AdvancedLiquidationStrategy:
             print(f"❌ 캐스케이드 조건 체크 오류: {e}")
             return False
     
-    def _should_block_strategy(self, cooldown_info: Dict[str, Any], z_long: float, z_short: float, lpi: float, is_cascade: bool) -> bool:
-        """
-        고급청산전략을 차단할지 여부 결정
-        
-        Args:
-            cooldown_info: 쿨다운 정보
-            z_long: 롱 청산 Z점수
-            z_short: 숏 청산 Z점수
-            lpi: Liquidation Pressure Index
-            is_cascade: 캐스케이드 여부
-            
-        Returns:
-            True: 전략 차단, False: 전략 실행
-        """
-        # 1. 쿨다운 차단 체크
-        if cooldown_info.get('blocked', False):
-            print(f"   🚫 쿨다운 차단: {cooldown_info.get('reason', '알 수 없는 이유')}")
-            return True
-        
-        # 2. Z점수 설정값 미달 체크 (z_setup = 1.0)
-        z_setup = 1.0
+    def _should_block_strategy(self, z_long, z_short, lpi):
+    # 쿨다운은 하드차단 대신 후속 스코어링에서 penalty로만 반영 (cooldown_info['active'])
         max_z = max(z_long, z_short)
-        if max_z < z_setup:
-            print(f"   🚫 Z점수 부족: 최대 Z점수 {max_z:.2f} < 설정값 {z_setup}")
+        weak_z  = max_z < self.config.z_spike      # e.g. 0.8
+        weak_lpi= abs(lpi) < self.config.lpi_bias  # e.g. 0.15
+
+        if weak_z and weak_lpi:
+            print("   ⛔ 약신호: Z/LPI 모두 약함 → 분석 생략")
             return True
-        
-        # 3. LPI 최소값 미달 체크
-        lpi_min = self.config.lpi_min  # config에서 가져오기
-        if lpi < lpi_min:
-            print(f"   🚫 LPI 부족: LPI {lpi:.3f} < 최소값 {lpi_min}")
-            return True
-        
-        # 4. 캐스케이드 차단 체크
-        if is_cascade:
-            print(f"   🚫 캐스케이드 감지: 전략 차단")
-            return True
-        
-        # 모든 차단 조건을 통과
+
+        # 캐스케이드는 차단하지 않음 (후단에서 강등/감점 처리)
         return False
     
     def _check_cooldown_condition(self, metrics: Dict[str, Any]) -> Dict[str, Any]:
