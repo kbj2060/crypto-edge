@@ -20,6 +20,7 @@ class DailyLevels:
         self.time_manager = get_time_manager()
         self.prev_day_high = 0.0
         self.prev_day_low = 0.0
+        self.last_update_date = None  # 마지막 업데이트 날짜 저장
         
         # 자동으로 데이터 로드
         self._initialize_levels()
@@ -30,7 +31,40 @@ class DailyLevels:
 
         self.prev_day_high = float(df['high'].max())
         self.prev_day_low = float(df['low'].min())
-
+        
+        # 현재 UTC 날짜 저장
+        self.last_update_date = datetime.now(timezone.utc).date()
+    
+    def _is_new_day(self, candle_data: pd.Series) -> bool:
+        """candle_data의 timestamp를 기준으로 새로운 날이 되었는지 확인"""
+        # timestamp 추출
+        # timestamp 처리 - Series의 name 속성 사용
+        if hasattr(candle_data, 'name') and candle_data.name is not None:
+            timestamp = candle_data.name
+        elif hasattr(candle_data, 'index') and len(candle_data.index) > 0:
+            timestamp = candle_data.index[0]
+        else:
+            # 기본값으로 현재 시간 사용
+            timestamp = datetime.now(timezone.utc)
+            
+        # 00:00:03분 종가시간이면 새로운 날
+        return timestamp.hour == 0 and timestamp.minute == 0 and timestamp.second <= 3
+            
+    def _should_update_levels(self, candle_data: pd.Series) -> bool:
+        """레벨 업데이트가 필요한지 확인"""
+        return self._is_new_day(candle_data) or self.prev_day_high == 0.0 or self.prev_day_low == 0.0
+    
+    def update_with_candle(self, candle_data: pd.Series):
+        """새로운 캔들로 업데이트 (하루가 바뀌면 데이터 갱신)"""
+        try:
+            # 하루가 바뀌었는지 확인
+            if self._should_update_levels(candle_data):
+                print("🔄 새로운 날이 되었습니다. Daily Levels 데이터를 갱신합니다.")
+                self._initialize_levels()
+                
+        except Exception as e:
+            print(f"❌ Daily Levels 업데이트 오류: {e}")
+    
     def get_data(self) -> pd.DataFrame:
         """OR 시간 정보 반환"""
         data_manager = get_data_manager()
@@ -52,9 +86,10 @@ class DailyLevels:
 
         return df.copy()
     
-    def get_status(self) -> Dict[str, float]:
-        """어제 고가/저가 반환"""
+    def get_status(self) -> Dict[str, Any]:
+        """어제 고가/저가 및 업데이트 정보 반환"""
         return {
-            'prev_day_high':self.prev_day_high,
-            'prev_day_low':self.prev_day_low
-            }
+            'prev_day_high': self.prev_day_high,
+            'prev_day_low': self.prev_day_low,
+            'last_update_date': self.last_update_date.isoformat() if self.last_update_date else None,
+        }

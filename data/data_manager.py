@@ -83,14 +83,20 @@ class DataManager:
             #     print(f"⚠️ DataManager: 필수 필드 누락 - {required_fields}")
             #     return
             
-            # timestamp를 UTC로 변환
-        timestamp = candle_data['timestamp']
-        if isinstance(timestamp, (int, float)):
-            # 밀리초 타임스탬프인 경우 datetime으로 변환
-            timestamp = pd.to_datetime(timestamp, unit='ms', utc=True)
-        elif timestamp.tzinfo is None:
-            # timezone이 없는 datetime인 경우 UTC로 변환
-            timestamp = self.time_manager.convert_to_utc(timestamp)
+        # timestamp 처리 - Series의 name 속성 사용
+        if hasattr(candle_data, 'name') and candle_data.name is not None:
+            timestamp = candle_data.name
+        elif hasattr(candle_data, 'index') and len(candle_data.index) > 0:
+            timestamp = candle_data.index[0]
+        else:
+            # 기본값으로 현재 시간 사용
+            timestamp = datetime.now(timezone.utc)
+        # if isinstance(timestamp, (int, float)):
+        #     # 밀리초 타임스탬프인 경우 datetime으로 변환
+        #     timestamp = pd.to_datetime(timestamp, unit='ms', utc=True)
+        # elif timestamp.tzinfo is None:
+        #     # timezone이 없는 datetime인 경우 UTC로 변환
+        #     timestamp = self.time_manager.convert_to_utc(timestamp)
         
         # # 새로운 캔들 데이터를 DataFrame에 추가
         new_row = pd.DataFrame([{
@@ -104,7 +110,6 @@ class DataManager:
         
         self.data = pd.concat([self.data, new_row], ignore_index=False)
         self.data = self.data.iloc[1:]
-        print(self.data, type(self.data))
 
     
     def get_dataframe(self) -> pd.DataFrame:

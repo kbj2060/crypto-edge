@@ -75,20 +75,6 @@ class GlobalIndicatorManager:
             price_bin_size=vpvr_config['price_bin_size'],
             lookback=vpvr_config['lookback'],
         )
-        
-        # DataManager에서 데이터 가져와서 VPVR에 전달
-        data_manager = self.get_data_manager()
-        if data_manager.is_ready():
-            df = data_manager.get_dataframe()
-            if not df.empty:
-                print(f"   📊 DataIndicator에서 데이터 로드: {len(df)}개 캔들")
-                # self._indicators['vpvr'].update_with_dataframe(df)
-            else:
-                print("   ⚠️ DataManager에 데이터가 없습니다")
-        else:
-            print("   ⚠️ DataManager가 준비되지 않았습니다")
-        
-        print("   ✅ VPVR 지표 초기화 완료")
 
     def _initialize_atr_indicator(self):
         """ATR 지표 초기화 및 초기 데이터 로딩"""
@@ -113,19 +99,7 @@ class GlobalIndicatorManager:
             self._indicators['vwap'] = vwap_config['class'](
                 symbol=vwap_config['symbol']
             )
-            
-            # DataManager에서 데이터 가져오기
-            data_manager = self.get_data_manager()
-            if data_manager.is_ready():
-                df = data_manager.get_dataframe()
-                if not df.empty:
-                    print(f"   📊 DataManager에서 데이터 로드: {len(df)}개 캔들")
-                    self._indicators['vwap'].update_with_dataframe(df)
-                else:
-                    print("   ⚠️ DataManager에 데이터가 없습니다")
-            else:
-                print("   ⚠️ DataManager가 준비되지 않았습니다")
-            
+        
             print("   ✅ VWAP 지표 초기화 완료")
             
         except Exception as e:
@@ -138,7 +112,6 @@ class GlobalIndicatorManager:
             print("🚀 OpeningRange 초기화 시작...")
             
             self._indicators['opening_range'] = OpeningRange(or_minutes=30)
-            print(self._indicators['opening_range'].get_status())
             
             print("   ✅ Opening Range 지표 초기화 완료")
             
@@ -165,7 +138,6 @@ class GlobalIndicatorManager:
                 
                 print("✅ DataManager가 이미 준비됨 - 중앙 데이터 저장소 사용 가능")
                 
-            
                 # 🚀 2단계: 나머지 지표들 초기화 (DataManager 완료 후)
                 print("\n🔥 2단계: 나머지 지표들 초기화 시작...")
                 self._initialize_atr_indicator()
@@ -196,7 +168,6 @@ class GlobalIndicatorManager:
             return
         
         print(f"🔄 전체 지표 업데이트 시작...")
-        
         data_manager = self.get_data_manager()
         data_manager.update_with_candle(candle_data)
         print(f"   📊 DataManager 업데이트")
@@ -218,8 +189,8 @@ class GlobalIndicatorManager:
         if 'vwap' in self._indicators:
             self._indicators['vwap'].update_with_candle(candle_data)
             vwap_status = self._indicators['vwap'].get_status()
-            current_vwap = vwap_status.get('current_vwap')
-            print(f"   📊 VWAP 업데이트: ${current_vwap:.2f}")
+            vwap = vwap_status.get('vwap')
+            print(f"   📊 VWAP 업데이트: ${vwap:.2f}")
         
         # 4. Daily Levels는 자동 업데이트 (어제 데이터이므로)
         if 'daily_levels' in self._indicators:

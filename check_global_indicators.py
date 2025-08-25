@@ -75,8 +75,8 @@ def check_all_global_indicators():
             print(f"   📊 로드 상태: {'로드됨' if indicator_data.get('is_loaded', False) else '로드 안됨'}")
             
         elif indicator_name == 'vwap':
-            print(f"   📊 현재 VWAP: ${indicator_data.get('current_vwap', 0):.2f}")
-            print(f"   📊 VWAP 표준편차: ${indicator_data.get('current_vwap_std', 0):.2f}")
+            print(f"   📊 현재 VWAP: ${indicator_data.get('vwap', 0):.2f}")
+            print(f"   📊 VWAP 표준편차: ${indicator_data.get('vwap_std', 0):.2f}")
             print(f"   📊 데이터 개수: {indicator_data.get('data_count', 0)}개")
             print(f"   🎯 모드: {indicator_data.get('mode', 'N/A')}")
         
@@ -90,7 +90,7 @@ def check_all_global_indicators():
         vwap = get_indicator('vwap')
         if vwap:
             print("🔍 VWAP 지표 추가 정보:")
-            vwap_status = vwap.get_vwap_status()
+            vwap_status = vwap.get_status()
             print(f"   📊 세션 이름: {vwap_status.get('session_name', 'N/A')}")
             print(f"   ⏱️  세션 진행 시간: {vwap_status.get('elapsed_minutes', 0):.1f}분")
             print(f"   📅 세션 시작: {vwap_status.get('session_start', 'N/A')}")
@@ -165,10 +165,10 @@ def check_all_global_indicators():
         vwap_data = indicators['vwap']
         if vwap_data.get('mode') == 'session':
             print(f"📅 현재 세션: 활성 (US/EU)")
-            print(f"📊 VWAP: ${vwap_data.get('current_vwap', 0):.2f}")
+            print(f"📊 VWAP: ${vwap_data.get('vwap', 0):.2f}")
         else:
             print(f"🌙 현재 세션: 비활성 (세션 외 시간)")
-            print(f"📊 VWAP: ${vwap_data.get('current_vwap', 0):.2f}")
+            print(f"📊 VWAP: ${vwap_data.get('vwap', 0):.2f}")
     
     # 거래량 정보
     if 'vpvr' in indicators:

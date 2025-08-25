@@ -573,20 +573,7 @@ class SessionBasedStrategy:
             
             # === 리스크 적정성 (0.10) ===
             # 실제 스탑 거리 계산
-            if side == 'LONG':
-                # 롱: 현재가에서 스탑까지의 거리
-                if 'entry_price' in locals() and 'stop_loss' in locals():
-                    stop_distance = entry_price - stop_loss
-                else:
-                    # 기본 스탑 거리 (ATR 기반)
-                    stop_distance = atr * 1.0
-            else:
-                # 숏: 스탑에서 현재가까지의 거리
-                if 'entry_price' in locals() and 'stop_loss' in locals():
-                    stop_distance = stop_loss - entry_price
-                else:
-                    # 기본 스탑 거리 (ATR 기반)
-                    stop_distance = atr * 1.0
+            stop_distance = atr * 1.0
             
             risk_score = 0.0
             if atr > 0:
@@ -613,14 +600,6 @@ class SessionBasedStrategy:
                                 current_time: datetime = None) -> Optional[Dict[str, Any]]:
         """단계형 신호 분석: Gate → Score → 등급/행동"""
         try:
-            # current_time이 없으면 현재 시간 사용
-            if current_time is None:
-                current_time = datetime.now().replace(tzinfo=pytz.UTC)
-            
-            # current_time이 없으면 현재 시간 사용
-            if current_time is None:
-                current_time = self.time_manager.get_current_time()
-            
             # === Gate 확인 ===
             gates_passed, gate_results = self.check_gates(
                 df, session_vwap, opening_range, atr, playbook, side, key_levels
@@ -1396,8 +1375,8 @@ class SessionBasedStrategy:
                 # VWAP 및 VWAP 표준편차 (글로벌 지표에서 가져오기)
                 vwap_indicator = global_manager.get_indicator('vwap')
                 vwap_status = vwap_indicator.get_status()
-                session_vwap = vwap_status.get('current_vwap')
-                session_std = vwap_status.get('current_vwap_std')
+                session_vwap = vwap_status.get('vwap')
+                session_std = vwap_status.get('vwap_std')
                 
                 # Opening Range 정보 (글로벌 지표에서 가져오기)
                 opening_range_indicator = global_manager.get_indicator('opening_range')

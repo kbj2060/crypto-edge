@@ -2280,13 +2280,13 @@ class AdvancedLiquidationStrategy:
                 return df['close'].iloc[-1], df['close'].iloc[-1] * 0.005  # 기본값 0.5%
             
             std = float(recent_dev.std(ddof=0))
-            current_vwap = float(vwap_series.iloc[-1])
+            vwap = float(vwap_series.iloc[-1])
             
             # 너무 작을 때 최소 바닥(0.1%) 부여
             min_std = df['close'].iloc[-1] * 0.001
             final_std = max(std, min_std)
             
-            return current_vwap, final_std
+            return vwap, final_std
             
         except Exception as e:
             print(f"❌ VWAP 표준편차 계산 오류: {e}")
@@ -2300,77 +2300,72 @@ class AdvancedLiquidationStrategy:
             - 확장: context(price_data, key_levels, opening_range, vwap, vwap_std, atr)가 주어지면
                     정식 분석 루틴(analyze_all_strategies)으로 위임하여 ENTRY까지 평가
             """
-            try:
-                if bucket_data:
-                    # 버킷 데이터로 메트릭 계산
-                    metrics = self._calculate_bucket_metrics(bucket_data)
+            if bucket_data:
+                # 버킷 데이터로 메트릭 계산
+                metrics = self._calculate_bucket_metrics(bucket_data)
 
-                    # 워밍업 체크
-                    if not self._check_basic_warmup(metrics):
-                        return None
+                # 워밍업 체크
+                if not self._check_basic_warmup(metrics):
+                    return None
 
-                    # Z점수 및 LPI 계산 (USD 노션널 기반, 60초 스케일)
-                    z_long, z_short, lpi = self._calculate_z_and_lpi(bucket_data)
-                    metrics.update({
-                        'z_long': z_long,
-                        'z_short': z_short,
-                        'lpi': lpi
-                    })
-
-                    # 캐스케이드/쿨다운 체크
-                    is_cascade = self._check_cascade_condition(bucket_data)
-                    metrics['is_cascade'] = is_cascade
-                    cooldown_info = self._check_cooldown_condition(metrics)
-                    metrics['cooldown_info'] = cooldown_info
-                    
-                    print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
-                    
-                    # 🚫 고급청산전략 차단 조건 체크
-                    if self._should_block_strategy(cooldown_info, z_long, z_short, lpi, is_cascade):
-                        print(f"🚫 고급청산전략 차단됨 - 차단 조건 충족")
-                        return None
-
-                # 내부에서 지표 데이터 가져오기 (1줄로 간소화)
-                results = self.global_manager.get_all_indicators()
-                
-                vpvr_obj = results.get('vpvr')
-                vpvr = vpvr_obj.get_status()
-
-                # 각 지표 객체에서 실제 데이터 가져오기
-                key_levels_obj = results.get('daily_levels')  # ✅ 'daily_levels'로 수정
-                key_levels = key_levels_obj.get_status()
-                key_levels.update({
-                    'prev_day_high': key_levels.get('prev_day_high'),
-                    'prev_day_low': key_levels.get('prev_day_low'),
-                    'poc': vpvr.get('poc'),
-                    'hvn': vpvr.get('hvn'),
-                    'lvn': vpvr.get('lvn')
+                # Z점수 및 LPI 계산 (USD 노션널 기반, 60초 스케일)
+                z_long, z_short, lpi = self._calculate_z_and_lpi(bucket_data)
+                metrics.update({
+                    'z_long': z_long,
+                    'z_short': z_short,
+                    'lpi': lpi
                 })
-                opening_range_obj = results.get('opening_range')
-                opening_range = opening_range_obj.get_status()
-                                
-                vwap_obj = results.get('vwap').get_current_vwap()
-                vwap = vwap_obj.get('vwap')
-                vwap_std = vwap_obj.get('vwap_std')
-                
-                atr_obj = results.get('atr')
-                atr = atr_obj.get_status().get('current_atr')
-                
-                data_manager = get_data_manager()
-                data = data_manager.get_latest_data(count=200)
 
-                return self.analyze_all_strategies(
-                    price_data=data,
-                    key_levels=key_levels,
-                    opening_range=opening_range,
-                    vwap=vwap,
-                    vwap_std=vwap_std,
-                    atr=atr
-                    )
+                # 캐스케이드/쿨다운 체크
+                is_cascade = self._check_cascade_condition(bucket_data)
+                metrics['is_cascade'] = is_cascade
+                cooldown_info = self._check_cooldown_condition(metrics)
+                metrics['cooldown_info'] = cooldown_info
+                
+                print(f"🔍 버킷 분석: 이벤트 {len(bucket_data)}개, Z_L:{z_long:.2f}, Z_S:{z_short:.2f}, LPI:{lpi:.3f}, cascade={is_cascade}")
+                
+                # 🚫 고급청산전략 차단 조건 체크
+                if self._should_block_strategy(cooldown_info, z_long, z_short, lpi, is_cascade):
+                    print(f"🚫 고급청산전략 차단됨 - 차단 조건 충족")
+                    return None
 
-            except Exception as e:
-                print(f"❌ 버킷 분석 오류: {e}")
-                return None
+            # 내부에서 지표 데이터 가져오기 (1줄로 간소화)
+            results = self.global_manager.get_all_indicators()
+            
+            vpvr_obj = results.get('vpvr')
+            vpvr = vpvr_obj.get_status()
+
+            # 각 지표 객체에서 실제 데이터 가져오기
+            key_levels_obj = results.get('daily_levels')  # ✅ 'daily_levels'로 수정
+            key_levels = key_levels_obj.get_status()
+            key_levels.update({
+                'prev_day_high': key_levels.get('prev_day_high'),
+                'prev_day_low': key_levels.get('prev_day_low'),
+                'poc': vpvr.get('poc'),
+                'hvn': vpvr.get('hvn'),
+                'lvn': vpvr.get('lvn')
+            })
+            opening_range_obj = results.get('opening_range')
+            opening_range = opening_range_obj.get_status()
+                            
+            vwap_obj = results.get('vwap').get_status()
+            vwap = vwap_obj.get('vwap')
+            vwap_std = vwap_obj.get('vwap_std')
+            
+            atr_obj = results.get('atr')
+            atr = atr_obj.get_status().get('current_atr')
+            
+            data_manager = get_data_manager()
+            data = data_manager.get_latest_data(count=200)
+
+            return self.analyze_all_strategies(
+                price_data=data,
+                key_levels=key_levels,
+                opening_range=opening_range,
+                vwap=vwap,
+                vwap_std=vwap_std,
+                atr=atr
+                )
 
 
     def _calculate_bucket_metrics(self, bucket_data: List[Dict]) -> Dict[str, Any]:
@@ -2494,8 +2489,8 @@ class AdvancedLiquidationStrategy:
             print(f"   🚫 쿨다운 차단: {cooldown_info.get('reason', '알 수 없는 이유')}")
             return True
         
-        # 2. Z점수 설정값 미달 체크 (z_setup = 2.0)
-        z_setup = 2.0
+        # 2. Z점수 설정값 미달 체크 (z_setup = 1.0)
+        z_setup = 1.0
         max_z = max(z_long, z_short)
         if max_z < z_setup:
             print(f"   🚫 Z점수 부족: 최대 Z점수 {max_z:.2f} < 설정값 {z_setup}")

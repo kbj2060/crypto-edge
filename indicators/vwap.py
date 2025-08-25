@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone, timedelta
 import pytz
 
+from data.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 class SessionVWAP:
@@ -36,9 +37,9 @@ class SessionVWAP:
         self.last_session_name = None
         
         # 초기 데이터 자동 로딩
-        self._auto_load_initial_data()
+        self._initialize_vwap()
     
-    def _auto_load_initial_data(self):
+    def _initialize_vwap(self):
         """초기 데이터 자동 로딩"""
         print("🚀 VWAP 초기 데이터 자동 로딩 시작...")
         
@@ -57,9 +58,8 @@ class SessionVWAP:
     def _load_session_data(self):
         """세션 시작부터 현재까지 데이터 로딩"""
         try:
-            from data.binance_dataloader import BinanceDataLoader
             
-            dataloader = BinanceDataLoader()
+            data_manager = get_data_manager()
             session_config = self.time_manager.get_indicator_mode_config()
             session_start = session_config.get('session_start_time')
             
@@ -75,13 +75,13 @@ class SessionVWAP:
                 session_start = datetime.fromisoformat(session_start.replace('Z', '+00:00'))
             
             # 바이낸스에서 데이터 가져오기 (24시간)
-            df = dataloader.fetch_recent_3m(self.symbol, hours=24)  # 충분한 데이터
+            df = data_manager.get_data_range(session_start, current_time)  # 충분한 데이터
             
             if df is None or df.empty:
-                print("❌ 바이낸스 데이터 로드 실패")
+                print("❌ 세션 데이터 로드 실패")
                 return
             
-            print(f"✅ 바이낸스 데이터 로드 성공: {len(df)}개 캔들")
+            print(f"✅ 세션 데이터 로드 성공: {len(df)}개 캔들")
             print(f"📊 기간: {df.index[0]} ~ {df.index[-1]}")
             print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
             
@@ -100,9 +100,8 @@ class SessionVWAP:
     def _load_recent_data(self):
         """세션 외 시간용 데이터 로딩 - 이전 세션 종료 시점부터 현재까지"""
         try:
-            from data.binance_dataloader import BinanceDataLoader
             
-            dataloader = BinanceDataLoader()
+            data_manager = get_data_manager()
             
             # TimeManager를 사용하여 현재 시간을 UTC로 통일
             current_time_utc = self.time_manager.get_current_time()
@@ -112,24 +111,14 @@ class SessionVWAP:
             
             if previous_session_end:
                 print(f"📊 세션 외 시간: 이전 세션 종료 시점({self.time_manager.format_datetime(previous_session_end)})부터 현재({self.time_manager.format_datetime(current_time_utc)})까지 데이터 로딩")
-                
-                # 이전 세션 종료 시점부터 현재까지의 데이터 가져오기
-                df = dataloader.fetch_data(
-                    interval=3,
-                    symbol=self.symbol,
-                    start_time=previous_session_end,
-                    end_time=current_time_utc
-                )
-                
-            else:
-                print("📊 세션 외 시간: 최근 24시간 데이터 로딩 (이전 세션 정보 없음)")
-                df = dataloader.fetch_recent_3m(self.symbol, hours=24)
+                df = data_manager.get_data_range(previous_session_end, current_time_utc)
+
             
             if df is None or df.empty:
-                print("❌ 바이낸스 데이터 로드 실패")
+                print("❌ 세션 외 시간 데이터 로드 실패")
                 return
             
-            print(f"✅ 바이낸스 데이터 로드 성공: {len(df)}개 캔들")
+            print(f"✅ 세션 외 시간 데이터 로드 성공: {len(df)}개 캔들")
             print(f"📊 기간: {self.time_manager.format_datetime(df.index[0])} ~ {self.time_manager.format_datetime(df.index[-1])}")
             print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
             
@@ -195,38 +184,38 @@ class SessionVWAP:
         except Exception as e:
             print(f"❌ 세션 VWAP 계산 오류: {e}")
 
-    def update_with_dataframe(self, df: pd.DataFrame):
-        """DataFrame으로 VWAP 일괄 업데이트"""
-        try:
-            if df is None or df.empty:
-                return
+    # def update_with_dataframe(self, df: pd.DataFrame):
+    #     """DataFrame으로 VWAP 일괄 업데이트"""
+    #     try:
+    #         if df is None or df.empty:
+    #             return
             
-            print(f"📊 VWAP DataFrame 일괄 업데이트: {len(df)}개 캔들")
+    #         print(f"📊 VWAP DataFrame 일괄 업데이트: {len(df)}개 캔들")
             
-            # 각 캔들을 순차적으로 처리
-            for timestamp, row in df.iterrows():
-                candle_data = {
-                    'timestamp': timestamp,
-                    'open': float(row['open']),
-                    'high': float(row['high']),
-                    'low': float(row['low']),
-                    'close': float(row['close']),
-                    'volume': float(row['volume'])
-                }
+    #         # 각 캔들을 순차적으로 처리
+    #         for timestamp, row in df.iterrows():
+    #             candle_data = {
+    #                 'timestamp': timestamp,
+    #                 'open': float(row['open']),
+    #                 'high': float(row['high']),
+    #                 'low': float(row['low']),
+    #                 'close': float(row['close']),
+    #                 'volume': float(row['volume'])
+    #             }
                 
-                self.session_data.append(candle_data)
-                self.processed_candle_count += 1
+    #             self.session_data.append(candle_data)
+    #             self.processed_candle_count += 1
             
-            # VWAP 계산 (조용하게)
-            if self.session_data:
-                df_session = pd.DataFrame(self.session_data)
-                df_session.set_index('timestamp', inplace=True)  # timestamp를 인덱스로 설정
-                self._calculate_session_vwap(df_session)
+    #         # VWAP 계산 (조용하게)
+    #         if self.session_data:
+    #             df_session = pd.DataFrame(self.session_data)
+    #             df_session.set_index('timestamp', inplace=True)  # timestamp를 인덱스로 설정
+    #             self._calculate_session_vwap(df_session)
             
-            print(f"✅ VWAP DataFrame 업데이트 완료: {len(df)}개 캔들 처리됨")
+    #         print(f"✅ VWAP DataFrame 업데이트 완료: {len(df)}개 캔들 처리됨")
             
-        except Exception as e:
-            print(f"❌ VWAP DataFrame 업데이트 오류: {e}")
+    #     except Exception as e:
+    #         print(f"❌ VWAP DataFrame 업데이트 오류: {e}")
 
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 VWAP 업데이트"""
@@ -236,17 +225,9 @@ class SessionVWAP:
             
             if session_config['use_session_mode']:
                 print("🔄 세션 진행 중 - 세션 VWAP 업데이트")
-                self._update_session_vwap(candle_data, session_config)
             else:
                 print("🔄 세션 외 시간 - 세션 외 VWAP 업데이트")
-                self._update_outside_session_vwap(candle_data, session_config)
-                
-        except Exception as e:
-            print(f"❌ VWAP 업데이트 오류: {e}")
-    
-    def _update_session_vwap(self, candle_data: Dict[str, Any], session_config: Dict[str, Any]):
-        """세션 VWAP 업데이트"""
-        try:
+            
             # 세션 변경 확인 및 리셋
             self._check_session_reset(session_config)
             
@@ -258,7 +239,7 @@ class SessionVWAP:
             current_time_utc = datetime.now(timezone.utc)
             
             print(f"   📊 세션 데이터 누적: {len(self.session_data)}개 캔들")
-            print(f"      ⏰ 현재 시간: {current_time_utc.strftime('%Y-%m-%d %H:%M UTC')}")
+            print(f"   ⏰ 현재 시간: {current_time_utc.strftime('%Y-%m-%d %H:%M UTC')}")
             
             # VWAP 재계산
             df = pd.DataFrame(self.session_data)
@@ -267,13 +248,10 @@ class SessionVWAP:
             # 세션 정보 출력
             elapsed_minutes = session_config.get('elapsed_minutes', 0)
             print(f"   📊 세션 VWAP 업데이트 완료 - 거래량: {candle_data.get('volume', 0):.2f}, 가격: ${candle_data.get('close', 0):.2f}")
-            print(f"   ⏱️  세션 진행 시간: {elapsed_minutes:.1f}분")
             print(f"   📊 누적 데이터: {len(self.session_data)}개 캔들")
-        
+
         except Exception as e:
-            print(f"❌ 세션 VWAP 업데이트 오류: {e}")
-            import traceback
-            traceback.print_exc()
+            print(f"❌ VWAP 업데이트 오류: {e}")
     
     def _check_session_reset(self, session_config: Dict[str, Any]):
         """세션 변경 시 VWAP 리셋 확인"""
@@ -291,39 +269,6 @@ class SessionVWAP:
             
         except Exception as e:
             print(f"❌ 세션 리셋 확인 오류: {e}")
-    
-    def _update_outside_session_vwap(self, candle_data: Dict[str, Any], session_config: Dict[str, Any]):
-        """세션 외 시간 VWAP 업데이트"""
-        try:
-            # 세션 변경 확인 및 리셋
-            self._check_session_reset(session_config)
-            
-            # 새로운 캔들 추가
-            self.session_data.append(candle_data)
-            self.processed_candle_count += 1
-            
-            # 초기 로딩된 데이터 수와 실시간 추가된 캔들 수 구분
-            initial_data_count = getattr(self, 'initial_data_count', len(self.session_data))
-            realtime_added_count = self.processed_candle_count - initial_data_count
-            
-            # TimeManager를 사용하여 현재 시간을 UTC로 통일
-            current_time_utc = self.time_manager.get_current_time()
-            
-            print(f"   📊 세션 외 데이터 누적: {len(self.session_data)}개 캔들")
-            print(f"      📊 초기 로딩: {initial_data_count}개, 실시간 추가: {realtime_added_count}개")
-            print(f"      ⏰ 현재 시간: {self.time_manager.format_datetime(current_time_utc)}")
-            
-            # VWAP 재계산
-            df = pd.DataFrame(self.session_data)
-            self._calculate_session_vwap(df)
-            
-            print(f"   📊 세션 외 VWAP 업데이트 완료 - 거래량: {candle_data.get('volume', 0):.2f}, 가격: ${candle_data.get('close', 0):.2f}")
-            print(f"   📊 누적 데이터: {len(self.session_data)}개 캔들")
-            
-        except Exception as e:
-            print(f"❌ 세션 외 VWAP 업데이트 오류: {e}")
-            import traceback
-            traceback.print_exc()
     
     def _update_vwap_result(self):
         """VWAP 결과 업데이트"""
@@ -356,42 +301,9 @@ class SessionVWAP:
         except Exception as e:
             print(f"❌ VWAP 결과 업데이트 오류: {e}")
     
-    def get_current_vwap(self) -> Dict[str, Any]:
+    def get_status(self) -> Dict[str, Any]:
         """현재 VWAP 결과 반환"""
         return self.cached_result
-    
-    def get_vwap_status(self) -> Dict[str, Any]:
-        """VWAP 상태 정보 반환"""
-        try:
-            session_config = self.time_manager.get_indicator_mode_config()
-            
-            status = {
-                "symbol": self.symbol,
-                "current_vwap": self.current_vwap,
-                "current_vwap_std": self.current_vwap_std,
-                "data_count": self.processed_candle_count,
-                "last_update": self.last_update_time.isoformat() if self.last_update_time else None,
-                "session_status": session_config.get('session_status', 'UNKNOWN')
-            }
-            
-            if session_config['use_session_mode']:
-                status.update({
-                    "session_name": session_config.get('session_name'),
-                    "session_start": session_config.get('session_start_time').isoformat() if session_config.get('session_start_time') else None,
-                    "elapsed_minutes": session_config.get('elapsed_minutes', 0),
-                    "mode": "session"
-                })
-            else:
-                status.update({
-                    "mode": "outside_session",
-                    "status": "세션 외 시간 VWAP 계산 중"
-                })
-            
-            return status
-        
-        except Exception as e:
-            print(f"❌ VWAP 상태 조회 오류: {e}")
-            return {"error": str(e)}
     
     def reset_session(self):
         """세션 데이터 초기화"""
@@ -402,4 +314,4 @@ class SessionVWAP:
         self.current_vwap_std = 0.0
         self.cached_result = {}
         self.last_update_time = None
-        print("�� VWAP 세션 초기화 완료")
+        print("📊 VWAP 세션 초기화 완료")

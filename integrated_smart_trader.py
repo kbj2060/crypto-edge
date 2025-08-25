@@ -14,6 +14,7 @@ from core.trader_core import TraderCore
 
 from config.integrated_config import IntegratedConfig
 from data.data_manager import get_data_manager
+from indicators.global_indicators import get_global_indicator_manager
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -24,7 +25,8 @@ class IntegratedSmartTrader:
         
         # 핵심 컴포넌트 초기화
         self.core = TraderCore(config)
-                
+        self.global_manager = get_global_indicator_manager()
+        
         # 상태 관리
         self.running = False
         self.last_analysis_time = None
@@ -317,51 +319,51 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
     
-    def _handle_3m_kline_close(self, data: Dict):
-        """3분봉 마감 이벤트 처리"""
-        try:
-            if self._is_or_completed(self.core.time_manager.get_current_time()):
-                print(f"\n⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감! 세션 전략 분석 시작")
+    # def _handle_3m_kline_close(self, data: Dict):
+    #     """3분봉 마감 이벤트 처리"""
+    #     try:
+    #         if self._is_or_completed(self.core.time_manager.get_current_time()):
+    #             print(f"\n⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감! 세션 전략 분석 시작")
                 
-                session_signal = self._analyze_session_strategy()
-                if session_signal:
-                    self._print_session_signal(session_signal, data['timestamp'])
+    #             session_signal = self._analyze_session_strategy()
+    #             if session_signal:
+    #                 self._print_session_signal(session_signal, data['timestamp'])
                 
-                print(f"✅ {data['timestamp'].strftime('%H:%M')} - 세션 전략 분석 완료")
-            else:
-                print(f"⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감 (OR 미완성, 세션 전략 스킵)")
+    #             print(f"✅ {data['timestamp'].strftime('%H:%M')} - 세션 전략 분석 완료")
+    #         else:
+    #             print(f"⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감 (OR 미완성, 세션 전략 스킵)")
                 
-        except Exception as e:
-            print(f"❌ 3분봉 마감 이벤트 처리 오류: {e}")
-            import traceback
-            traceback.print_exc()
+    #     except Exception as e:
+    #         print(f"❌ 3분봉 마감 이벤트 처리 오류: {e}")
+    #         import traceback
+    #         traceback.print_exc()
     
-    def _is_or_completed(self, now: datetime.datetime) -> bool:
-        """세션 윈도우(2시간) 제한 + 세션 오픈 후 30분 신호 차단"""
-        try:
-            # 뉴욕 시장 오픈 시간 (UTC 13:30, KST 22:30)
-            ny_open_utc = now.replace(hour=13, minute=30, second=0, microsecond=0)
+    # def _is_or_completed(self, now: datetime.datetime) -> bool:
+    #     """세션 윈도우(2시간) 제한 + 세션 오픈 후 30분 신호 차단"""
+    #     try:
+    #         # 뉴욕 시장 오픈 시간 (UTC 13:30, KST 22:30)
+    #         ny_open_utc = now.replace(hour=13, minute=30, second=0, microsecond=0)
             
-            # 유럽 시장 오픈+확장 시간 (UTC 07:00, KST 16:00)
-            eu_open_utc = now.replace(hour=7, minute=0, second=0, microsecond=0)
+    #         # 유럽 시장 오픈+확장 시간 (UTC 07:00, KST 16:00)
+    #         eu_open_utc = now.replace(hour=7, minute=0, second=0, microsecond=0)
             
-            # 현재 시간이 뉴욕 오픈 후 30분이 지났는지 체크 (세션 윈도우 2시간 제한)
-            if now >= ny_open_utc:
-                time_since_open = now - ny_open_utc
-                if 1800 <= time_since_open.total_seconds() <= 9000:  # 30분 ~ 2시간 30분 (2시간 윈도우)
-                    return True
+    #         # 현재 시간이 뉴욕 오픈 후 30분이 지났는지 체크 (세션 윈도우 2시간 제한)
+    #         if now >= ny_open_utc:
+    #             time_since_open = now - ny_open_utc
+    #             if 1800 <= time_since_open.total_seconds() <= 9000:  # 30분 ~ 2시간 30분 (2시간 윈도우)
+    #                 return True
             
-            # 현재 시간이 유럽 오픈 후 30분이 지났는지 체크 (세션 윈도우 2시간 제한)
-            if now >= eu_open_utc:
-                time_since_open = now - eu_open_utc
-                if 1800 <= time_since_open.total_seconds() <= 9000:  # 30분 ~ 2시간 30분 (2시간 윈도우)
-                    return True
+    #         # 현재 시간이 유럽 오픈 후 30분이 지났는지 체크 (세션 윈도우 2시간 제한)
+    #         if now >= eu_open_utc:
+    #             time_since_open = now - eu_open_utc
+    #             if 1800 <= time_since_open.total_seconds() <= 9000:  # 30분 ~ 2시간 30분 (2시간 윈도우)
+    #                 return True
             
-            return False
+    #         return False
             
-        except Exception as e:
-            print(f"❌ OR 완성 체크 오류: {e}")
-            return False
+    #     except Exception as e:
+    #         print(f"❌ OR 완성 체크 오류: {e}")
+    #         return False
     
     """_summary_
     바이낸스 청산 이벤트 형식
@@ -398,72 +400,72 @@ class IntegratedSmartTrader:
         except Exception as e:
             print(f"❌ 고급 청산 이벤트 처리 오류: {e}")
     
-    def _analyze_session_strategy(self) -> Optional[Dict]:
-        """세션 기반 전략 분석"""
-        try:
-            if not self.config.enable_session_strategy:
-                return None
+    # def _analyze_session_strategy(self) -> Optional[Dict]:
+    #     """세션 기반 전략 분석"""
+    #     try:
+    #         if not self.config.enable_session_strategy:
+    #             return None
             
-            # 3분봉 데이터 로드
-            data_manager = get_data_manager()
-            df_3m = data_manager.get_dataframe()
+    #         # 3분봉 데이터 로드
+    #         data_manager = get_data_manager()
+    #         df_3m = data_manager.get_dataframe()
             
             
-            if df_3m.empty:
-                return None
+    #         if df_3m.empty:
+    #             return None
             
-            # 키 레벨 계산
-            key_levels = self._calculate_session_key_levels(df_3m)
+    #         # 키 레벨 계산
+    #         key_levels = self.global_manager.get_indicator('daily_levels').get_status()
             
-            # 현재 시간 (UTC)
-            current_time = datetime.datetime.now(datetime.timezone.utc)
+    #         # 현재 시간 (UTC)
+    #         current_time = datetime.datetime.now(datetime.timezone.utc)
             
-            # 세션 전략 분석
-            from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
-            session_config = SessionConfig()
-            session_strategy = SessionBasedStrategy(session_config)
+    #         # 세션 전략 분석
+    #         from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
+    #         session_config = SessionConfig()
+    #         session_strategy = SessionBasedStrategy(session_config)
             
-            return session_strategy.analyze_session_strategy(
-                df_3m, key_levels, current_time
-            )
+    #         return session_strategy.analyze_session_strategy(
+    #             df_3m, key_levels, current_time
+    #         )
             
-        except Exception as e:
-            print(f"❌ 세션 전략 분석 오류: {e}")
-            return None
+    #     except Exception as e:
+    #         print(f"❌ 세션 전략 분석 오류: {e}")
+    #         return None
     
-    def _calculate_session_key_levels(self, df) -> Dict[str, float]:
-        """세션 전략용 키 레벨 계산"""
-        try:
-            if df.empty:
-                return {}
+    # def _calculate_session_key_levels(self, df) -> Dict[str, float]:
+    #     """세션 전략용 키 레벨 계산"""
+    #     try:
+    #         if df.empty:
+    #             return {}
             
-            # 전일 고가/저가/종가
-            daily_data = df.resample('D').agg({
-                'high': 'max',
-                'low': 'min',
-                'close': 'last'
-            }).dropna()
+    #         # 전일 고가/저가/종가
+    #         daily_data = df.resample('D').agg({
+    #             'high': 'max',
+    #             'low': 'min',
+    #             'close': 'last'
+    #         }).dropna()
             
-            if len(daily_data) < 2:
-                return {}
+    #         if len(daily_data) < 2:
+    #             return {}
             
-            prev_day = daily_data.iloc[-2]
+    #         prev_day = daily_data.iloc[-2]
             
-            # 최근 스윙 고점/저점 (20봉 기준)
-            lookback = min(20, len(df))
-            recent_data = df.tail(lookback)
+    #         # 최근 스윙 고점/저점 (20봉 기준)
+    #         lookback = min(20, len(df))
+    #         recent_data = df.tail(lookback)
             
-            return {
-                'prev_day_high': prev_day['high'],
-                'prev_day_low': prev_day['low'],
-                'prev_day_close': prev_day['close'],
-                'last_swing_high': recent_data['high'].max(),
-                'last_swing_low': recent_data['low'].min()
-            }
+    #         return {
+    #             'prev_day_high': prev_day['high'],
+    #             'prev_day_low': prev_day['low'],
+    #             'prev_day_close': prev_day['close'],
+    #             'last_swing_high': recent_data['high'].max(),
+    #             'last_swing_low': recent_data['low'].min()
+    #         }
             
-        except Exception as e:
-            print(f"❌ 세션 키 레벨 계산 오류: {e}")
-            return {}
+    #     except Exception as e:
+    #         print(f"❌ 세션 키 레벨 계산 오류: {e}")
+    #         return {}
     
     # def _analyze_advanced_liquidation_strategy(self) -> Optional[Dict]:
     #     """고급 청산 전략 분석"""
@@ -500,74 +502,74 @@ class IntegratedSmartTrader:
     #         traceback.print_exc()
     #         return None
     
-    def _calculate_opening_range(self, df) -> Dict[str, float]:
-        """오프닝 레인지 계산"""
-        try:
-            if df.empty:
-                return {}
+    # def _calculate_opening_range(self, df) -> Dict[str, float]:
+    #     """오프닝 레인지 계산"""
+    #     try:
+    #         if df.empty:
+    #             return {}
             
-            or_minutes = 15
-            if len(df) < or_minutes:
-                return {}
+    #         or_minutes = 15
+    #         if len(df) < or_minutes:
+    #             return {}
             
-            or_data = df.head(or_minutes)
+    #         or_data = df.head(or_minutes)
             
-            return {
-                'high': or_data['high'].max(),
-                'low': or_data['low'].min(),
-                'center': (or_data['high'].max() + or_data['low'].min()) / 2,
-                'range': or_data['high'].max() - or_data['low'].min()
-            }
+    #         return {
+    #             'high': or_data['high'].max(),
+    #             'low': or_data['low'].min(),
+    #             'center': (or_data['high'].max() + or_data['low'].min()) / 2,
+    #             'range': or_data['high'].max() - or_data['low'].min()
+    #         }
             
-        except Exception as e:
-            print(f"❌ 오프닝 레인지 계산 오류: {e}")
-            return {}
+    #     except Exception as e:
+    #         print(f"❌ 오프닝 레인지 계산 오류: {e}")
+    #         return {}
     
-    def _calculate_vwap_and_std(self, df) -> tuple[float, float]:
-        """VWAP 및 표준편차 계산"""
-        try:
-            if df.empty:
-                return 0.0, 0.0
+    # def _calculate_vwap_and_std(self, df) -> tuple[float, float]:
+    #     """VWAP 및 표준편차 계산"""
+    #     try:
+    #         if df.empty:
+    #             return 0.0, 0.0
             
-            # 가격과 거래량으로 VWAP 계산
-            vwap = sum(df['close'] * df['volume']) / sum(df['volume']) if sum(df['volume']) > 0 else 0
+    #         # 가격과 거래량으로 VWAP 계산
+    #         vwap = sum(df['close'] * df['volume']) / sum(df['volume']) if sum(df['volume']) > 0 else 0
             
-            # 표준편차 계산
-            mean_price = df['close'].mean()
-            std = (sum((df['close'] - mean_price) ** 2) / len(df)) ** 0.5
+    #         # 표준편차 계산
+    #         mean_price = df['close'].mean()
+    #         std = (sum((df['close'] - mean_price) ** 2) / len(df)) ** 0.5
             
-            return vwap, std
+    #         return vwap, std
             
-        except Exception as e:
-            print(f"❌ VWAP 및 표준편차 계산 오류: {e}")
-            return 0.0, 0.0
+    #     except Exception as e:
+    #         print(f"❌ VWAP 및 표준편차 계산 오류: {e}")
+    #         return 0.0, 0.0
     
     
-    def _print_advanced_liquidation_signal(self, signal: Dict, now: datetime.datetime):
-        """고급 청산 신호 출력"""
-        try:
-            if signal is None:
-                signal = {}
+    # def _print_advanced_liquidation_signal(self, signal: Dict, now: datetime.datetime):
+    #     """고급 청산 신호 출력"""
+    #     try:
+    #         if signal is None:
+    #             signal = {}
             
-            action = signal.get('action', 'NEUTRAL')
-            playbook = signal.get('playbook', 'NO_SIGNAL')
-            tier = signal.get('tier', 'NEUTRAL')
-            total_score = signal.get('total_score', 0.000)
-            reason = signal.get('reason', '모든 전략에서 신호 없음')
+    #         action = signal.get('action', 'NEUTRAL')
+    #         playbook = signal.get('playbook', 'NO_SIGNAL')
+    #         tier = signal.get('tier', 'NEUTRAL')
+    #         total_score = signal.get('total_score', 0.000)
+    #         reason = signal.get('reason', '모든 전략에서 신호 없음')
             
-            print(f"\n{'='*50}")
-            print(f"⚡ 고급 청산 전략 신호 감지!")
-            print(f"{'='*50}")
-            print(f"⏰ 시간: {now.strftime('%H:%M:%S')}")
-            print(f"🎯 액션: {action}")
-            print(f"📚 플레이북: {playbook}")
-            print(f"🏆 등급: {tier}")
-            print(f"📊 총점: {total_score:.3f}")
-            print(f"📝 이유: {reason}")
-            print(f"{'='*50}\n")
+    #         print(f"\n{'='*50}")
+    #         print(f"⚡ 고급 청산 전략 신호 감지!")
+    #         print(f"{'='*50}")
+    #         print(f"⏰ 시간: {now.strftime('%H:%M:%S')}")
+    #         print(f"🎯 액션: {action}")
+    #         print(f"📚 플레이북: {playbook}")
+    #         print(f"🏆 등급: {tier}")
+    #         print(f"📊 총점: {total_score:.3f}")
+    #         print(f"📝 이유: {reason}")
+    #         print(f"{'='*50}\n")
             
-        except Exception as e:
-            print(f"❌ 고급 청산 신호 출력 오류: {e}")
+    #     except Exception as e:
+    #         print(f"❌ 고급 청산 신호 출력 오류: {e}")
     
     def start(self):
         """트레이더 시작"""

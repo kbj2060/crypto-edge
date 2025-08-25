@@ -98,24 +98,15 @@ class BinanceWebSocket:
         """1분봉 Kline 스트림 연결"""
         uri = f"{self.ws_url}/{self.symbol}@kline_1m"
         
-        try:
-            async with websockets.connect(uri) as websocket:
-                self.logger.info(f"1분봉 Kline 스트림 연결됨: {self.symbol}")
+        async with websockets.connect(uri) as websocket:
+            self.logger.info(f"1분봉 Kline 스트림 연결됨: {self.symbol}")
+            
+            async for message in websocket:
+                if not self.running:
+                    break
                 
-                async for message in websocket:
-                    if not self.running:
-                        break
-                    
-                    try:
-                        data = json.loads(message)
-                        await self.process_kline_1m(data)
-                    except json.JSONDecodeError as e:
-                        self.logger.error(f"JSON 파싱 오류: {e}")
-                    except Exception as e:
-                        self.logger.error(f"Kline 데이터 처리 오류: {e}")
-                        
-        except Exception as e:
-            self.logger.error(f"1분봉 Kline 스트림 연결 오류: {e}")
+                data = json.loads(message)
+                await self.process_kline_1m(data)
     
     '''
     웹소켓 청산 데이터 처리
@@ -190,7 +181,7 @@ class BinanceWebSocket:
         
         # 청산 전략 실행 (매 1분마다)
         if self.advanced_liquidation_strategy:
-            await self._execute_liquidation_strategy(kline)
+            await self._execute_liquidation_strategy()
         
         # 세션 전략 실행 (3분마다)
         if self.minute_counter % 3 == 0:
@@ -232,46 +223,31 @@ class BinanceWebSocket:
         except Exception as e:
             self.logger.error(f"1분봉 데이터 임시 저장 오류: {e}")
     
-    # def _add_3min_to_data_manager(self, df_3m: pd.DataFrame):
-    #     """3분봉 데이터를 DataManager에 추가"""
-    #     try:
-    #         data_manager = self.global_manager.get_data_manager()
-    #         if data_manager and data_manager.is_ready():
-    #             # 3분봉 데이터를 DataManager에 추가
-    #             candle_data:pd.DataFrame = df_3m.iloc[[0]]
-    #             print(candle_data, type(candle_data))
-    #             data_manager.update_with_candle(candle_data)
-    #     except Exception as e:
-    #         self.logger.error(f"DataManager 3분봉 업데이트 오류: {e}")
-    
-    async def _execute_liquidation_strategy(self, kline: Dict):
+    async def _execute_liquidation_strategy(self):
         """청산 전략 실행"""
-        try:
-            print(f"🎯 청산 전략 실행 시작... (버킷 크기: {len(self.liquidation_bucket)})")
+        print(f"🎯 청산 전략 실행 시작... (버킷 크기: {len(self.liquidation_bucket)})")
+        
+        # 청산 전략 분석
+        signal = self.advanced_liquidation_strategy.analyze_bucket_liquidations(self.liquidation_bucket)
+        
+        if signal:
+            print(f"⚡ 청산 신호 감지: {signal.get('action', 'UNKNOWN')} - {signal.get('tier', 'UNKNOWN')}")
+        else:
+            print(f"📊 청산 신호 없음")
+        
+        # 버킷 초기화
+        self.liquidation_bucket = []
+        self.bucket_start_time = self.time_manager.get_current_time()
+        print(f"🔄 청산 버킷 초기화 완료")
             
-            # 청산 전략 분석
-            signal = self.advanced_liquidation_strategy.analyze_bucket_liquidations(self.liquidation_bucket)
-            
-            if signal:
-                print(f"⚡ 청산 신호 감지: {signal.get('action', 'UNKNOWN')} - {signal.get('tier', 'UNKNOWN')}")
-            else:
-                print(f"📊 청산 신호 없음")
-            
-            # 버킷 초기화
-            self.liquidation_bucket = []
-            self.bucket_start_time = self.time_manager.get_current_time()
-            print(f"🔄 청산 버킷 초기화 완료")
-            
-        except Exception as e:
-            self.logger.error(f"청산 전략 실행 오류: {e}")
     
     async def _execute_session_strategy(self, df_3m: pd.DataFrame):
         """세션 전략 실행"""
         if not self.session_strategy:
             return
-        
+        print(df_3m)
         # 글로벌 지표 업데이트
-        self.global_manager.update_all_indicators(df_3m.iloc[0])
+        self.global_manager.update_all_indicators(df_3m.reset_index().iloc[0])
         
         # 전략 분석에 필요한 데이터 수집
         strategy_data = self._collect_strategy_data()
@@ -292,21 +268,16 @@ class BinanceWebSocket:
                 return None
             
             recent_3_candles = self._recent_1min_data[-3:]
-            
+            print(recent_3_candles)
             # 3분봉 데이터 생성 (OHLCV)
-            three_min_data = {
-                'timestamp': recent_3_candles[-1]['timestamp'],
+            df_3m = pd.DataFrame([{
                 'open': float(recent_3_candles[0]['open']),
                 'high': max(float(candle['high']) for candle in recent_3_candles),
                 'low': min(float(candle['low']) for candle in recent_3_candles),
                 'close': float(recent_3_candles[-1]['close']),
                 'volume': sum(float(candle['volume']) for candle in recent_3_candles),
                 'quote_volume': sum(float(candle['quote_volume']) for candle in recent_3_candles)
-            }
-            
-            # DataFrame 생성 및 timezone 설정
-            df_3m = pd.DataFrame([three_min_data])
-            df_3m.set_index('timestamp', inplace=True)
+            }], index=[recent_3_candles[-1]['timestamp']])
             
             return df_3m
             

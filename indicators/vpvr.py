@@ -11,7 +11,7 @@ Volume Profile Visible Range (VPVR) 지표 모듈
 import numpy as np
 import pandas as pd
 from typing import Dict, Optional, List, Any
-from datetime import datetime, timedelta, timezone
+import datetime as dt
 from utils.time_manager import get_time_manager
 from data.data_manager import get_data_manager
 from indicators.atr import ATR3M
@@ -60,25 +60,23 @@ class SessionVPVR:
     
     def _initialize_vpvr(self):
         """초기화 시 자동으로 적절한 데이터 로딩"""
-        try:
-            print("🚀 VPVR 초기 데이터 자동 로딩 시작...")
-            
-            session_config = self.time_manager.get_indicator_mode_config()
-            
-            if session_config['use_session_mode']:
-                print(f"📊 세션 모드: {session_config['session_name']} 세션 시작부터 현재까지 데이터 로딩")
-                self._load_session_data(session_config)
-                self._update_vpvr_result(session_config)
-            else:
-                print(f"📊 룩백 모드: 최근 {self.lookback}개 3분봉 데이터 로딩")
-                self._load_lookback_data()
-                self._update_vpvr_result()
+        print("🚀 VPVR 초기 데이터 자동 로딩 시작...")
+        
+        session_config = self.time_manager.get_indicator_mode_config()
+        
+        if session_config['use_session_mode']:
+            print(f"📊 세션 모드: {session_config['session_name']} 세션 시작부터 현재까지 데이터 로딩")
+            self._load_session_data(session_config)
+            self._update_vpvr_result(session_config)
+        else:
+            print(f"📊 룩백 모드: 최근 {self.lookback}개 3분봉 데이터 로딩")
+            self._load_lookback_data()
+            self._update_vpvr_result()
 
-            self.last_update_time = datetime.now(timezone.utc)   
-            print("✅ VPVR 초기 데이터 로딩 완료")
+        self.last_update_time = dt.datetime.now(dt.timezone.utc)
+        self.last_session_name = session_config.get('session_name', 'UNKNOWN')
+        print("✅ VPVR 초기 데이터 로딩 완료")
             
-        except Exception as e:
-            print(f"❌ VPVR 초기 데이터 로딩 오류: {e}")
     
     def _load_session_data(self, session_config: Dict[str, any]):
         """세션 시작부터 현재까지의 데이터 로딩"""
@@ -92,10 +90,10 @@ class SessionVPVR:
             
             # 세션 시작 시간을 datetime 객체로 변환
             if isinstance(session_start, str):
-                session_start = datetime.fromisoformat(session_start.replace('Z', '+00:00'))
+                session_start = dt.datetime.fromisoformat(session_start.replace('Z', '+00:00'))
             
             # 세션 시작 이후 데이터만 필터링
-            df = data_manager.get_data_range(session_start, datetime.now(timezone.utc))
+            df = data_manager.get_data_range(session_start, dt.datetime.now(dt.timezone.utc))
             
             if df.empty:
                 print("⚠️ 세션 시작 이후 데이터가 없습니다")
@@ -120,35 +118,32 @@ class SessionVPVR:
     
     def _load_lookback_data(self):
         """lookback 기간만큼 과거부터 현재까지 데이터 로딩"""
-        try:
-            # lookback 기간만큼 충분한 데이터 확보
-            hours_needed = 5
-            data_manager = get_data_manager()
-            df = data_manager.get_data_range(
-                datetime.now(timezone.utc) - timedelta(hours=hours_needed),
-                datetime.now(timezone.utc)
-                )
+        # lookback 기간만큼 충분한 데이터 확보
+        hours_needed = 5
+        data_manager = get_data_manager()
+        df = data_manager.get_data_range(
+            dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_needed),
+            dt.datetime.now(dt.timezone.utc)
+            )
+        
+        # lookback 기간만큼만 사용 (최신 데이터부터)
+        if len(df) > self.lookback: 
+            df = df.tail(self.lookback)
+        
+        print(f"📊 룩백 데이터 로드: {len(df)}개 캔들 (요청: {self.lookback}개)")
+        
+        # VPVR에 데이터 직접 누적
+        for timestamp, row in df.iterrows():
+            self._process_candle_data(row, timestamp)
+        
+        # 처리된 캔들 개수 저장 및 VPVR 결과 업데이트
+        self.processed_candle_count = len(df)
+        
+        print(f"✅ 룩백 데이터 VPVR 업데이트 완료: {len(df)}개 캔들")
+        print(f"   📊 활성 가격 구간: {len(self.price_bins)}개")
+        print(f"   📊 총 거래량: {sum(self.volume_histogram.values()):.2f}")
+        print(f"   📊 처리된 캔들: {self.processed_candle_count}개")
             
-            # lookback 기간만큼만 사용 (최신 데이터부터)
-            if len(df) > self.lookback:
-                df = df.tail(self.lookback)
-            
-            print(f"📊 룩백 데이터 로드: {len(df)}개 캔들 (요청: {self.lookback}개)")
-            
-            # VPVR에 데이터 직접 누적
-            for timestamp, row in df.iterrows():
-                self._process_candle_data(row, timestamp)
-            
-            # 처리된 캔들 개수 저장 및 VPVR 결과 업데이트
-            self.processed_candle_count = len(df)
-            
-            print(f"✅ 룩백 데이터 VPVR 업데이트 완료: {len(df)}개 캔들")
-            print(f"   📊 활성 가격 구간: {len(self.price_bins)}개")
-            print(f"   📊 총 거래량: {sum(self.volume_histogram.values()):.2f}")
-            print(f"   📊 처리된 캔들: {self.processed_candle_count}개")
-            
-        except Exception as e:
-            print(f"❌ 룩백 데이터 로딩 오류: {e}")
 
     def _update_vpvr_result(self, session_config: Dict[str, any] = None):
         """현재 누적된 데이터로 VPVR 결과 업데이트"""
@@ -215,68 +210,66 @@ class SessionVPVR:
 
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들 데이터로 VPVR 업데이트"""
-        try:
-            if candle_data.empty:
-                return
-                
-            # 데이터프레임에서 마지막 행 추출
-            last_row = candle_data.iloc[-1]
+        session_config = self.time_manager.get_indicator_mode_config()
+        self._check_session_reset(session_config)
 
-            # ATR 업데이트
-            self.atr.update_with_candle(candle_data)
+        # ATR 업데이트
+        self.atr.update_with_candle(candle_data)
+        
+        # 가격 bin에 거래량 누적
+        close_price = float(candle_data['close'])
+        quote_volume = float(candle_data['quote_volume'])
+        
+        bin_key = self._get_price_bin_key(close_price)
+        
+        if bin_key not in self.volume_histogram:
+            self.volume_histogram[bin_key] = 0
+            self.price_bins[bin_key] = close_price
+        
+        self.volume_histogram[bin_key] += quote_volume
+        
+        # 처리된 캔들 개수 증가
+        self.processed_candle_count += 1
+        
+        # VPVR 결과 업데이트
+        self._update_vpvr_result()
+        
+        # 마지막 업데이트 시간 갱신
+        self.last_update_time = dt.datetime.now(dt.timezone.utc)
+
+    def _check_session_reset(self, session_config: Dict[str, Any]):
+        """세션 변경 시 VWAP 리셋 확인"""
+        try:
+            current_session = session_config.get('session_name', 'UNKNOWN')
             
-            # 가격 bin에 거래량 누적
-            close_price = float(last_row['close'])
-            quote_volume = float(last_row['quote_volume'])
+            # 이전 세션과 다른 경우 리셋
+            if hasattr(self, 'last_session_name') and self.last_session_name != current_session:
+                print(f"🔄 세션 변경 감지: {self.last_session_name} → {current_session}")
+                print("🔄 VWAP 세션 데이터 리셋")
+                self.reset_session()
             
-            bin_key = self._get_price_bin_key(close_price)
-            
-            if bin_key not in self.volume_histogram:
-                self.volume_histogram[bin_key] = 0
-                self.price_bins[bin_key] = close_price
-            
-            self.volume_histogram[bin_key] += quote_volume
-            
-            # 처리된 캔들 개수 증가
-            self.processed_candle_count += 1
-            
-            # VPVR 결과 업데이트
-            self._update_vpvr_result()
-            
-            # 마지막 업데이트 시간 갱신
-            self.last_update_time = datetime.now(timezone.utc)
+            # 현재 세션 이름 저장
+            self.last_session_name = current_session
             
         except Exception as e:
-            print(f"❌ VPVR 캔들 업데이트 오류: {e}")
+            print(f"❌ 세션 리셋 확인 오류: {e}")
 
-    def _process_candle_data(self, row: pd.Series, timestamp: datetime):
+    def _process_candle_data(self, row: pd.Series, timestamp):
         """캔들 데이터 처리 및 VPVR 업데이트"""
-        try:
-            close_price = float(row['close'])
-            quote_volume = float(row['quote_volume'])
-            
-            candle_data = pd.DataFrame([{
-                'open': float(row['open']),
-                'high': float(row['high']),
-                'low': float(row['low']),
-                'close': close_price,
-                'volume': float(row['volume']),
-                'quote_volume': quote_volume
-            }], index=[timestamp])
+        close_price = float(row['close'])
+        quote_volume = float(row['quote_volume'])
 
-            self.atr.update_with_candle(candle_data)
+        self.atr.update_with_candle(row)
 
-            # 가격 bin에 거래량 누적
-            bin_key = self._get_price_bin_key(close_price)
+        # 가격 bin에 거래량 누적
+        bin_key = self._get_price_bin_key(close_price)
+        
+        if bin_key not in self.volume_histogram:
+            self.volume_histogram[bin_key] = 0
+            self.price_bins[bin_key] = close_price
+        
+        self.volume_histogram[bin_key] += quote_volume
             
-            if bin_key not in self.volume_histogram:
-                self.volume_histogram[bin_key] = 0
-                self.price_bins[bin_key] = close_price
-            
-            self.volume_histogram[bin_key] += quote_volume
-            
-        except Exception as e:
-            print(f"❌ 캔들 데이터 처리 오류: {e}")
 
     def reset_session(self):
         """새 세션 시작 시 VPVR 리셋"""

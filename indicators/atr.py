@@ -9,7 +9,7 @@ ATR (Average True Range) 지표
 """
 
 from typing import Dict
-from datetime import datetime, timezone
+import datetime as dt
 from collections import deque
 
 import pandas as pd
@@ -53,14 +53,20 @@ class ATR3M:
     
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 3분봉으로 ATR 업데이트 - 연속 롤링"""
-        last_row = candle_data.iloc[-1]
-        timestamp = last_row.index[0]
+
+        if hasattr(candle_data, 'name') and candle_data.name is not None:
+            timestamp = candle_data.name
+        elif hasattr(candle_data, 'index') and len(candle_data.index) > 0:
+            timestamp = candle_data.index[0]
+        else:
+            # 기본값으로 현재 시간 사용
+            timestamp = dt.datetime.now(dt.timezone.utc)
 
         # 캔들 데이터 저장
         candle_df = pd.DataFrame([{
-            'high': float(last_row['high']),
-            'low': float(last_row['low']),
-            'close': float(last_row['close'])
+            'high': float(candle_data['high'].item()),
+            'low': float(candle_data['low'].item()),
+            'close': float(candle_data['close'].item())
         }], index=[timestamp])
 
         self.candles.append(candle_df)
@@ -88,7 +94,7 @@ class ATR3M:
             
             # ATR 계산
             self._calculate_atr()
-            self.last_update_time = datetime.now(timezone.utc)
+            self.last_update_time = dt.datetime.now(dt.timezone.utc)
     
     def _calculate_atr(self):
         """Wilder's smoothing으로 ATR 계산"""
