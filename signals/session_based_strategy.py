@@ -140,15 +140,39 @@ class SessionBasedStrategy:
         # DataFrame 복사 및 인덱스 timezone 처리
         df_copy = df.copy()
         
-        # # 인덱스가 timezone 정보를 가지고 있지 않은 경우 UTC로 설정
-        # if df_copy.index is None:
-        #     print(f"   ⚠️ DataFrame 인덱스에 timezone 정보가 없음. UTC로 설정합니다.")
-        #     # 인덱스가 datetime인 경우 UTC timezone 추가
-        #     if pd.api.types.is_datetime64_any_dtype(df_copy.index):
-        #         df_copy.index = df_copy.index.tz_localize('UTC')
-        #     else:
-        #         print(f"   ❌ DataFrame 인덱스가 datetime 타입이 아닙니다: {type(df_copy.index)}")
-        #         return df_copy
+        # 인덱스가 datetime 타입이 아닌 경우 처리
+        if not pd.api.types.is_datetime64_any_dtype(df_copy.index):
+            print(f"   ⚠️ DataFrame 인덱스가 datetime 타입이 아닙니다: {type(df_copy.index)}")
+            
+            # 인덱스가 숫자(밀리초 타임스탬프)인 경우 직접 변환
+            if pd.api.types.is_numeric_dtype(df_copy.index):
+                try:
+                    print(f"   🔄 숫자 인덱스를 datetime으로 변환 중...")
+                    df_copy.index = pd.to_datetime(df_copy.index, unit='ms', utc=True)
+                    print(f"   ✅ 인덱스 변환 완료: {df_copy.index.dtype}")
+                except Exception as e:
+                    print(f"   ❌ 숫자 인덱스를 datetime으로 변환할 수 없습니다: {e}")
+                    return df_copy
+            else:
+                # timestamp 컬럼이 있는지 확인
+                if 'timestamp' in df_copy.columns:
+                    df_copy = df_copy.set_index('timestamp')
+                elif 'close_time' in df_copy.columns:
+                    df_copy = df_copy.set_index('close_time')
+                else:
+                    print(f"   ❌ timestamp 또는 close_time 컬럼을 찾을 수 없습니다")
+                    return df_copy
+                
+                # 인덱스를 datetime으로 변환
+                try:
+                    df_copy.index = pd.to_datetime(df_copy.index, utc=True)
+                except Exception as e:
+                    print(f"   ❌ 인덱스를 datetime으로 변환할 수 없습니다: {e}")
+                    return df_copy
+        
+        # timezone 정보가 없는 경우 UTC로 설정
+        if df_copy.index.tz is None:
+            df_copy.index = df_copy.index.tz_localize('UTC')
         
         df_copy = df_copy.sort_index()
         
@@ -1359,97 +1383,83 @@ class SessionBasedStrategy:
                                 key_levels: Dict[str, float],
                                 current_time: datetime) -> Optional[Dict]:
         """세션 기반 전략 통합 분석 (단계형 신호 적용)"""
-        try:
             # current_time을 UTC timezone으로 변환
-            if current_time.tzinfo is None:
-                current_time = current_time.replace(tzinfo=pytz.UTC)
-            
-            # 세션 시작 시간 확인 (이미 UTC tz-aware)
-            session_start = self.get_session_start_time(current_time)
-            
-            # --- 글로벌 지표 시스템에서 지표 데이터 가져오기 ---
-            try:
-                from indicators.global_indicators import get_global_indicator_manager
-                global_manager = get_global_indicator_manager()
-                
-                # VWAP 및 VWAP 표준편차 (글로벌 지표에서 가져오기)
-                vwap_indicator = global_manager.get_indicator('vwap')
-                vwap_status = vwap_indicator.get_status()
-                session_vwap = vwap_status.get('vwap')
-                session_std = vwap_status.get('vwap_std')
-                
-                # Opening Range 정보 (글로벌 지표에서 가져오기)
-                opening_range_indicator = global_manager.get_indicator('opening_range')
-                or_info = opening_range_indicator.get_status()
-                
-                # ATR (글로벌 지표에서 가져오기)
-                atr_indicator = global_manager.get_indicator('atr')
-                atr = atr_indicator.get_status().get('current_atr')
-                
-                # 지표 데이터 로드 완료 (출력 없음)
-                
-            except Exception as e:
-                # 폴백: 기본값 사용
-                session_vwap = 0.0
-                session_std = 0.0
-                or_info = {}
-                atr = 15.0  # 기본값
-            
-            # 인스턴스 변수 업데이트
-            self.session_vwap = session_vwap
-            self.session_std = session_std
-            self.opening_range = or_info if or_info and (or_info.get("ready") or or_info.get("partial")) else None
-            self.session_start_time = session_start  # 세션 시작 시간 저장
+        if current_time.tzinfo is None:
+            current_time = current_time.replace(tzinfo=pytz.UTC)
+        
+        # 세션 시작 시간 확인 (이미 UTC tz-aware)
+        session_start = self.get_session_start_time(current_time)
+        
+        # --- 글로벌 지표 시스템에서 지표 데이터 가져오기 ---
+        from indicators.global_indicators import get_global_indicator_manager
+        global_manager = get_global_indicator_manager()
+        
+        # VWAP 및 VWAP 표준편차 (글로벌 지표에서 가져오기)
+        vwap_indicator = global_manager.get_indicator('vwap')
+        vwap_status = vwap_indicator.get_status()
+        session_vwap = vwap_status.get('vwap')
+        session_std = vwap_status.get('vwap_std')
+        
+        # Opening Range 정보 (글로벌 지표에서 가져오기)
+        opening_range_indicator = global_manager.get_indicator('opening_range')
+        or_info = opening_range_indicator.get_status()
+        
+        # ATR (글로벌 지표에서 가져오기)
+        atr_indicator = global_manager.get_indicator('atr')
+        atr = atr_indicator.get_status().get('current_atr')
+        
+        # 지표 데이터 로드 완료 (출력 없음)
+        
+        # 인스턴스 변수 업데이트
+        self.session_vwap = session_vwap
+        self.session_std = session_std
+        self.opening_range = or_info if or_info and (or_info.get("ready") or or_info.get("partial")) else None
+        self.session_start_time = session_start  # 세션 시작 시간 저장
 
-            # --- 세션 정보 출력 (간단하게) ---
-            if atr <= 0:
-                return None
-            
-            # === 단계형 신호 분석 ===
-            best_signal = None
-            best_score = 0.0
-            
-            # 세션 데이터 슬라이스 (글로벌 지표 사용 시에도 필요)
-            df_s = self._session_slice(df, session_start)
-            
-            # A: OR가 없거나(strict) 준비 안 됐으면 스킵 또는 티어 제한
-            if or_info and (or_info.get("ready") or (not self.config.strict_or and or_info.get("partial"))):
-                for side in ["LONG","SHORT"]:
-                    sig = self.analyze_staged_signal(df_s, session_vwap, or_info, atr, 'A', side, key_levels, current_time)
-                    # 부분 OR이면 티어 캡 적용
-                    if sig and or_info.get("partial"):
-                        tier_cap = self.config.partial_or_tier_cap.upper()
-                        if tier_cap == "SETUP" and sig["stage"] == "ENTRY":
-                            sig["stage"] = "SETUP"; sig["action"] = "OBSERVE"; sig["confidence"] *= 0.9
-                        elif tier_cap == "HEADSUP" and sig["stage"] in ("ENTRY","SETUP"):
-                            sig["stage"] = "HEADSUP"; sig["action"] = "ALERT"; sig["confidence"] *= 0.8
-                    if sig and sig["score"] > best_score:
-                        best_signal, best_score = sig, sig["score"]
-            else:
-                print("⏭️ Play A 스킵")
-            
-            # B/C는 OR 없어도 정상 동작
+        # --- 세션 정보 출력 (간단하게) ---
+        if atr <= 0:
+            return None
+        
+        # === 단계형 신호 분석 ===
+        best_signal = None
+        best_score = 0.0
+        
+        # 세션 데이터 슬라이스 (글로벌 지표 사용 시에도 필요)
+        df_s = self._session_slice(df, session_start)
+        
+        # A: OR가 없거나(strict) 준비 안 됐으면 스킵 또는 티어 제한
+        if or_info and (or_info.get("ready") or (not self.config.strict_or and or_info.get("partial"))):
             for side in ["LONG","SHORT"]:
-                sig = self.analyze_staged_signal(df_s, session_vwap, or_info or {}, atr, 'B', side, key_levels, current_time)
+                sig = self.analyze_staged_signal(df_s, session_vwap, or_info, atr, 'A', side, key_levels, current_time)
+                # 부분 OR이면 티어 캡 적용
+                if sig and or_info.get("partial"):
+                    tier_cap = self.config.partial_or_tier_cap.upper()
+                    if tier_cap == "SETUP" and sig["stage"] == "ENTRY":
+                        sig["stage"] = "SETUP"; sig["action"] = "OBSERVE"; sig["confidence"] *= 0.9
+                    elif tier_cap == "HEADSUP" and sig["stage"] in ("ENTRY","SETUP"):
+                        sig["stage"] = "HEADSUP"; sig["action"] = "ALERT"; sig["confidence"] *= 0.8
                 if sig and sig["score"] > best_score:
                     best_signal, best_score = sig, sig["score"]
+        else:
+            print("⏭️ Play A 스킵")
+        
+        # B/C는 OR 없어도 정상 동작
+        for side in ["LONG","SHORT"]:
+            sig = self.analyze_staged_signal(df_s, session_vwap, or_info or {}, atr, 'B', side, key_levels, current_time)
+            if sig and sig["score"] > best_score:
+                best_signal, best_score = sig, sig["score"]
 
-            if np.isfinite(session_vwap) and np.isfinite(session_std) and session_std > 0:
-                for side in ["LONG","SHORT"]:
-                    sig = self.analyze_staged_signal(df_s, session_vwap, or_info or {}, atr, 'C', side, key_levels, current_time)
-                    if sig and sig["score"] > best_score:
-                        best_signal, best_score = sig, sig["score"]
-            
-            # 최고 점수 신호 반환
-            if best_signal:
-                return best_signal
-            
-            return None
-            
-        except Exception as e:
-            print(f"❌ 세션 기반 전략 분석 오류: {e}")
-            return None
-
+        if np.isfinite(session_vwap) and np.isfinite(session_std) and session_std > 0:
+            for side in ["LONG","SHORT"]:
+                sig = self.analyze_staged_signal(df_s, session_vwap, or_info or {}, atr, 'C', side, key_levels, current_time)
+                if sig and sig["score"] > best_score:
+                    best_signal, best_score = sig, sig["score"]
+        
+        # 최고 점수 신호 반환
+        if best_signal:
+            return best_signal
+        
+        return None
 
 def make_session_trade_plan(df: pd.DataFrame, 
                             key_levels: Dict[str, float],
