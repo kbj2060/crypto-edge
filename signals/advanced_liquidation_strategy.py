@@ -20,90 +20,85 @@ from indicators.global_indicators import get_global_indicator_manager
 
 @dataclass
 class AdvancedLiquidationConfig:
-    """고급 청산 전략 설정"""
-    # 기본 설정
+    # --- 수집 / 통계 창 ---
     symbol: str = "ETHUSDT"
-    
-    # 청산 데이터 집계 설정
-    bin_sec: int = 3  # 1초 → 3초 bin (노이즈 완화)
-    agg_window_sec: int = 60  # 30초 → 60초 집계
-    background_window_min: int = 180  # 60분 → 180분, 베이스라인 안정
-    
-    # 최소 워밍업 요구사항 (방향별)
-    min_warmup_samples: int = 20  # ENTRY: 해당 방향 샘플 ≥20 (10 → 20)
-    min_warmup_samples_setup: int = 10  # SETUP: 해당 방향 샘플 ≥10 (5 → 10)
-    
-    # 스파이크 판정 설정 (계층별 분리)
-    z_spike: float = 0.8  # HEADS-UP 기준 (0.6 → 0.8)
-    z_setup: float = 2.2  # SETUP 기준 (2.0 → 2.2)
-    z_entry: float = 3.0  # ENTRY 기준 (2.5 → 3.0)
-    z_strong: float = 2.2  # 강한 스파이크 임계값 (1.8 → 2.2)
-    z_medium: float = 1.6  # 중간 스파이크 임계값 (1.2 → 1.6)
-    lpi_bias: float = 0.15      # LPI 바이어스 임계값 (0.10 → 0.15)
-    lpi_min: float = 0.6
-    
-    # 캐스케이드 설정 (지속성 강조)
-    cascade_seconds: int = 30  # 지난 30초 안에 (20초 → 30초)
-    cascade_count: int = 6  # 6회 이상 (5회 → 6회)
-    cascade_z: float = 4.0  # z >= 4.0 (유지)
-    
-    # 쿨다운 설정 (재진입 남발 억제)
-    cooldown_after_strong_sec: int = 20  # 강한 스파이크 후 20초 쿨다운 (8초 → 20초)
-    cooldown_after_medium_sec: int = 8  # 중간 스파이크 후 8초 쿨다운 (3초 → 8초)
-    
-    # 리스크 설정 (단타 보유를 반영)
-    risk_pct: float = 0.3  # 1트레이드 계좌대비 위험 (0.4% → 0.3%)
-    slippage_max_pct: float = 0.02  # 최대 슬리피지 (3% → 2%)
-    
-    # 레벨 설정
-    or_minutes: int = 30  # 오프닝 레인지 분
-    atr_len: int = 14  # ATR 기간
-    vwap_sd_enter: float = 2.2  # VWAP ±2.2σ 진입 (2.0 → 2.2)
-    vwap_sd_enter_cascade: float = 2.0  # 캐스케이드 시 VWAP ±2.0σ 진입 (1.8 → 2.0)
-    vwap_sd_stop: float = 3.0  # VWAP ±3.0σ 스탑 (2.5 → 3.0)
-    
-    # 전략 A: 스윕&리클레임
-    sweep_buffer_atr: float = 0.25  # 스윕 버퍼 ATR (0.3 → 0.25)
-    reclaim_atr_tolerance: float = 0.25  # 리클레임 ATR 허용치 (0.2~0.3 ATR)
-    opposite_liquidation_boost: float = 0.1  # 반대측 청산 시 신뢰도 부스트
-    tp1_R_a: float = 1.5  # 전략 A 1차 목표 R (1.2 → 1.5)
-    tp2: str = "VWAP_or_range_edge"  # 2차 목표
-    
-    # 전략 B: 스퀴즈 추세지속
-    retest_atr_tol: float = 0.55  # 리테스트 ATR 허용치 (0.4 → 0.55로 확대)
-    retest_atr_tol_or_extension: float = 0.7  # OR 확장 시 리테스트 ATR 허용치 (추가 완화)
-    tp1_R_b: float = 1.8  # 전략 B 1차 목표 R (1.5 → 1.8)
-    or_extension: bool = True  # OR 확장 사용
-    
-    # 전략 C: 과열-소멸 페이드
-    post_spike_decay_ratio: float = 0.9  # 스파이크 후 감소 비율 (0.8 → 0.9로 완화)
-    post_spike_decay_ratio_cascade: float = 0.95  # 캐스케이드 시 감소 비율 (더 완화)
-    z_extreme: float = 3.5  # 극단 스파이크 임계값 (다중 경로 트리거)
-    lpi_extreme: float = 0.5  # LPI 극단 임계값
-    vwap_sd_extreme: float = 1.8  # 극단 스파이크 시 VWAP ±1.8σ 진입
-    vwap_sd_reenter: float = 1.5  # VWAP ±1.5σ 재진입 (SETUP 허용)
-    stop_atr: float = 0.45  # 스탑 ATR (0.35 → 0.45)
-    tp2_sigma: float = 0.6  # 2차 목표 시그마 (0.5 → 0.6)
-    tp1_R_c: float = 1.5  # 전략 C 1차 목표 R (1.2 → 1.5)
-    
-    # 단계형 스코어링 설정
-    # 가중치 구성 (합계 1.00) - 구조·트렌드 비중↑, 데이터 품질·오더플로우 비중↓
-    weight_orderflow: float = 0.20  # 오더플로우(청산) (0.30 → 0.20)
-    weight_structure: float = 0.25  # 구조 품질(플레이북별) (0.20 → 0.25)
-    weight_decay_cascade: float = 0.15  # 소멸/연쇄 (유지)
-    weight_trend_context: float = 0.15  # 추세/컨텍스트 (0.10 → 0.15)
-    weight_location_baseline: float = 0.10  # 로케이션/기준선 (유지)
-    weight_risk_appropriateness: float = 0.10  # 리스크 적정성 (유지)
-    weight_data_quality: float = 0.05  # 데이터 품질 (유지)
-    
-    # Tier 임계값 (ENTRY 더 까다롭게)
-    tier_entry_threshold: float = 0.62  # ENTRY ≥ 0.62 (0.55 → 0.62)
-    tier_setup_threshold: float = 0.40  # SETUP ≥ 0.40 (0.35 → 0.40)
-    tier_heads_up_threshold: float = 0.25  # HEADS-UP ≥ 0.25 유지
-    
-    # 동시양방향 충돌 회피 (더 완화)
-    conflict_threshold: float = 0.02  # 점수 차 < 0.02면 관망 (0.01 → 0.02로 보수화)
+    bin_sec: int = 3
+    agg_window_sec: int = 60
+    background_window_min: int = 180
+    mu_sigma_lookback_buckets: int = 240  # (추가) μ,σ 추정 4h
 
+    # --- 워밍업(방향별) : 과도→완화 ---
+    min_warmup_samples: int = 12       # 20 → 12
+    min_warmup_samples_setup: int = 6  # 10 → 6
+
+    # --- 스파이크/Z/LPI 임계 : 과도→현실화 ---
+    z_spike: float = 0.7     # 0.8 → 0.7 (약신호 차단 낮춤)
+    z_setup: float = 1.8     # 2.0 → 1.8
+    z_entry: float = 2.3     # 2.5 → 2.3
+    z_strong: float = 2.0    # 2.2 → 2.0
+    z_medium: float = 1.4    # 1.6 → 1.4
+    lpi_bias: float = 0.12   # 0.15 → 0.12
+    lpi_min: float = 0.50    # 0.6 → 0.50
+
+    # --- 캐스케이드 : "차단" 대신 모드 전환 쉽게 ---
+    cascade_seconds: int = 20  # 20 → 30 (지속성 평가 구간 확대)
+    cascade_count: int = 3     # 6 → 3   (연속 요구 완화)
+    cascade_z: float = 2.4     # 2.6 → 2.4 (감지 민감)
+    # 캐스케이드 모드에선 페이드는 차단, 추세지속만 임계 강화(코드에서 처리)
+
+    # --- 쿨다운 : 과도→완화 (남발 억제는 유지) ---
+    cooldown_after_strong_sec: int = 12  # 20 → 12
+    cooldown_after_medium_sec: int = 6   # 8 → 6
+
+    # --- 리스크 / 슬리피지 ---
+    risk_pct: float = 0.3
+    slippage_max_pct: float = 0.02
+
+    # --- 위치(밴드) 임계 : ENTRY 성립률 ↑ ---
+    or_minutes: int = 30
+    atr_len: int = 14
+    vwap_sd_enter: float = 1.8             # 2.0 → 1.8 (밴드 밖 요구 완화)
+    vwap_sd_enter_cascade: float = 2.3     # 2.0 → 2.3 (캐스케이드 시 더 엄격)
+    vwap_sd_stop: float = 2.5
+
+    # --- 전략 A: 스윕&리클레임 ---
+    sweep_buffer_atr: float = 0.25
+    reclaim_atr_tolerance: float = 0.30    # 0.25 → 0.30 (되찾기 허용폭↑)
+    opposite_liquidation_boost: float = 0.15  # 0.1 → 0.15
+    tp1_R_a: float = 1.3                   # 1.5 → 1.3 (1차 현실화)
+    tp2: str = "VWAP_or_range_edge"
+
+    # --- 전략 B: 스퀴즈 추세지속 ---
+    retest_atr_tol: float = 0.50                 # 0.55 → 0.50
+    retest_atr_tol_or_extension: float = 0.65    # 0.7 → 0.65
+    tp1_R_b: float = 1.6                         # 1.8 → 1.6
+    or_extension: bool = True
+
+    # --- 전략 C: 과열-소멸 페이드 ---
+    post_spike_decay_ratio: float = 0.85         # 0.9 → 0.85 (완화)
+    post_spike_decay_ratio_cascade: float = 0.92 # 0.95 → 0.92
+    z_extreme: float = 3.2                       # 3.5 → 3.2
+    lpi_extreme: float = 0.45                    # 0.5 → 0.45
+    vwap_sd_extreme: float = 1.6                 # 1.8 → 1.6
+    vwap_sd_reenter: float = 1.3                 # 1.5 → 1.3
+    stop_atr: float = 0.40                       # 0.45 → 0.40
+    tp2_sigma: float = 0.50                      # 0.6 → 0.50
+    tp1_R_c: float = 1.3                         # 1.5 → 1.3
+
+    # --- 가중치(오더플로우 비중 ↑) ---
+    weight_orderflow: float = 0.28    # 0.20 → 0.28
+    weight_structure: float = 0.22    # 0.25 → 0.22
+    weight_decay_cascade: float = 0.15
+    weight_trend_context: float = 0.15
+    weight_location_baseline: float = 0.10
+    weight_risk_appropriateness: float = 0.07  # 0.10 → 0.07
+    weight_data_quality: float = 0.03          # 0.05 → 0.03
+
+    # --- 티어 임계 : 승급률 정상화 ---
+    tier_entry_threshold: float = 0.58   # 0.62 → 0.58
+    tier_setup_threshold: float = 0.35   # 0.40 → 0.35
+    tier_heads_up_threshold: float = 0.25
+    conflict_threshold: float = 0.02
 
 class AdvancedLiquidationStrategy:
     """고급 청산 분석 전략"""
@@ -193,28 +188,33 @@ class AdvancedLiquidationStrategy:
             bin_deque.append((bin_key, value))
     
     def _update_background_stats(self) -> None:
-        """백그라운드 통계 업데이트"""
         try:
-            # 롱 청산 통계
-            long_values = [val for _, val in self.long_bins]
-            if long_values:
-                self.mu_long = np.mean(long_values)
-                self.sigma_long = max(np.std(long_values), 1e-9)
+            now_ts = int(self.time_manager.get_current_time().timestamp())
+            lookback_sec = int(self.config.background_window_min * 60)
+
+            # 데큐를 dict로
+            long_map = {ts: val for ts, val in self.long_bins}
+            short_map = {ts: val for ts, val in self.short_bins}
+
+            # 0 포함 시계열 복원
+            long_series = []
+            short_series = []
+            for ts in range(now_ts - lookback_sec + 1, now_ts + 1):
+                long_series.append(float(long_map.get(ts, 0.0)))
+                short_series.append(float(short_map.get(ts, 0.0)))
+
+            if long_series:
+                self.mu_long = float(np.mean(long_series))
+                self.sigma_long = float(np.std(long_series, ddof=1)) or 1e-9
             else:
-                # 초기값 설정 (데이터가 없을 때)
-                self.mu_long = 1000.0  # 기본 청산 금액
-                self.sigma_long = 500.0  # 기본 표준편차
-            
-            # 숏 청산 통계
-            short_values = [val for _, val in self.short_bins]
-            if short_values:
-                self.mu_short = np.mean(short_values)
-                self.sigma_short = max(np.std(short_values), 1e-9)
+                self.mu_long, self.sigma_long = 0.0, 1.0
+
+            if short_series:
+                self.mu_short = float(np.mean(short_series))
+                self.sigma_short = float(np.std(short_series, ddof=1)) or 1e-9
             else:
-                # 초기값 설정 (데이터가 없을 때)
-                self.mu_short = 1000.0  # 기본 청산 금액
-                self.sigma_short = 500.0  # 기본 표준편차
-                
+                self.mu_short, self.sigma_short = 0.0, 1.0
+
         except Exception as e:
             print(f"❌ 백그라운드 통계 업데이트 오류: {e}")
     
@@ -223,32 +223,15 @@ class AdvancedLiquidationStrategy:
     def _check_session_status(self, current_time: datetime) -> None:
         """세션 상태 확인 (DST 자동 반영)"""
         try:
-            # UTC 시간을 각 시간대로 변환 (DST 자동 반영)
-            london_tz = pytz.timezone('Europe/London')
-            ny_tz = pytz.timezone('America/New_York')
+            # TimeManager에서 세션 정보 가져오기
+            session_info = self.time_manager.get_session_info(current_time)
             
-            london_local = current_time.astimezone(london_tz)
-            ny_local = current_time.astimezone(ny_tz)
-            
-            # 각 시간대의 오픈 시간 (현지 시간 기준)
-            london_open = london_local.replace(hour=8, minute=0, second=0, microsecond=0)
-            ny_open = ny_local.replace(hour=9, minute=30, second=0, microsecond=0)
-            
-            # ±90분 윈도우
-            london_start = london_open - timedelta(minutes=90)
-            london_end = london_open + timedelta(minutes=90)
-            ny_start = ny_open - timedelta(minutes=90)
-            ny_end = ny_open + timedelta(minutes=90)
-            
-            # 세션 활성 상태 확인
-            self.session_active = (
-                (london_start <= london_local <= london_end) or
-                (ny_start <= ny_local <= ny_end)
-            )
+            # 세션 활성 상태
+            self.session_active = session_info.is_active
             
             # 세션 시작 시간 기록
             if self.session_active and not self.session_start_time:
-                self.session_start_time = current_time
+                self.session_start_time = session_info.session_open_time
             elif not self.session_active:
                 self.session_start_time = None
                 
@@ -288,8 +271,8 @@ class AdvancedLiquidationStrategy:
             is_core_session = london_core or ny_core
             
             # 임계값 조정 계수 (백테스트용으로 1.0 고정)
-            # threshold_multiplier = 1.1 if is_core_session else 0.95  # 코어: +10%, 한산: -5%
-            threshold_multiplier = 1.0  # 백테스트용으로 세션 영향 제거 (디버깅용)
+            threshold_multiplier = 1.1 if is_core_session else 0.95  # 코어: +10%, 한산: -5%
+            # threshold_multiplier = 1.0  # 백테스트용으로 세션 영향 제거 (디버깅용)
             
             return {
                 'is_core_session': is_core_session,
@@ -674,13 +657,14 @@ class AdvancedLiquidationStrategy:
                 # 캐스케이드 지분 확인 (최근 20~30초)
                 current_time = self.time_manager.get_current_time()
                 window_start = current_time - timedelta(seconds=25)  # 25초 윈도우
+                window_start_int = self.time_manager.get_timestamp_int(window_start)
                 
                 if side == 'long':
-                    cascade_liquidation = sum(val for ts, val in self.long_bins if ts >= window_start)
-                    total_liquidation = sum(val for ts, val in self.liquidation_bins if ts >= window_start)
+                    cascade_liquidation = sum(val for ts, val in self.long_bins if ts >= window_start_int)
+                    total_liquidation = sum(val for ts, val in self.liquidation_bins if ts >= window_start_int)
                 else:  # short
-                    cascade_liquidation = sum(val for ts, val in self.short_bins if ts >= window_start)
-                    total_liquidation = sum(val for ts, val in self.liquidation_bins if ts >= window_start)
+                    cascade_liquidation = sum(val for ts, val in self.short_bins if ts >= window_start_int)
+                    total_liquidation = sum(val for ts, val in self.liquidation_bins if ts >= window_start_int)
                 
                 cascade_ratio = cascade_liquidation / (total_liquidation + 1e-9)
                 
@@ -846,9 +830,10 @@ class AdvancedLiquidationStrategy:
                 # 최근 60초 내 빈 bin 확인
                 current_time = self.time_manager.get_current_time()
                 window_start = current_time - timedelta(seconds=60)
+                window_start_int = self.time_manager.get_timestamp_int(window_start)
                 
-                filled_bins = sum(1 for ts, val in self.liquidation_bins if ts >= window_start and val > 0)
-                total_recent_bins = sum(1 for ts, _ in self.liquidation_bins if ts >= window_start)
+                filled_bins = sum(1 for ts, val in self.liquidation_bins if ts >= window_start_int and val > 0)
+                total_recent_bins = sum(1 for ts, _ in self.liquidation_bins if ts >= window_start_int)
                 
                 if total_recent_bins > 0:
                     fill_ratio = filled_bins / total_recent_bins
@@ -1117,88 +1102,71 @@ class AdvancedLiquidationStrategy:
         return warmup_summary
     
     def get_current_liquidation_metrics(self) -> Dict[str, Any]:
-        """현재 청산 지표 계산"""
         try:
-            # UTC 시간으로 통일 (TimeManager 사용)
+            print(f"📊 현재 청산 지표 계산 시작")
             current_time = self.time_manager.get_current_time()
-            current_timestamp = int(current_time.timestamp())
-            
-            # 30초 윈도우 계산
-            window_start = current_timestamp - self.config.agg_window_sec
-            
-            # 롱 청산 30초 합계
-            l_long_30s = sum(val for ts, val in self.long_bins if ts >= window_start)
-            
-            # 숏 청산 30초 합계
-            l_short_30s = sum(val for ts, val in self.short_bins if ts >= window_start)
-            
-            # Z점수 계산 - 30초 합계에 맞게 스케일링
-            # 30초 합계의 경우: μ → 30×μ, σ → √30×σ
-            scale_factor = self.config.agg_window_sec  # 30
-            scale_sqrt = np.sqrt(scale_factor)  # √30
-            
-            mu_long_scaled = self.mu_long * scale_factor
-            sigma_long_scaled = self.sigma_long * scale_sqrt
-            mu_short_scaled = self.mu_short * scale_factor
-            sigma_short_scaled = self.sigma_short * scale_sqrt
-            
-            # 상대적 Z-score 계산 (백그라운드 대비 변화율 기반)
-            # 절단 제거: |z|<1.0 → 0 처리 제거하고, 절대값만 적용
-            if mu_long_scaled > 0:
-                z_long_raw = (l_long_30s - mu_long_scaled) / max(sigma_long_scaled, 1e-9)
-                z_long = abs(z_long_raw)
-            else:
-                z_long = 0.0
-                
-            if mu_short_scaled > 0:
-                z_short_raw = (l_short_30s - mu_short_scaled) / max(sigma_short_scaled, 1e-9)
-                z_short = abs(z_short_raw)
-            else:
-                z_short = 0.0
-            
-            # LPI 계산
-            total_liquidation = l_long_30s + l_short_30s
-            lpi = (l_short_30s - l_long_30s) / (total_liquidation + 1e-9)
-            
-            # 캐스케이드 감지
-            cascade_info = self._detect_cascade(current_timestamp)
-            is_cascade = cascade_info['total_cascade']
-            
-            # 쿨다운 상태 확인 (방향별)
+            now_ts = int(current_time.timestamp())
+            win = int(self.config.agg_window_sec)
+            win_start = now_ts - win
+            print(f"⏰ 현재 시간: {current_time}")
+            print(f"🪟 {win}초 윈도우: {win_start} ~ {now_ts}")
+
+            l_long = sum(val for ts, val in self.long_bins  if ts >= win_start)
+            l_short= sum(val for ts, val in self.short_bins if ts >= win_start)
+
+            # per-second μ/σ → window 집계로 스케일
+            muL = self.mu_long * win
+            muS = self.mu_short * win
+            sdL = self.sigma_long * (win ** 0.5)
+            sdS = self.sigma_short * (win ** 0.5)
+
+            # one-sided z (부족분은 0으로)
+            rawL = 0.0 if sdL <= 0 else (l_long  - muL) / max(sdL, 1e-9)
+            rawS = 0.0 if sdS <= 0 else (l_short - muS) / max(sdS, 1e-9)
+            z_long  = max(0.0, rawL)
+            z_short = max(0.0, rawS)
+
+            total = l_long + l_short
+            lpi = (l_short - l_long) / (total + 1e-9)
+
+            print(f"📈 롱 Z-score: raw={rawL:.3f}, pos={z_long:.3f}")
+            print(f"📉 숏 Z-score: raw={rawS:.3f}, pos={z_short:.3f}")
+            print(f"📊 LPI: {lpi:.3f} (숏-롱)/전체")
+
+            cascade_info = self._detect_cascade(now_ts)
             cooldown_info = self._is_cooldown_active(current_time)
-            
-            # 상세한 Z-score 스케일링 로깅 제거 (디버깅 출력)
-            
-            return {
+
+            result = {
                 'timestamp': current_time,
-                'l_long_30s': l_long_30s,
-                'l_short_30s': l_short_30s,
+                'l_long_30s': l_long,  # 변수명 유지
+                'l_short_30s': l_short,
                 'z_long': z_long,
                 'z_short': z_short,
                 'lpi': lpi,
-                'is_cascade': is_cascade,
+                'is_cascade': cascade_info['total_cascade'],
                 'cooldown_info': cooldown_info,
                 'session_active': self.session_active,
                 'background_stats': {
-                    'mu_long': self.mu_long,
-                    'sigma_long': self.sigma_long,
-                    'mu_short': self.mu_short,
-                    'sigma_short': self.sigma_short,
-                    'mu_long_scaled': mu_long_scaled,
-                    'sigma_long_scaled': sigma_long_scaled,
-                    'mu_short_scaled': mu_short_scaled,
-                    'sigma_short_scaled': sigma_short_scaled
+                    'mu_long': self.mu_long, 'sigma_long': self.sigma_long,
+                    'mu_short': self.mu_short,'sigma_short': self.sigma_short,
+                    'mu_long_scaled': muL, 'sigma_long_scaled': sdL,
+                    'mu_short_scaled': muS, 'sigma_short_scaled': sdS
                 }
             }
-            
+            print(f"✅ 청산 지표 계산 완료: Z_L={z_long:.2f}, Z_S={z_short:.2f}, LPI={lpi:.3f}")
+            return result
         except Exception as e:
             print(f"❌ 청산 지표 계산 오류: {e}")
             return {}
-    
+
     def _detect_cascade(self, current_timestamp: int) -> Dict[str, bool]:
         """캐스케이드 조건 감지 (방향별 분리)"""
         try:
+            print(f"🌊 캐스케이드 감지 시작: current_timestamp={current_timestamp}")
+            
             cascade_start = current_timestamp - self.config.cascade_seconds
+            print(f"🪟 캐스케이드 윈도우: {cascade_start} ~ {current_timestamp} ({self.config.cascade_seconds}초)")
+            
             long_cascade_count = 0
             short_cascade_count = 0
             
@@ -1209,6 +1177,7 @@ class AdvancedLiquidationStrategy:
                     z_score = (val - self.mu_long) / max(self.sigma_long, 1e-9)
                     if z_score >= self.config.cascade_z:
                         long_cascade_count += 1
+                        print(f"📈 롱 캐스케이드 이벤트: ts={ts}, val={val:.2f}, z={z_score:.2f}")
             
             # 숏 청산 캐스케이드 확인
             for ts, val in self.short_bins:
@@ -1217,28 +1186,40 @@ class AdvancedLiquidationStrategy:
                     z_score = (val - self.mu_short) / max(self.sigma_short, 1e-9)
                     if z_score >= self.config.cascade_z:
                         short_cascade_count += 1
+                        print(f"📉 숏 캐스케이드 이벤트: ts={ts}, val={val:.2f}, z={z_score:.2f}")
+            
+            print(f"📊 캐스케이드 카운트: 롱={long_cascade_count}, 숏={short_cascade_count}")
             
             # 방향별 캐스케이드 상태 업데이트 (20~30초 한쪽 지분 ≥0.85 & 이벤트 ≥2)
             long_cascade = long_cascade_count >= self.config.cascade_count
             short_cascade = short_cascade_count >= self.config.cascade_count
+            
+            print(f"🎯 캐스케이드 임계값: {self.config.cascade_count}개")
+            print(f"✅ 캐스케이드 상태: 롱={long_cascade}, 숏={short_cascade}")
             
             # 전체 캐스케이드 상태 (하위 호환성)
             if long_cascade or short_cascade:
                 if not self.cascade_detected:
                     self.cascade_detected = True
                     self.cascade_start_time = datetime.now(timezone.utc)
+                    print(f"🚨 캐스케이드 감지 시작: {self.cascade_start_time}")
             else:
                 # 캐스케이드 종료 확인 (30초 후)
                 if (self.cascade_detected and self.cascade_start_time and 
                     (datetime.now(timezone.utc) - self.cascade_start_time).total_seconds() > 30):
                     self.cascade_detected = False
+                    old_start_time = self.cascade_start_time
                     self.cascade_start_time = None
+                    print(f"🔚 캐스케이드 종료: {old_start_time} → None")
             
-            return {
+            result = {
                 'long_cascade': long_cascade,
                 'short_cascade': short_cascade,
                 'total_cascade': long_cascade or short_cascade
             }
+            
+            print(f"✅ 캐스케이드 감지 완료: {result}")
+            return result
                 
         except Exception as e:
             print(f"❌ 캐스케이드 감지 오류: {e}")
@@ -1246,10 +1227,14 @@ class AdvancedLiquidationStrategy:
     
     def _is_cooldown_active(self, current_time: datetime, signal_side: str = None) -> Dict[str, Any]:
         """쿨다운 상태 확인 (방향별 감점/강등)"""
+        print(f"⏰ 쿨다운 상태 확인: signal_side={signal_side}")
+        
         if not self.last_strong_spike_time:
+            print(f"ℹ️ 강한 스파이크 기록 없음")
             return {'active': False, 'penalty': 0.0, 'reason': None}
         
         time_since_spike = (current_time - self.last_strong_spike_time).total_seconds()
+        print(f"⏱️ 스파이크 이후 경과 시간: {time_since_spike:.1f}초")
         
         # 방향별 쿨다운 확인
         cooldown_active = False
@@ -1258,30 +1243,45 @@ class AdvancedLiquidationStrategy:
         
         # 강한 스파이크 (z >= 3.5) 쿨다운: ENTRY 제한/SETUP 허용
         if hasattr(self, 'last_spike_strength') and self.last_spike_strength >= 3.5:
+            print(f"🔥 강한 스파이크 쿨다운 검토: strength={self.last_spike_strength:.1f}")
             if time_since_spike < self.config.cooldown_after_strong_sec:
                 cooldown_active = True
                 penalty = 0.3  # 강한 스파이크 후 ENTRY 제한
                 reason = f"강한 스파이크 쿨다운 - ENTRY 제한/SETUP 허용 ({time_since_spike:.1f}s)"
+                print(f"🚫 강한 스파이크 쿨다운 활성: penalty={penalty}")
+            else:
+                print(f"✅ 강한 스파이크 쿨다운 만료")
         
         # 중간 스파이크 (z >= 3.0) 쿨다운
         elif hasattr(self, 'last_spike_strength') and self.last_spike_strength >= 3.0:
+            print(f"🔥 중간 스파이크 쿨다운 검토: strength={self.last_spike_strength:.1f}")
             if time_since_spike < self.config.cooldown_after_medium_sec:
                 cooldown_active = True
                 penalty = 0.1  # 중간 스파이크 후 감점
                 reason = f"중간 스파이크 쿨다운 ({time_since_spike:.1f}s)"
+                print(f"⚠️ 중간 스파이크 쿨다운 활성: penalty={penalty}")
+            else:
+                print(f"✅ 중간 스파이크 쿨다운 만료")
         
         # 기본 쿨다운 (하위 호환성)
         elif time_since_spike < self.config.cooldown_after_strong_sec:
+            print(f"🔥 기본 쿨다운 검토")
             cooldown_active = True
             penalty = 0.15
             reason = f"기본 쿨다운 ({time_since_spike:.1f}s)"
+            print(f"⚠️ 기본 쿨다운 활성: penalty={penalty}")
+        else:
+            print(f"ℹ️ 쿨다운 없음")
         
-        return {
+        result = {
             'active': cooldown_active,
             'penalty': penalty,
             'reason': reason,
             'time_since_spike': time_since_spike
         }
+        
+        print(f"✅ 쿨다운 상태 확인 완료: {result}")
+        return result
     
     def analyze_strategy_a_sweep_reclaim(self, 
                                         metrics: Dict[str, Any],
@@ -2058,13 +2058,14 @@ class AdvancedLiquidationStrategy:
             # 10초 평균 청산 계산
             current_time = self.time_manager.get_current_time()
             window_start = current_time - timedelta(seconds=10)
+            window_start_int = self.time_manager.get_timestamp_int(window_start)
             
             if side == 'long':
-                current_10s = sum(val for ts, val in self.long_bins if ts >= window_start)
+                current_10s = sum(val for ts, val in self.long_bins if ts >= window_start_int)
                 # 10초 기준으로 스케일링
                 mu_10s = self.mu_long * 10  # 1초 평균 × 10초
             else:  # short
-                current_10s = sum(val for ts, val in self.short_bins if ts >= window_start)
+                current_10s = sum(val for ts, val in self.short_bins if ts >= window_start_int)
                 # 10초 기준으로 스케일링
                 mu_10s = self.mu_short * 10  # 1초 평균 × 10초
             
@@ -2096,9 +2097,10 @@ class AdvancedLiquidationStrategy:
         try:
             current_time = self.time_manager.get_current_time()
             window_start = current_time - timedelta(seconds=10)
+            window_start_int = self.time_manager.get_timestamp_int(window_start)
             
             # 10초 누적 롱 청산
-            long_10s = sum(val for ts, val in self.long_bins if ts >= window_start)
+            long_10s = sum(val for ts, val in self.long_bins if ts >= window_start_int)
             
             # 10초 누적에 맞게 스케일링: μ → 10×μ, σ → √10×σ
             scale_factor = 10
@@ -2120,9 +2122,10 @@ class AdvancedLiquidationStrategy:
         try:
             current_time = self.time_manager.get_current_time()
             window_start = current_time - timedelta(seconds=10)
+            window_start_int = self.time_manager.get_timestamp_int(window_start)
             
             # 10초 누적 숏 청산
-            short_10s = sum(val for ts, val in self.short_bins if ts >= window_start)
+            short_10s = sum(val for ts, val in self.short_bins if ts >= window_start_int)
             
             # 10초 누적에 맞게 스케일링: μ → 10×μ, σ → √10×σ
             scale_factor = 10
@@ -2148,46 +2151,70 @@ class AdvancedLiquidationStrategy:
                                 atr: float) -> Optional[Dict]:
         """모든 전략 분석 (스코어링 + 충돌 해결) - post-Gate 요약"""
         try:
+            print(f"🎯 모든 전략 분석 시작")
+            print(f"📊 데이터 정보: price_data={len(price_data)}개, atr={atr:.2f}, vwap={vwap:.2f}, vwap_std={vwap_std:.2f}")
+            
             # 현재 청산 지표 가져오기
             metrics = self.get_current_liquidation_metrics()
             if not metrics:
+                print(f"❌ 청산 지표 없음")
                 return None
             
             # 강한 스파이크 감지 시 쿨다운 시작
-            z_long = metrics.get('z_long', 0)
-            z_short = metrics.get('z_short', 0)
+            z_long = metrics.get('z_long')
+            z_short = metrics.get('z_short')
             max_z = max(z_long, z_short)
             
+            print(f"📊 Z-score 분석: max_z={max_z:.2f}, 임계값={self.config.z_medium}")
+            
             if max_z >= self.config.z_medium:
+                old_time = self.last_strong_spike_time
                 self.last_strong_spike_time = self.time_manager.get_current_time()
                 self.last_spike_strength = max_z  # 스파이크 강도 기록
+                print(f"🔥 강한 스파이크 감지: {old_time} → {self.last_strong_spike_time}, strength={max_z:.2f}")
             
             # 모든 전략에서 신호 후보 수집 (pre-Gate)
             all_candidates = []
+            print(f"🔍 전략별 신호 후보 수집 시작")
             
             # 전략 A: 스윕&리클레임
+            print(f"📈 전략 A 분석 시작")
             signal_a = self.analyze_strategy_a_sweep_reclaim(
                 metrics, price_data, key_levels, atr
             )
             if signal_a:
                 all_candidates.append(signal_a)
+                print(f"✅ 전략 A 신호 생성: {signal_a['signal_type']}")
+            else:
+                print(f"ℹ️ 전략 A 신호 없음")
             
             # 전략 B: 스퀴즈 추세지속
+            print(f"📉 전략 B 분석 시작")
             signal_b = self.analyze_strategy_b_squeeze_trend_continuation(
                 metrics, price_data, opening_range, atr
             )
             if signal_b:
                 all_candidates.append(signal_b)
+                print(f"✅ 전략 B 신호 생성: {signal_b['signal_type']}")
+            else:
+                print(f"ℹ️ 전략 B 신호 없음")
             
             # 전략 C: 과열-소멸 페이드
+            print(f"📊 전략 C 분석 시작")
             signal_c = self.analyze_strategy_c_overheat_extinction_fade(
                 metrics, price_data, vwap, vwap_std, atr
             )
             if signal_c:
                 all_candidates.append(signal_c)
+                print(f"✅ 전략 C 신호 생성: {signal_c['signal_type']}")
+            else:
+                print(f"ℹ️ 전략 C 신호 없음")
+            
+            print(f"📊 총 신호 후보: {len(all_candidates)}개")
             
             # 신호가 없으면 중립 반환
             if not all_candidates:
+                print(f"ℹ️ 모든 전략에서 신호 없음")
                 return {
                     'action': 'NEUTRAL',
                     'playbook': 'NO_SIGNAL',
@@ -2202,9 +2229,15 @@ class AdvancedLiquidationStrategy:
             for candidate in all_candidates:
                 if candidate.get('tier') in ['ENTRY', 'SETUP', 'HEADS_UP']:
                     post_gate_signals.append(candidate)
+                    print(f"✅ Gate 통과: {candidate['signal_type']} (Tier: {candidate['tier']})")
+                else:
+                    print(f"🚫 Gate 차단: {candidate['signal_type']} (Tier: {candidate['tier']})")
+            
+            print(f"📊 Gate 통과 신호: {len(post_gate_signals)}개")
             
             # post-Gate 신호가 없으면 중립 반환
             if not post_gate_signals:
+                print(f"ℹ️ 모든 신호가 Gate에서 차단됨")
                 return {
                     'action': 'NEUTRAL',
                     'playbook': 'GATE_BLOCKED',
@@ -2219,14 +2252,20 @@ class AdvancedLiquidationStrategy:
             long_signals = [s for s in post_gate_signals if s['action'] == 'BUY']
             short_signals = [s for s in post_gate_signals if s['action'] == 'SELL']
             
+            print(f"📊 방향별 신호: 롱={len(long_signals)}개, 숏={len(short_signals)}개")
+            
             if long_signals and short_signals:
+                print(f"⚠️ 동시양방향 충돌 감지")
                 # 충돌 해결
                 best_long = max(long_signals, key=lambda x: x['total_score'])
                 best_short = max(short_signals, key=lambda x: x['total_score'])
                 
+                print(f"📊 최고 점수: 롱={best_long['total_score']:.3f}, 숏={best_short['total_score']:.3f}")
+                
                 conflict_result = self.check_conflict_resolution(best_long, best_short)
                 
                 if conflict_result['conflict']:
+                    print(f"🚫 충돌 해결 불가: {conflict_result['resolution']}")
                     return {
                         'action': 'NEUTRAL',
                         'playbook': 'CONFLICT_RESOLUTION',
@@ -2242,14 +2281,17 @@ class AdvancedLiquidationStrategy:
                     # 승자 신호 반환
                     winner = best_long if best_long['total_score'] > best_short['total_score'] else best_short
                     winner['candidates'] = all_candidates  # 후보 정보 추가
+                    print(f"🎯 충돌 해결 완료: {winner['action']} 신호 선택 (점수: {winner['total_score']:.3f})")
                     return winner
             
             # 단일 방향 신호들 중 최고 점수 선택 (post-Gate)
             if post_gate_signals:
                 best_signal = max(post_gate_signals, key=lambda x: x['total_score'])
                 best_signal['candidates'] = all_candidates  # 후보 정보 추가
+                print(f"🎯 최고 점수 신호 선택: {best_signal['signal_type']} (점수: {best_signal['total_score']:.3f}, Tier: {best_signal['tier']})")
                 return best_signal
             
+            print(f"ℹ️ 신호 선택 불가")
             return None
             
         except Exception as e:
@@ -2296,6 +2338,10 @@ class AdvancedLiquidationStrategy:
             - 확장: context(price_data, key_levels, opening_range, vwap, vwap_std, atr)가 주어지면
                     정식 분석 루틴(analyze_all_strategies)으로 위임하여 ENTRY까지 평가
             """
+            if not bucket_data:
+                self.last_liq_metrics = {}
+                return None
+
             if bucket_data:
                 # 버킷 데이터로 메트릭 계산
                 metrics = self._calculate_bucket_metrics(bucket_data)
@@ -2370,9 +2416,9 @@ class AdvancedLiquidationStrategy:
             long_count = sum(1 for item in bucket_data if item.get('side') == 'SELL')
             short_count = sum(1 for item in bucket_data if item.get('side') == 'BUY')
             
-            total_value = sum(item.get('qty_usd', 0) for item in bucket_data)
-            long_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'SELL')
-            short_value = sum(item.get('qty_usd', 0) for item in bucket_data if item.get('side') == 'BUY')
+            total_value = sum(item.get('qty_usd') for item in bucket_data)
+            long_value = sum(item.get('qty_usd') for item in bucket_data if item.get('side') == 'SELL')
+            short_value = sum(item.get('qty_usd') for item in bucket_data if item.get('side') == 'BUY')
         
             return {
                         'total_count': total_count,
@@ -2388,43 +2434,78 @@ class AdvancedLiquidationStrategy:
         except Exception as e:
             print(f"❌ 버킷 메트릭 계산 오류: {e}")
             return {}
-    
+
     def _calculate_z_and_lpi(self, bucket_data):
-        try:
-            tm = self.time_manager
-            now = tm.get_current_time()
-            ws = now - timedelta(seconds=self.config.agg_window_sec)
+        tm = self.time_manager
+        now = tm.get_current_time()
+        ws  = now - timedelta(seconds=self.config.agg_window_sec)
 
-            long_usd = sum(
-                item.get('qty_usd', 0.0)
-                for item in bucket_data
-                if tm.extract_and_normalize_timestamp(item) >= ws
-                and str(item.get('side','')).lower() in ('long','sell')
-            )
-            short_usd = sum(
-                item.get('qty_usd', 0.0)
-                for item in bucket_data
-                if tm.extract_and_normalize_timestamp(item) >= ws
-                and str(item.get('side','')).lower() in ('short','buy')
-            )
+        long_usd  = 0.0
+        short_usd = 0.0
+        for x in bucket_data:
+            ts = tm.extract_and_normalize_timestamp(x)
+            if ts < ws: 
+                continue
+            side = str(x.get('side','')).lower()
+            usd  = float(x.get('qty_usd', 0.0) or 0.0)
+            if side in ('long','sell'):   # SELL=롱 청산
+                long_usd  += usd
+            elif side in ('short','buy'): # BUY =숏 청산
+                short_usd += usd
 
-            # μ, σ를 집계윈도우에 맞게 스케일
-            k = self.config.agg_window_sec
-            mu_l = self.mu_long * k
-            mu_s = self.mu_short * k
-            sig_l = self.sigma_long * (k ** 0.5)
-            sig_s = self.sigma_short * (k ** 0.5)
+        k   = self.config.agg_window_sec
+        muL = self.mu_long   * k
+        muS = self.mu_short  * k
+        sdL = self.sigma_long  * (k**0.5)
+        sdS = self.sigma_short * (k**0.5)
 
-            z_long = abs((long_usd  - mu_l) / max(sig_l, 1e-9)) if self.sigma_long  > 0 else 0.0
-            z_short= abs((short_usd - mu_s) / max(sig_s, 1e-9)) if self.sigma_short > 0 else 0.0
+        # ⬇️ “부족(음의 편차)”는 0으로 클램프 → 스파이크는 ‘평균 초과’만 인정
+        rawL = 0.0 if sdL <= 0 else (long_usd  - muL) / max(sdL, 1e-9)
+        rawS = 0.0 if sdS <= 0 else (short_usd - muS) / max(sdS, 1e-9)
+        z_long  = max(0.0, rawL)
+        z_short = max(0.0, rawS)
 
-            total = long_usd + short_usd
-            lpi = (short_usd - long_usd) / (total + 1e-9)   # +: 숏청산 우세 → BUY 바이어스
+        total = long_usd + short_usd
+        lpi = (short_usd - long_usd) / (total + 1e-9)  # +: 숏청산 우세(=BUY 바이어스)
 
-            return z_long, z_short, lpi
-        except Exception as e:
-            print(f"❌ Z/LPI 계산 오류: {e}")
-            return 0.0, 0.0, 0.0
+        return z_long, z_short, lpi
+
+    # def _calculate_z_and_lpi(self, bucket_data):
+    #     try:
+    #         tm = self.time_manager
+    #         now = tm.get_current_time()
+    #         ws = now - timedelta(seconds=self.config.agg_window_sec)
+
+    #         long_usd = sum(
+    #             item.get('qty_usd', 0.0)
+    #             for item in bucket_data
+    #             if tm.extract_and_normalize_timestamp(item) >= ws
+    #             and str(item.get('side','')).lower() in ('long','sell')
+    #         )
+    #         short_usd = sum(
+    #             item.get('qty_usd', 0.0)
+    #             for item in bucket_data
+    #             if tm.extract_and_normalize_timestamp(item) >= ws
+    #             and str(item.get('side','')).lower() in ('short','buy')
+    #         )
+
+    #         # μ, σ를 집계윈도우에 맞게 스케일
+    #         k = self.config.agg_window_sec
+    #         mu_l = self.mu_long * k
+    #         mu_s = self.mu_short * k
+    #         sig_l = self.sigma_long * (k ** 0.5)
+    #         sig_s = self.sigma_short * (k ** 0.5)
+
+    #         z_long = abs((long_usd  - mu_l) / max(sig_l, 1e-9)) if self.sigma_long  > 0 else 0.0
+    #         z_short= abs((short_usd - mu_s) / max(sig_s, 1e-9)) if self.sigma_short > 0 else 0.0
+
+    #         total = long_usd + short_usd
+    #         lpi = (short_usd - long_usd) / (total + 1e-9)   # +: 숏청산 우세 → BUY 바이어스
+
+    #         return z_long, z_short, lpi
+    #     except Exception as e:
+    #         print(f"❌ Z/LPI 계산 오류: {e}")
+    #         return 0.0, 0.0, 0.0
     
     def _check_basic_warmup(self, metrics: Dict[str, Any]) -> bool:
         """기본 워밍업 조건 체크"""

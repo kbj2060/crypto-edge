@@ -64,7 +64,6 @@ class DataManager:
             )
             
             if df_3m is not None and not df_3m.empty:
-                print(f"✅ DataManager: {len(df_3m)}개 3분봉 데이터 로드 성공")
                 self.data = df_3m.copy()
                 
                 # 마지막 3분봉 타임스탬프 설정

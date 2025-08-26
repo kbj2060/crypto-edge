@@ -53,7 +53,7 @@ class IntegratedSmartTrader:
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
         try:
-            print("🚀 1단계: DataManager 우선 초기화 시작...")
+            print("\n🚀 1단계: DataManager 우선 초기화 시작...")
             
             from data.data_manager import get_data_manager
             
@@ -99,8 +99,6 @@ class IntegratedSmartTrader:
     def _init_advanced_liquidation_strategy(self):
         """고급 청산 전략 초기화"""
         try:
-            print("🚀 고급 청산 전략 초기화 시작...")
-            
             from signals.advanced_liquidation_strategy import AdvancedLiquidationStrategy, AdvancedLiquidationConfig
             
             adv_config = AdvancedLiquidationConfig()
@@ -116,9 +114,7 @@ class IntegratedSmartTrader:
                 self._warmup_strategy_with_data(external_liquidation_data)
             else:
                 print("⚠️ 외부 청산 데이터가 없어 워밍업을 건너뜀")
-                
-            print("🎯 고급 청산 전략 초기화 완료!")
-                
+                                
         except Exception as e:
             print(f"❌ 고급 청산 전략 초기화 오류: {e}")
             import traceback
@@ -133,16 +129,12 @@ class IntegratedSmartTrader:
                 self._session_strategy = None
                 return
                 
-            print("🚀 세션 기반 전략 초기화 시작...")
-            
             from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
             
             session_config = SessionConfig()
             
             self._session_strategy = SessionBasedStrategy(session_config)
-            
-            print("🎯 세션 기반 전략 초기화 완료!")
-                
+                            
         except Exception as e:
             print(f"❌ 세션 기반 전략 초기화 오류: {e}")
             import traceback
@@ -164,9 +156,7 @@ class IntegratedSmartTrader:
             
             # 엔드포인트 구성
             external_api_url = f"{external_server_url.rstrip('/')}/liquidations"
-            
-            print(f"🔍 외부 API 요청 URL: {external_api_url}")
-            
+                        
             # API 요청 헤더 (인증이 필요한 경우)
             headers = {}
             if hasattr(self.config, 'external_api_key'):
@@ -222,10 +212,8 @@ class IntegratedSmartTrader:
             long_count = sum(1 for item in liquidation_data if item.get('side') == 'SELL')
             short_count = sum(1 for item in liquidation_data if item.get('side') == 'BUY')
             
-            print(f"🌐 외부 서버에서 {len(liquidation_data)}개의 청산 데이터를 가져왔습니다.")
             print(f"📊 데이터 품질: 롱 {long_count}개, 숏 {short_count}개")
 
-            
             if long_count < 5:
                 print("⚠️ 롱 청산 데이터가 부족합니다 (5개 필요)")
             if short_count < 5:
@@ -253,7 +241,6 @@ class IntegratedSmartTrader:
         long_count = sum(1 for item in liquidation_data if item.get('side') == 'SELL')
         short_count = sum(1 for item in liquidation_data if item.get('side') == 'BUY')
         
-        print(f"🔥 전략 워밍업 시작: {len(liquidation_data)}개 이벤트")
         print(f"📊 워밍업 데이터 품질: 롱 {long_count}개, 숏 {short_count}개")
         
         # 워밍업 가능 여부 확인
@@ -282,8 +269,8 @@ class IntegratedSmartTrader:
                     
                     liquidation_event = {
                         'timestamp': utc_timestamp,
-                        'side': data.get('side', 'unknown'),
-                        'qty_usd': data.get('size', 0.0) * data.get('price', 0.0)
+                        'side': data.get('side'),
+                        'qty_usd': data.get('size') * data.get('price')
                     }
                     
                     # 고급 청산 전략에 이벤트 전달
@@ -307,233 +294,9 @@ class IntegratedSmartTrader:
             advanced_liquidation_strategy=self._adv_liquidation_strategy
         )
         
-        print("✅ 웹소켓에서 직접 전략 실행하도록 설정 완료")
-        print("   - 1분봉마다: 청산 전략 실행")
-        print("   - 3분마다: 세션 전략 실행 (1분봉 시뮬레이션)")
-
-    
-    # def _handle_3m_kline_close(self, data: Dict):
-    #     """3분봉 마감 이벤트 처리"""
-    #     try:
-    #         if self._is_or_completed(self.core.time_manager.get_current_time()):
-    #             print(f"\n⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감! 세션 전략 분석 시작")
-                
-    #             session_signal = self._analyze_session_strategy()
-    #             if session_signal:
-    #                 self._print_session_signal(session_signal, data['timestamp'])
-                
-    #             print(f"✅ {data['timestamp'].strftime('%H:%M')} - 세션 전략 분석 완료")
-    #         else:
-    #             print(f"⏰ {data['timestamp'].strftime('%H:%M:%S')} - 3분봉 마감 (OR 미완성, 세션 전략 스킵)")
-                
-    #     except Exception as e:
-    #         print(f"❌ 3분봉 마감 이벤트 처리 오류: {e}")
-    #         import traceback
-    #         traceback.print_exc()
-    
-    # def _is_or_completed(self, now: datetime.datetime) -> bool:
-    #     """세션 윈도우(2시간) 제한 + 세션 오픈 후 30분 신호 차단"""
-    #     try:
-    #         # 뉴욕 시장 오픈 시간 (UTC 13:30, KST 22:30)
-    #         ny_open_utc = now.replace(hour=13, minute=30, second=0, microsecond=0)
-            
-    #         # 유럽 시장 오픈+확장 시간 (UTC 07:00, KST 16:00)
-    #         eu_open_utc = now.replace(hour=7, minute=0, second=0, microsecond=0)
-            
-    #         # 현재 시간이 뉴욕 오픈 후 30분이 지났는지 체크 (세션 윈도우 2시간 제한)
-    #         if now >= ny_open_utc:
-    #             time_since_open = now - ny_open_utc
-    #             if 1800 <= time_since_open.total_seconds() <= 9000:  # 30분 ~ 2시간 30분 (2시간 윈도우)
-    #                 return True
-            
-    #         # 현재 시간이 유럽 오픈 후 30분이 지났는지 체크 (세션 윈도우 2시간 제한)
-    #         if now >= eu_open_utc:
-    #             time_since_open = now - eu_open_utc
-    #             if 1800 <= time_since_open.total_seconds() <= 9000:  # 30분 ~ 2시간 30분 (2시간 윈도우)
-    #                 return True
-            
-    #         return False
-            
-    #     except Exception as e:
-    #         print(f"❌ OR 완성 체크 오류: {e}")
-    #         return False
-    
-    
-    # def _analyze_session_strategy(self) -> Optional[Dict]:
-    #     """세션 기반 전략 분석"""
-    #     try:
-    #         if not self.config.enable_session_strategy:
-    #             return None
-            
-    #         # 3분봉 데이터 로드
-    #         data_manager = get_data_manager()
-    #         df_3m = data_manager.get_dataframe()
-            
-            
-    #         if df_3m.empty:
-    #             return None
-            
-    #         # 키 레벨 계산
-    #         key_levels = self.global_manager.get_indicator('daily_levels').get_status()
-            
-    #         # 현재 시간 (UTC)
-    #         current_time = datetime.datetime.now(datetime.timezone.utc)
-            
-    #         # 세션 전략 분석
-    #         from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
-    #         session_config = SessionConfig()
-    #         session_strategy = SessionBasedStrategy(session_config)
-            
-    #         return session_strategy.analyze_session_strategy(
-    #             df_3m, key_levels, current_time
-    #         )
-            
-    #     except Exception as e:
-    #         print(f"❌ 세션 전략 분석 오류: {e}")
-    #         return None
-    
-    # def _calculate_session_key_levels(self, df) -> Dict[str, float]:
-    #     """세션 전략용 키 레벨 계산"""
-    #     try:
-    #         if df.empty:
-    #             return {}
-            
-    #         # 전일 고가/저가/종가
-    #         daily_data = df.resample('D').agg({
-    #             'high': 'max',
-    #             'low': 'min',
-    #             'close': 'last'
-    #         }).dropna()
-            
-    #         if len(daily_data) < 2:
-    #             return {}
-            
-    #         prev_day = daily_data.iloc[-2]
-            
-    #         # 최근 스윙 고점/저점 (20봉 기준)
-    #         lookback = min(20, len(df))
-    #         recent_data = df.tail(lookback)
-            
-    #         return {
-    #             'prev_day_high': prev_day['high'],
-    #             'prev_day_low': prev_day['low'],
-    #             'prev_day_close': prev_day['close'],
-    #             'last_swing_high': recent_data['high'].max(),
-    #             'last_swing_low': recent_data['low'].min()
-    #         }
-            
-    #     except Exception as e:
-    #         print(f"❌ 세션 키 레벨 계산 오류: {e}")
-    #         return {}
-    
-    # def _analyze_advanced_liquidation_strategy(self) -> Optional[Dict]:
-    #     """고급 청산 전략 분석"""
-    #     try:
-    #         if not self._adv_liquidation_strategy:
-    #             print("❌ 고급 청산 전략이 초기화되지 않음")
-    #             return None
-            
-    #         # 현재 가격 데이터 가져오기
-    #         websocket = self.core.get_websocket()
-    #         if not websocket.price_history:
-    #             print("❌ 가격 히스토리가 비어있음 - 1분봉 데이터 대기 중...")
-    #             return None
-            
-    #         current_price = websocket.price_history[-1]['price']
-    #         print(f"💰 현재 가격: {current_price}")
-            
-    #         # 60초 버킷 데이터로 분석
-    #         if hasattr(self, 'liquidation_bucket') and self.liquidation_bucket:
-    #             print(f"📦 버킷 데이터 {len(self.liquidation_bucket)}개로 분석 시작...")
-    #             # 버킷 데이터를 전략에 전달하여 분석
-    #             signal = self._adv_liquidation_strategy.analyze_bucket_liquidations(
-    #                 self.liquidation_bucket, current_price
-    #             )
-    #             print(f"🎯 전략 분석 결과: {signal}")
-    #             return signal
-    #         else:
-    #             print("❌ 청산 버킷이 비어있음")
-    #             return None
-            
-    #     except Exception as e:
-    #         print(f"❌ 고급 청산 전략 분석 오류: {e}")
-    #         import traceback
-    #         traceback.print_exc()
-    #         return None
-    
-    # def _calculate_opening_range(self, df) -> Dict[str, float]:
-    #     """오프닝 레인지 계산"""
-    #     try:
-    #         if df.empty:
-    #             return {}
-            
-    #         or_minutes = 15
-    #         if len(df) < or_minutes:
-    #             return {}
-            
-    #         or_data = df.head(or_minutes)
-            
-    #         return {
-    #             'high': or_data['high'].max(),
-    #             'low': or_data['low'].min(),
-    #             'center': (or_data['high'].max() + or_data['low'].min()) / 2,
-    #             'range': or_data['high'].max() - or_data['low'].min()
-    #         }
-            
-    #     except Exception as e:
-    #         print(f"❌ 오프닝 레인지 계산 오류: {e}")
-    #         return {}
-    
-    # def _calculate_vwap_and_std(self, df) -> tuple[float, float]:
-    #     """VWAP 및 표준편차 계산"""
-    #     try:
-    #         if df.empty:
-    #             return 0.0, 0.0
-            
-    #         # 가격과 거래량으로 VWAP 계산
-    #         vwap = sum(df['close'] * df['volume']) / sum(df['volume']) if sum(df['volume']) > 0 else 0
-            
-    #         # 표준편차 계산
-    #         mean_price = df['close'].mean()
-    #         std = (sum((df['close'] - mean_price) ** 2) / len(df)) ** 0.5
-            
-    #         return vwap, std
-            
-    #     except Exception as e:
-    #         print(f"❌ VWAP 및 표준편차 계산 오류: {e}")
-    #         return 0.0, 0.0
-    
-    
-    # def _print_advanced_liquidation_signal(self, signal: Dict, now: datetime.datetime):
-    #     """고급 청산 신호 출력"""
-    #     try:
-    #         if signal is None:
-    #             signal = {}
-            
-    #         action = signal.get('action', 'NEUTRAL')
-    #         playbook = signal.get('playbook', 'NO_SIGNAL')
-    #         tier = signal.get('tier', 'NEUTRAL')
-    #         total_score = signal.get('total_score', 0.000)
-    #         reason = signal.get('reason', '모든 전략에서 신호 없음')
-            
-    #         print(f"\n{'='*50}")
-    #         print(f"⚡ 고급 청산 전략 신호 감지!")
-    #         print(f"{'='*50}")
-    #         print(f"⏰ 시간: {now.strftime('%H:%M:%S')}")
-    #         print(f"🎯 액션: {action}")
-    #         print(f"📚 플레이북: {playbook}")
-    #         print(f"🏆 등급: {tier}")
-    #         print(f"📊 총점: {total_score:.3f}")
-    #         print(f"📝 이유: {reason}")
-    #         print(f"{'='*50}\n")
-            
-    #     except Exception as e:
-    #         print(f"❌ 고급 청산 신호 출력 오류: {e}")
     
     def start(self):
         """트레이더 시작"""
-        self._print_startup_info()
-        
         # 웹소켓 전략 설정 (전략 초기화 완료 후)
         self._setup_websocket_strategies()
         
@@ -544,42 +307,6 @@ class IntegratedSmartTrader:
         
         # 메인 루프
         self._run_main_loop()
-    
-    def _print_startup_info(self):
-        """시작 정보 출력"""
-        print(f"🚀 {self.config.symbol} 통합 스마트 트레이더 시작!")
-        
-        # 현재 세션 정보 출력
-        try:
-            from utils.time_manager import get_time_manager
-            time_manager = get_time_manager()
-            
-            # 현재 세션 상태 확인
-            session_config = time_manager.get_indicator_mode_config()
-            
-            if session_config['use_session_mode']:
-                session_name = session_config.get('session_name', 'UNKNOWN')
-                session_start = session_config.get('session_start_time')
-                elapsed_minutes = session_config.get('elapsed_minutes', 0)
-                session_status = session_config.get('session_status', 'UNKNOWN')
-                
-                print(f"📊 현재 세션: {session_name}")
-                print(f"🕐 세션 시작: {session_start}")
-                print(f"⏱️ 경과 시간: {elapsed_minutes:.1f}분")
-                print(f"📈 세션 상태: {session_status}")
-            else:
-                print(f"📊 현재 세션: 세션 외 시간 (룩백 모드)")
-                
-        except Exception as e:
-            print(f"⚠️ 세션 정보 출력 오류: {e}")
-        
-        print(f"📊 세션 전략: {'활성' if self.config.enable_session_strategy else '비활성'}")
-        print(f"⏰ 세션 전략: 1분봉 기반 3분마다 실행 (OR 30분 완성 후)")
-        print(f"⚡ 청산 전략: 1분봉마다 실행")
-        print("=" * 60)
-        print("💡 웹소켓에서 직접 전략 실행 - 메인 루프 단순화됨")
-        print("⚠️  첫 1분봉 데이터 수집까지 대기 중... (약 1분)")
-        print("=" * 60)
     
     def _run_main_loop(self):
         """메인 실행 루프 - 단순화됨"""

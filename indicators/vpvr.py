@@ -59,23 +59,18 @@ class SessionVPVR:
         self._initialize_vpvr()
     
     def _initialize_vpvr(self):
-        """초기화 시 자동으로 적절한 데이터 로딩"""
-        print("🚀 VPVR 초기 데이터 자동 로딩 시작...")
-        
+        """초기화 시 자동으로 적절한 데이터 로딩"""        
         session_config = self.time_manager.get_indicator_mode_config()
         
         if session_config['use_session_mode']:
-            print(f"📊 세션 모드: {session_config['session_name']} 세션 시작부터 현재까지 데이터 로딩")
             self._load_session_data(session_config)
             self._update_vpvr_result(session_config)
         else:
-            print(f"📊 룩백 모드: 최근 {self.lookback}개 3분봉 데이터 로딩")
             self._load_lookback_data()
             self._update_vpvr_result()
 
         self.last_update_time = dt.datetime.now(dt.timezone.utc)
         self.last_session_name = session_config.get('session_name', 'UNKNOWN')
-        print("✅ VPVR 초기 데이터 로딩 완료")
             
     
     def _load_session_data(self, session_config: Dict[str, any]):
@@ -98,20 +93,13 @@ class SessionVPVR:
             if df.empty:
                 print("⚠️ 세션 시작 이후 데이터가 없습니다")
                 return
-            
-            print(f"📊 세션 데이터 로드: {len(df)}개 캔들")
-            
+                        
             # VPVR에 데이터 직접 누적
             for timestamp, row in df.iterrows():
                 self._process_candle_data(row, timestamp)
             
             # 처리된 캔들 개수 저장 및 VPVR 결과 업데이트
             self.processed_candle_count = len(df)
-            
-            print(f"✅ 세션 데이터 VPVR 업데이트 완료: {len(df)}개 캔들")
-            print(f"   📊 활성 가격 구간: {len(self.price_bins)}개")
-            print(f"   📊 총 거래량: {sum(self.volume_histogram.values()):.2f}")
-            print(f"   📊 처리된 캔들: {self.processed_candle_count}개")
             
         except Exception as e:
             print(f"❌ 세션 데이터 로딩 오류: {e}")
@@ -129,20 +117,13 @@ class SessionVPVR:
         # lookback 기간만큼만 사용 (최신 데이터부터)
         if len(df) > self.lookback: 
             df = df.tail(self.lookback)
-        
-        print(f"📊 룩백 데이터 로드: {len(df)}개 캔들 (요청: {self.lookback}개)")
-        
+                
         # VPVR에 데이터 직접 누적
         for timestamp, row in df.iterrows():
             self._process_candle_data(row, timestamp)
         
         # 처리된 캔들 개수 저장 및 VPVR 결과 업데이트
         self.processed_candle_count = len(df)
-        
-        print(f"✅ 룩백 데이터 VPVR 업데이트 완료: {len(df)}개 캔들")
-        print(f"   📊 활성 가격 구간: {len(self.price_bins)}개")
-        print(f"   📊 총 거래량: {sum(self.volume_histogram.values()):.2f}")
-        print(f"   📊 처리된 캔들: {self.processed_candle_count}개")
             
 
     def _update_vpvr_result(self, session_config: Dict[str, any] = None):

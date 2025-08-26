@@ -71,14 +71,7 @@ class BinanceDataLoader:
             if df.empty:
                 print("⚠️ 파싱된 데이터가 비어있습니다")
                 return None
-            
-            print(f"✅ 데이터 로드 성공: {len(df)}개 캔들")
-            if len(df) > 0:
-                print(f"📊 기간: {df.index[0]} ~ {df.index[-1]}")
-                print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
-            else:
-                print("📊 데이터가 없습니다")
-            
+    
             return df
             
         except requests.exceptions.RequestException as e:
@@ -169,12 +162,7 @@ class BinanceDataLoader:
             if not future_candles.empty:
                 print(f"⚠️ 미래 시간 캔들 {len(future_candles)}개 제거: {future_candles.index[0]} ~ {future_candles.index[-1]}")
                 df = df[df.index <= current_time]
-            
-            if df.empty:
-                print("⚠️ 미래 시간 필터링 후 데이터가 없습니다")
-                return df
-            
-            print(f"✅ 필터링 완료: {len(df)}개 캔들")
+
             return df
             
         except Exception as e:

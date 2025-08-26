@@ -78,7 +78,6 @@ class BinanceWebSocket:
         """전략 실행기 설정"""
         self.session_strategy = session_strategy
         self.advanced_liquidation_strategy = advanced_liquidation_strategy
-        self.logger.info("전략 실행기 설정 완료")
     
     async def connect_liquidation_stream(self):
         """청산 데이터 스트림 연결"""
@@ -86,8 +85,6 @@ class BinanceWebSocket:
         
         try:
             async with websockets.connect(uri) as websocket:
-                self.logger.info(f"청산 스트림 연결됨: {self.symbol}")
-                
                 async for message in websocket:
                     if not self.running:
                         break
@@ -108,8 +105,6 @@ class BinanceWebSocket:
         uri = f"{self.ws_url}/{self.symbol}@kline_1m"
         
         async with websockets.connect(uri) as websocket:
-            self.logger.info(f"1분봉 Kline 스트림 연결됨: {self.symbol}")
-            
             async for message in websocket:
                 if not self.running:
                     break
@@ -465,12 +460,6 @@ class BinanceWebSocket:
     async def start(self):
         """웹소켓 스트림 시작"""
         self.running = True
-        self.logger.info("웹소켓 스트림 시작")
-        
-        # 첫 3분봉 마감까지 웹소켓으로 1분봉 데이터 수집
-        print("🔄 웹소켓 시작 - 첫 3분봉 마감까지 1분봉 데이터 수집 중...")
-        print("💡 첫 3분봉 마감 시 바이낸스 API에서 데이터를 가져오고, 이후에는 웹소켓 데이터만 사용합니다")
-        
         # 여러 스트림을 동시에 실행
         tasks = [
             self.connect_liquidation_stream(),
@@ -482,7 +471,6 @@ class BinanceWebSocket:
     def stop(self):
         """웹소켓 스트림 중지"""
         self.running = False
-        self.logger.info("웹소켓 스트림 중지")
     
     def start_background(self):
         """백그라운드에서 웹소켓 실행"""
@@ -493,5 +481,4 @@ class BinanceWebSocket:
         
         self.thread = threading.Thread(target=run_async, daemon=True)
         self.thread.start()
-        self.logger.info("백그라운드 웹소켓 시작됨")
     

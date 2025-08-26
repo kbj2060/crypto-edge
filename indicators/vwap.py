@@ -41,15 +41,11 @@ class SessionVWAP:
     
     def _initialize_vwap(self):
         """초기 데이터 자동 로딩"""
-        print("🚀 VWAP 초기 데이터 자동 로딩 시작...")
-        
         session_config = self.time_manager.get_indicator_mode_config()
         
         if session_config['use_session_mode']:
-            print("📊 세션 모드: 세션 시작부터 현재까지 데이터 로딩")
             self._load_session_data()
         else:
-            print("📊 세션 외 시간: 최근 데이터로 VWAP 초기화")
             self._load_recent_data()
         
         # 초기 세션 이름 설정
@@ -81,13 +77,8 @@ class SessionVWAP:
                 print("❌ 세션 데이터 로드 실패")
                 return
             
-            print(f"✅ 세션 데이터 로드 성공: {len(df)}개 캔들")
-            print(f"📊 기간: {df.index[0]} ~ {df.index[-1]}")
-            print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
-            
             # 세션 시작 이후 데이터만 필터링 (인덱스가 close_time)
             session_data = df[df.index >= session_start]
-            print(f"📊 세션 데이터 로드: {len(session_data)}개 캔들")
             
             # VWAP 계산
             self._calculate_session_vwap(session_data)
@@ -118,13 +109,8 @@ class SessionVWAP:
                 print("❌ 세션 외 시간 데이터 로드 실패")
                 return
             
-            print(f"✅ 세션 외 시간 데이터 로드 성공: {len(df)}개 캔들")
-            print(f"📊 기간: {self.time_manager.format_datetime(df.index[0])} ~ {self.time_manager.format_datetime(df.index[-1])}")
-            print(f"💰 평균 거래량: {df['volume'].mean():.2f} ETH")
-            
             # 초기 로딩된 데이터 수 저장
             self.initial_data_count = len(df)
-            print(f"📊 초기 데이터 수 저장: {self.initial_data_count}개 캔들")
             
             # 세션 외 시간 데이터로 VWAP 계산
             self._calculate_session_vwap(df)
@@ -183,39 +169,6 @@ class SessionVWAP:
             
         except Exception as e:
             print(f"❌ 세션 VWAP 계산 오류: {e}")
-
-    # def update_with_dataframe(self, df: pd.DataFrame):
-    #     """DataFrame으로 VWAP 일괄 업데이트"""
-    #     try:
-    #         if df is None or df.empty:
-    #             return
-            
-    #         print(f"📊 VWAP DataFrame 일괄 업데이트: {len(df)}개 캔들")
-            
-    #         # 각 캔들을 순차적으로 처리
-    #         for timestamp, row in df.iterrows():
-    #             candle_data = {
-    #                 'timestamp': timestamp,
-    #                 'open': float(row['open']),
-    #                 'high': float(row['high']),
-    #                 'low': float(row['low']),
-    #                 'close': float(row['close']),
-    #                 'volume': float(row['volume'])
-    #             }
-                
-    #             self.session_data.append(candle_data)
-    #             self.processed_candle_count += 1
-            
-    #         # VWAP 계산 (조용하게)
-    #         if self.session_data:
-    #             df_session = pd.DataFrame(self.session_data)
-    #             df_session.set_index('timestamp', inplace=True)  # timestamp를 인덱스로 설정
-    #             self._calculate_session_vwap(df_session)
-            
-    #         print(f"✅ VWAP DataFrame 업데이트 완료: {len(df)}개 캔들 처리됨")
-            
-    #     except Exception as e:
-    #         print(f"❌ VWAP DataFrame 업데이트 오류: {e}")
 
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 VWAP 업데이트"""

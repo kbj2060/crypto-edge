@@ -99,7 +99,6 @@ class GlobalIndicatorManager:
             self._indicators['vwap'] = vwap_config['class'](
                 symbol=vwap_config['symbol']
             )
-        
             print("   ✅ VWAP 지표 초기화 완료")
             
         except Exception as e:
@@ -125,19 +124,12 @@ class GlobalIndicatorManager:
             if self._initialized:
                 return
             
-            print("🔧 전역 지표들 초기화 시작...")
-            
             try:
-                # 🚀 1단계: DataManager 상태 확인 (이미 smart_trader에서 초기화됨)
-                print("📊 1단계: DataManager 상태 확인...")
-                
                 data_manager = self.get_data_manager()
                 if not data_manager.is_ready():
                     print("❌ DataManager가 아직 준비되지 않음. smart_trader에서 먼저 초기화하세요.")
                     return
-                
-                print("✅ DataManager가 이미 준비됨 - 중앙 데이터 저장소 사용 가능")
-                
+                                
                 # 🚀 2단계: 나머지 지표들 초기화 (DataManager 완료 후)
                 print("\n🔥 2단계: 나머지 지표들 초기화 시작...")
                 self._initialize_atr_indicator()

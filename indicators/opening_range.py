@@ -58,26 +58,16 @@ class OpeningRange:
             session_open_time, session_name = self.time_manager.get_session_open_time(current_time)
             
             if session_open_time:
-                print(f"🌅 현재 세션 활성화: {session_name} 세션")
                 current_session_start = session_open_time
                 
-                if self.is_or_completed(current_time, session_open_time):
-                    print(f"✅ 현재 세션 OR 완성됨: {session_name} 세션")
-                else:
-                    elapsed = self.time_manager._calculate_elapsed_minutes(current_time, session_open_time)
-                    remaining = self.or_minutes - elapsed
-                    print(f"⏳ 현재 세션 OR 진행 중: {elapsed:.1f}분 경과, {remaining:.1f}분 남음")
             else:
                 # 직전 세션 확인
                 prev_session = self.time_manager.get_previous_session_open(current_time)
                 if prev_session[0]:
                     prev_start, prev_name = prev_session
-                    print(f"🌙 현재 세션 비활성: 직전 세션({prev_name}) OR 사용")
                     if self.is_or_completed(current_time, prev_start):
-                        print(f"✅ 직전 세션 OR 완성됨: {prev_name} 세션")
                         current_session_start = prev_start
                 else:
-                    print("⚠️ 활성 세션 없음")
                     current_session_start = None
 
             return current_session_start
@@ -116,9 +106,6 @@ class OpeningRange:
         start_utc = self.time_manager.ensure_utc(start_time)
         end_utc = self.time_manager.ensure_utc(end_time)
         
-        print(f"📊 DataManager에서 OR 데이터 계산 시작")
-        print(f"📊 요청 기간: {start_utc} ~ {end_utc}")
-        
         # DataManager에서 지정된 기간 데이터 가져오기
         or_data = data_manager.get_data_range(start_utc, end_utc)
         return or_data
@@ -156,7 +143,6 @@ class OpeningRange:
                     'calculation_time': self.time_manager.get_current_time().isoformat()
                 }
                 
-                print(f"✅ OR 데이터 계산 완료: {or_high:.2f}~{or_low:.2f} ({len(df)}개 캔들)")
                 return self._or
             else:
                 print(f"⚠️ 지정된 기간에 해당하는 데이터가 없습니다: {start_utc} ~ {end_utc}")
