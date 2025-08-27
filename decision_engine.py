@@ -266,21 +266,62 @@ class DecisionEngine:
         """
         Send features to the Ollama model and enforce JSON schema output.
         """
-        resp = chat(
-            model=self.model,
-            messages=[
-                {"role": "system", "content": self.system_prompt},
-                {"role": "user", "content": json.dumps(features, ensure_ascii=False)},
-            ],
-            options={
-                "response_format": {
-                    "type": "json_schema",
-                    "json_schema": self.schema,
-                    "strict": True,
-                }
-            },
-        )
-        return json.loads(resp.message.content)
+        try:
+            print(f"🤖 [DecisionEngine] Ollama 모델 호출 시작: {self.model}")
+            print(f"   📊 입력 피처: {json.dumps(features, ensure_ascii=False, indent=2)}")
+            
+            resp = chat(
+                model=self.model,
+                messages=[
+                    {"role": "system", "content": self.system_prompt},
+                    {"role": "user", "content": json.dumps(features, ensure_ascii=False)},
+                ],
+                options={
+                    "response_format": {
+                        "type": "json_schema",
+                        "json_schema": self.schema,
+                        "strict": True,
+                    }
+                },
+            )
+            
+            print(f"   📥 모델 응답: {resp.message.content}")
+            
+            # 응답 내용 검증
+            if not resp.message.content or resp.message.content.strip() == "":
+                print("❌ [DecisionEngine] 모델 응답이 비어있음")
+                return self._get_default_decision("HOLD", "모델 응답 없음")
+            
+            # JSON 파싱 시도
+            try:
+                decision = json.loads(resp.message.content)
+                print(f"   ✅ JSON 파싱 성공: {decision}")
+                return decision
+            except json.JSONDecodeError as e:
+                print(f"❌ [DecisionEngine] JSON 파싱 오류: {e}")
+                print(f"   📝 원본 응답: '{resp.message.content}'")
+                return self._get_default_decision("HOLD", f"JSON 파싱 오류: {e}")
+                
+        except Exception as e:
+            print(f"❌ [DecisionEngine] 모델 호출 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return self._get_default_decision("HOLD", f"모델 호출 오류: {e}")
+    
+    def _get_default_decision(self, action: str, reason: str) -> Dict[str, Any]:
+        """기본 의사결정 반환 (오류 발생 시)"""
+        return {
+            "action": action,
+            "entry": 0.0,
+            "stop": 0.0,
+            "targets": [0.0],
+            "size_pct": 0.0,
+            "confidence": 0.0,
+            "playbook": "ERROR",
+            "risk": {"rr": 0.0, "atr_mult": 0.0, "stop_distance": 0.0},
+            "timing": {"urgency": "wait", "ttl_seconds": 300},
+            "reasons": [reason]
+        }
 
     # ----------------------
     # End-to-end
