@@ -209,7 +209,7 @@ class FadeReentryStrategy:
 
         self.pending_setup = None
         print(f"🎯 [FADE] ENTRY 신호 생성: {ps['side']} | 진입=${entry:.2f} | 손절=${stop:.2f} | 목표1=${tp1:.2f} | 목표2=${tp2:.2f}")
-        return {"stage":"ENTRY","action":ps['side'],"entry":float(entry),"stop":float(stop),
+        return {"action":ps['side'],"entry":float(entry),"stop":float(stop),
                 "targets":[float(tp1), float(tp2)],
                 "context":{"mode":"LIQ_FADE","z":ps['z'],"lpi":ps['lpi'],
                             "vwap":float(vwap),"vwap_std":float(vwap_std),"atr":float(atr),

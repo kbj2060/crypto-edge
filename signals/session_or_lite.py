@@ -5,6 +5,7 @@ from typing import Optional, Dict, Any
 
 import pandas as pd
 
+from data.data_manager import DataManager, get_data_manager
 from indicators.global_indicators import get_atr, get_vwap
 from utils.time_manager import get_time_manager
 
@@ -48,12 +49,11 @@ class SessionORLite:
     def __init__(self, cfg: SessionORLiteCfg = SessionORLiteCfg()):
         self.cfg = cfg
         self.session_open: Optional[datetime] = None
-        self.or_locked: bool = False
+        self.or_locked: bool = True
         self.or_high: Optional[float] = None
         self.or_low: Optional[float] = None
-        self.traded_long: bool = False
-        self.traded_short: bool = False
         self.time_manager = get_time_manager()
+        self.data_manager = get_data_manager()
 
         # Simple debug counters to diagnose side bias
         self.debug = {
@@ -63,29 +63,35 @@ class SessionORLite:
         }
 
     # ---- lifecycle ----
-    def on_session_open(self) -> None:
+    def on_session_open(self, open_time) -> None:
         """Call at session open (tz-aware UTC)."""
-        self.session_open = self.time_manager.get_current_time()
-        self.or_locked = False
-        self.or_high = None
-        self.or_low = None
-        self.traded_long = False
-        self.traded_short = False
-        # reset debug for a clean session view
-        for k in self.debug:
-            self.debug[k] = 0
+        self.session_open = open_time
+
+        if self.session_open:
+            self.or_locked = False
+
+            df = self.data_manager.get_data_range(self.session_open, self.session_open + timedelta(minutes=self.cfg.or_minutes))
+            self.or_high = max(df['high'])
+            self.or_low = min(df['low'])
+
+            for k in self.debug:
+                self.debug[k] = 0   
+            print(f"🚀 [SESSION_OR_LITE] 새 세션 시작: {self.session_open.strftime('%Y-%m-%d %H:%M:%S')}")
+            print(f"   📊 OR 설정 초기화: 잠금={self.or_locked}, 고점={self.or_high}, 저점={self.or_low}")
+            print(f"   📊 디버그 카운터 초기화 완료")
             
-        print(f"🚀 [SESSION_OR_LITE] 새 세션 시작: {self.session_open.strftime('%Y-%m-%d %H:%M:%S')}")
-        print(f"   📊 OR 설정 초기화: 잠금={self.or_locked}, 고점={self.or_high}, 저점={self.or_low}")
-        print(f"   📊 거래 상태 초기화: 롱={self.traded_long}, 숏={self.traded_short}")
-        print(f"   📊 디버그 카운터 초기화 완료")
+        else:
+            self.or_high = None
+            self.or_low = None
+            self.or_locked = True
+
 
     def _in_valid_window(self, now: datetime) -> bool:
         if not self.session_open:
             return False
         
         valid_end = self.session_open + timedelta(minutes=self.cfg.valid_minutes_after_open)
-        is_valid = now <= valid_end
+        is_valid = now >= valid_end
         
         print(f"   📊 유효 시간대 확인: {now.strftime('%H:%M:%S')} <= {valid_end.strftime('%H:%M:%S')} - {'✅' if is_valid else '❌'}")
         print(f"      📏 세션 시작: {self.session_open.strftime('%H:%M:%S')}")
@@ -107,7 +113,7 @@ class SessionORLite:
         returns: signal dict or None
         """
         now = self.time_manager.get_current_time()
-        
+
         print(f"🔍 [SESSION_OR_LITE] 3m 캔들 분석 시작: {now.strftime('%H:%M:%S')}")
         print(f"   📊 세션 시작: {self.session_open.strftime('%H:%M:%S') if self.session_open else self.time_manager.get_next_session_start().strftime('%H:%M:%S')}")
         print(f"   📊 다음 세션 시작 남은 시간 : {(self.time_manager.get_next_session_start() - now).total_seconds() // 60}분")
@@ -132,31 +138,10 @@ class SessionORLite:
         # 1) Build/lock OR (include the last candle if now == or_end)
         or_end = self.session_open + timedelta(minutes=self.cfg.or_minutes)
         print(f"   📊 OR 구축 중: {now.strftime('%H:%M:%S')} <= {or_end.strftime('%H:%M:%S')} (OR 종료)")
-        
-        if not self.or_locked:
-            hi = h; lo = l
-            print(f"   🔧 OR 구축: 현재 고점={hi:.2f}, 저점={lo:.2f}")
-            
-            # include last candle when now == or_end
-            if now <= or_end:
-                self.or_high = hi if self.or_high is None else max(self.or_high, hi)
-                self.or_low  = lo if self.or_low  is None else min(self.or_low,  lo)
-                print(f"   🔧 OR 업데이트: 고점={self.or_high:.2f}, 저점={self.or_low:.2f}")
-                
-                if now < or_end:
-                    print(f"   ⏳ OR 구축 중: {now.strftime('%H:%M:%S')} < {or_end.strftime('%H:%M:%S')}")
-                    return None
-                else:
-                    print(f"   🔒 OR 잠금 시점: {now.strftime('%H:%M:%S')} == {or_end.strftime('%H:%M:%S')}")
-            
-            # lock here (either == or_end or first call after or_end)
-            self.or_locked = True
-            print(f"   🔒 OR 잠금 완료: 고점={self.or_high:.2f}, 저점={self.or_low:.2f}")
-        else:
-            print(f"   🔒 OR 이미 잠김: 고점={self.or_high:.2f}, 저점={self.or_low:.2f}")
 
         # safety
         if self.or_high is None or self.or_low is None or self.or_high <= self.or_low:
+            print('High, Low 데이터 없음')
             return None
 
         # 2) Breakout qualification (body or wick-based, configurable)
@@ -169,7 +154,7 @@ class SessionORLite:
         
         print(f"   📊 돌파 조건 분석:")
         print(f"      📏 캔들 범위: {rng:.2f}, 바디: {body:.2f}")
-        print(f"      📏 바디 비율: {body/rng:.2f:.2f} (최소 {self.cfg.body_ratio_min:.2f}) - {'✅' if body_ok else '❌'}")
+        print(f"      📏 바디 비율: {body/rng:.2f} (최소 {self.cfg.body_ratio_min:.2f}) - {'✅' if body_ok else '❌'}")
 
         # wick based breakout allowance
         wick_break_long  = (h >= self.or_high + self.cfg.tick)
@@ -263,9 +248,8 @@ class SessionORLite:
         sigs = []
         
         print(f"   🎯 신호 생성 분석:")
-        print(f"      📊 거래 상태: 롱={self.traded_long}, 숏={self.traded_short}")
 
-        if (not self.traded_long) and break_long_ok and touched_long and vwap_ok_long:
+        if break_long_ok and touched_long and vwap_ok_long:
             print(f"      🟢 롱 신호 생성 조건 만족!")
             print(f"         ✅ 돌파: {break_long_ok}, 리테스트: {touched_long}, VWAP: {vwap_ok_long}")
             
@@ -281,7 +265,6 @@ class SessionORLite:
             print(f"            TP1: {tp1:.2f} (진입가 + {self.cfg.tp_R1}R)")
             print(f"            TP2: {tp2:.2f} (진입가 + {self.cfg.tp_R2}R)")
             
-            self.traded_long = True
             sigs.append({
                 "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
                 "targets": [float(tp1), float(tp2)],
@@ -293,9 +276,9 @@ class SessionORLite:
             })
         else:
             print(f"      ❌ 롱 신호 생성 조건 불만족:")
-            print(f"         돌파: {break_long_ok}, 리테스트: {touched_long}, VWAP: {vwap_ok_long}, 이미거래: {self.traded_long}")
+            print(f"         돌파: {break_long_ok}, 리테스트: {touched_long}, VWAP: {vwap_ok_long}")
 
-        if (not self.traded_short) and break_short_ok and touched_short and vwap_ok_short:
+        if break_short_ok and touched_short and vwap_ok_short:
             print(f"      🔴 숏 신호 생성 조건 만족!")
             print(f"         ✅ 돌파: {break_short_ok}, 리테스트: {touched_short}, VWAP: {vwap_ok_short}")
             
@@ -311,7 +294,6 @@ class SessionORLite:
             print(f"            TP1: {tp1:.2f} (진입가 - {self.cfg.tp_R1}R)")
             print(f"            TP2: {tp2:.2f} (진입가 - {self.cfg.tp_R2}R)")
             
-            self.traded_short = True
             sigs.append({
                 "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
                 "targets": [float(tp1), float(tp2)],
@@ -323,7 +305,7 @@ class SessionORLite:
             })
         else:
             print(f"      ❌ 숏 신호 생성 조건 불만족:")
-            print(f"         돌파: {break_short_ok}, 리테스트: {touched_short}, VWAP: {vwap_ok_short}, 이미거래: {self.traded_short}")
+            print(f"         돌파: {break_short_ok}, 리테스트: {touched_short}, VWAP: {vwap_ok_short}")
 
         # 최종 결과 출력
         if sigs:

@@ -18,6 +18,7 @@ from signals import vpvr_golden_strategy
 from utils.time_manager import get_time_manager
 # Binance Data Loader import
 from data.binance_dataloader import BinanceDataLoader
+from decision_engine import DecisionEngine
 
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
@@ -35,22 +36,14 @@ class BinanceWebSocket:
         }
         self.bucket_aggregator = BucketAggregator()
         
-        # TimeManager 초기화
         self.time_manager = get_time_manager()
-        
-        # Global Indicator Manager 초기화
         self.global_manager = get_global_indicator_manager()
         
         self.data_manager = get_data_manager()
-
-        # Binance Data Loader 초기화
         self.data_loader = BinanceDataLoader()
         
         # 데이터 저장소
         self.liquidation_bucket = []  # 청산 버킷 추가
-        self.bucket_start_time = self.time_manager.get_current_time()  # 버킷 시작 시간
-        
-        # 설정
         self.max_liquidations = 1000  # 최대 저장 청산 데이터 수
         
         # 전략 실행기 (외부에서 주입받음 - 실행 엔진 역할)
@@ -61,7 +54,9 @@ class BinanceWebSocket:
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
-        
+        self._session_activated = self.time_manager.is_session_active()
+        self._features = {}
+
     
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 등록"""
@@ -188,8 +183,7 @@ class BinanceWebSocket:
                     callback(liquidation)
                 except Exception as e:
                     print(f"청산 콜백 실행 오류: {e}")
-                                
-    
+
     async def process_kline_1m(self, data: Dict):
         """1분봉 Kline 데이터 처리 - 3분봉 시뮬레이션 포함"""
         if 'k' not in data:  # Kline 이벤트가 아니면 종료
@@ -200,9 +194,6 @@ class BinanceWebSocket:
         if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
             return
         
-        # 매 1분 세션 정보 업데이트트
-        self.time_manager.update_session_status()
-
         print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time() + timedelta(seconds=1)).strftime('%H:%M:%S')}")
         
         # 가격 데이터 생성 (1분봉은 DataManager에 추가하지 않음)
@@ -214,8 +205,8 @@ class BinanceWebSocket:
         # 세션 전략 실행 (정확한 3분봉 마감 시간에)
         if self._is_3min_candle_close():
             # 3분봉 데이터 생성
-            if self.time_manager.is_session_active():
-                self.session_strategy.on_session_open(self.time_manager.get_current_time())
+            session_open_time = self.time_manager.get_current_session_info().open_time
+            self.session_strategy.on_session_open(session_open_time)
 
             series_3m = await self._create_3min_candle()
             self.data_manager.update_with_candle(series_3m)
@@ -231,7 +222,18 @@ class BinanceWebSocket:
         
         # 1분봉 콜백 실행
         self._execute_kline_callbacks(price_data)
+        self.ask_ai_decision()
     
+    def ask_ai_decision(self):
+        ai = DecisionEngine()
+        indicators = self.global_manager.get_all_indicators()
+
+        for indicator in indicators.keys():
+            self._features.update({indicator: indicators[indicator].get_status()})
+        
+        decision = ai.decide_from_log(self._features)
+        print(decision)
+        
     def _create_price_data(self, kline: Dict) -> Dict:
         """가격 데이터 생성"""
         return {
@@ -284,7 +286,9 @@ class BinanceWebSocket:
         if not self.fade_reentry_strategy:
             return
         
-        self.fade_reentry_strategy.on_kline_close_3m()
+        result = self.fade_reentry_strategy.on_kline_close_3m()
+
+        self._features.update({"fade_reentry_strategy": result})
 
     def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
         """SQUEEZE 모멘텀 전략 실행"""
@@ -299,6 +303,8 @@ class BinanceWebSocket:
             
         result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
 
+        self._features.update({"squeeze_momentum_strategy": result})
+
         if result:
             print(f"🎯 [SQUEEZE] SQUEEZE 1M 전략 신호: {result['action']} {result['entry']} | {result['stop']} | {result['targets'][0]} {result['targets'][1]}")
         else:
@@ -312,6 +318,8 @@ class BinanceWebSocket:
         df_3m = self.data_manager.get_latest_data(count=2)
         result = self.session_strategy.on_kline_close_3m(df_3m)
 
+        self._features.update({"session_strategy": result})
+        
     def _execute_vpvr_golden_strategy(self):
         """VPVR 골든 포켓 전략 실행"""
         if not self.vpvr_golden_strategy:
@@ -321,6 +329,8 @@ class BinanceWebSocket:
         config = self.vpvr_golden_strategy.VPVRConfig()
         df_3m = self.data_manager.get_latest_data(count=config.lookback_bars + 5)
         sig = self.vpvr_golden_strategy.evaluate(df_3m)
+
+        self._features.update({"vpvr_golden_strategy": sig})
 
         if not sig:
             print(f"📊 [VPVR] VPVR 골든 포켓 전략 신호 없음")

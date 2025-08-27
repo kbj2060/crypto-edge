@@ -318,7 +318,6 @@ class LVNGoldenPocket:
                 sat += 1
 
         # 디버그 출력 (운영시 주석 처리 가능)
-        print("DEBUG: rejection rows:", debug_rows)
         print(f"DEBUG: sat={sat}/{lookback}, require_k={require_k}")
 
         return sat >= require_k
