@@ -476,7 +476,7 @@ class TimeManager:
     def is_session_active(self) -> bool:
         """현재 세션이 활성 상태인지 확인"""
         session_info = self.get_session_status()
-        return session_info.get('is_active', False)
+        return session_info.get('is_active')
     
     def get_current_session_name(self) -> Optional[str]:
         """현재 세션 이름 반환"""

@@ -10,9 +10,11 @@ import pandas as pd
 import logging
 
 # Global Indicator Manager import
+from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
-from indicators.global_indicators import get_global_indicator_manager
+from indicators.global_indicators import get_atr, get_global_indicator_manager, get_vwap
 # Time Manager import
+from signals import vpvr_golden_strategy
 from utils.time_manager import get_time_manager
 # Binance Data Loader import
 from data.binance_dataloader import BinanceDataLoader
@@ -31,6 +33,7 @@ class BinanceWebSocket:
             'liquidation': [],
             'kline_1m': []   # 1분봉 Kline 콜백만 사용
         }
+        self.bucket_aggregator = BucketAggregator()
         
         # TimeManager 초기화
         self.time_manager = get_time_manager()
@@ -44,24 +47,21 @@ class BinanceWebSocket:
         self.data_loader = BinanceDataLoader()
         
         # 데이터 저장소
-        self.liquidations = []
         self.liquidation_bucket = []  # 청산 버킷 추가
         self.bucket_start_time = self.time_manager.get_current_time()  # 버킷 시작 시간
         
         # 설정
         self.max_liquidations = 1000  # 최대 저장 청산 데이터 수
         
-        # 전략 실행기 (나중에 설정)
+        # 전략 실행기 (외부에서 주입받음 - 실행 엔진 역할)
         self.session_strategy = None
         self.advanced_liquidation_strategy = None
+        self.vpvr_golden_strategy = None
         
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
         
-        # 로깅 설정
-        logging.basicConfig(level=logging.INFO)
-        self.logger = logging.getLogger(__name__)
     
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 등록"""
@@ -74,10 +74,42 @@ class BinanceWebSocket:
             if callback in self.callbacks[event_type]:
                 self.callbacks[event_type].remove(callback)
     
-    def set_strategies(self, session_strategy=None, advanced_liquidation_strategy=None):
-        """전략 실행기 설정"""
-        self.session_strategy = session_strategy
-        self.advanced_liquidation_strategy = advanced_liquidation_strategy
+    def set_strategies(
+            self, 
+            session_strategy=None, 
+            advanced_liquidation_strategy=None, 
+            squeeze_momentum_strategy=None, 
+            fade_reentry_strategy=None,
+            liquidation_strategy=None,
+            vpvr_golden_strategy=None
+            ):
+        """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
+        try:
+            # 전략 인스턴스 검증 및 설정
+            if session_strategy is not None:
+                self.session_strategy = session_strategy
+                print(f"✅ 세션 전략 설정 완료: {type(session_strategy).__name__}")
+            
+            if advanced_liquidation_strategy is not None:
+                self.advanced_liquidation_strategy = advanced_liquidation_strategy
+                print(f"✅ 고급 청산 전략 설정 완료: {type(advanced_liquidation_strategy).__name__}")
+            
+            if squeeze_momentum_strategy is not None:
+                self.squeeze_momentum_strategy = squeeze_momentum_strategy
+                print(f"✅ SQUEEZE 모멘텀 전략 설정 완료: {type(squeeze_momentum_strategy).__name__}")
+            
+            if fade_reentry_strategy is not None:
+                self.fade_reentry_strategy = fade_reentry_strategy
+                print(f"✅ 페이드 리입 전략 설정 완료: {type(fade_reentry_strategy).__name__}")
+                
+            if vpvr_golden_strategy is not None:
+                self.vpvr_golden_strategy = vpvr_golden_strategy
+                print(f"✅ VPVR 골든 포켓 전략 설정 완료: {type(vpvr_golden_strategy).__name__}")
+                
+        except Exception as e:
+            print(f"❌ 전략 설정 오류: {e}")
+            import traceback
+            traceback.print_exc()
     
     async def connect_liquidation_stream(self):
         """청산 데이터 스트림 연결"""
@@ -93,12 +125,12 @@ class BinanceWebSocket:
                         data = json.loads(message)
                         await self.process_liquidation(data)
                     except json.JSONDecodeError as e:
-                        self.logger.error(f"JSON 파싱 오류: {e}")
+                        print(f"JSON 파싱 오류: {e}")
                     except Exception as e:
-                        self.logger.error(f"청산 데이터 처리 오류: {e}")
+                        print(f"청산 데이터 처리 오류: {e}")
                         
         except Exception as e:
-            self.logger.error(f"청산 스트림 연결 오류: {e}")
+            print(f"청산 스트림 연결 오류: {e}")
     
     async def connect_kline_1m_stream(self):
         """1분봉 Kline 스트림 연결"""
@@ -128,51 +160,50 @@ class BinanceWebSocket:
     '''
     async def process_liquidation(self, data: Dict):
         """청산 데이터 처리"""
-        try:
-            if 'o' in data:  # 청산 이벤트
-                # qty_usd 계산 (수량 × 가격)
-                qty_usd = float(data['o']['q']) * float(data['o']['p'])
-                
-                liquidation = {
-                    'timestamp': self.time_manager.get_current_time(),
-                    'symbol': data['o']['s'],
-                    'side': data['o']['S'],  # BUY/SELL
-                    'quantity': float(data['o']['q']),
-                    'price': float(data['o']['p']),
-                    'qty_usd': qty_usd,  # USD 기준 청산 금액
-                    'time': data['o']['T']
-                }
-                
-                # 청산 버킷에 추가
-                self.liquidations.append(liquidation)
-                self.liquidation_bucket.append(liquidation)
-                
-                # 최대 개수 제한
-                if len(self.liquidations) > self.max_liquidations:
-                    self.liquidations.pop(0)
-                
-                # 콜백 실행
-                for callback in self.callbacks['liquidation']:
-                    try:
-                        callback(liquidation)
-                    except Exception as e:
-                        self.logger.error(f"청산 콜백 실행 오류: {e}")
+        if 'o' in data:  # 청산 이벤트
+            # qty_usd 계산 (수량 × 가격)
+            qty_usd = float(data['o']['q']) * float(data['o']['p'])
+            
+            liquidation = {
+                'timestamp': self.time_manager.get_current_time(),
+                'symbol': data['o']['s'],
+                'side': data['o']['S'],  # BUY/SELL
+                'size': float(data['o']['q']),
+                'price': float(data['o']['p']),
+                'qty_usd': qty_usd,  # USD 기준 청산 금액
+                'time': data['o']['T']
+            }
+            
+            # 청산 버킷에 추가
+            self.liquidation_bucket.append(liquidation)
+            self.bucket_aggregator.add_liquidation_event(liquidation)
+            
+            # 최대 개수 제한
+            if len(self.liquidation_bucket) > self.max_liquidations:
+                self.liquidation_bucket.pop(0)
+            
+            # 콜백 실행
+            for callback in self.callbacks['liquidation']:
+                try:
+                    callback(liquidation)
+                except Exception as e:
+                    print(f"청산 콜백 실행 오류: {e}")
                                 
-        except Exception as e:
-            self.logger.error(f"청산 데이터 처리 오류: {e}")
     
     async def process_kline_1m(self, data: Dict):
         """1분봉 Kline 데이터 처리 - 3분봉 시뮬레이션 포함"""
         if 'k' not in data:  # Kline 이벤트가 아니면 종료
             return
-            
         kline = data['k']
         
         # 1분봉 마감 체크 (k.x == true)
         if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
             return
-            
-        print(f"⏰ OPEN TIME : {(self.time_manager.get_current_time() + timedelta(seconds=1)).strftime('%H:%M:%S')}")
+        
+        # 매 1분 세션 정보 업데이트트
+        self.time_manager.update_session_status()
+
+        print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time() + timedelta(seconds=1)).strftime('%H:%M:%S')}")
         
         # 가격 데이터 생성 (1분봉은 DataManager에 추가하지 않음)
         price_data = self._create_price_data(kline)
@@ -180,20 +211,26 @@ class BinanceWebSocket:
         # 1분봉 데이터를 임시 저장 (3분봉 생성용)
         self._store_1min_data(price_data)
         
-        # 청산 전략 실행 (매 1분마다)
-        if self.advanced_liquidation_strategy:
-            await self._execute_liquidation_strategy()
-        
         # 세션 전략 실행 (정확한 3분봉 마감 시간에)
         if self._is_3min_candle_close():
             # 3분봉 데이터 생성
+            if self.time_manager.is_session_active():
+                self.session_strategy.on_session_open(self.time_manager.get_current_time())
+
             series_3m = await self._create_3min_candle()
             self.data_manager.update_with_candle(series_3m)
-            await self._execute_session_strategy(series_3m)
+            self.global_manager.update_all_indicators(series_3m)
 
+            self._execute_session_strategy()
+            self._execute_fade_reentry_3m_strategy()
+            self._execute_vpvr_golden_strategy()
+
+        # SQUEEZE 모멘텀 전략 실행
+        self._execute_fade_reentry_1m_strategy()
+        self._execute_squeeze_momentum_1m_strategy(price_data)
+        
         # 1분봉 콜백 실행
         self._execute_kline_callbacks(price_data)
-            
     
     def _create_price_data(self, kline: Dict) -> Dict:
         """가격 데이터 생성"""
@@ -216,7 +253,7 @@ class BinanceWebSocket:
 
             return current_minute % 3 == 0
         except Exception as e:
-            self.logger.error(f"3분봉 마감 시간 체크 오류: {e}")
+            print(f"3분봉 마감 시간 체크 오류: {e}")
             return False
     
     def _store_1min_data(self, price_data: Dict):
@@ -233,55 +270,64 @@ class BinanceWebSocket:
                 self._recent_1min_data = self._recent_1min_data[-3:]
                 
         except Exception as e:
-            self.logger.error(f"1분봉 데이터 임시 저장 오류: {e}")
+            print(f"1분봉 데이터 임시 저장 오류: {e}")
     
-    async def _execute_liquidation_strategy(self):
-        """청산 전략 실행"""
-        print(f"🎯 청산 전략 실행 시작... (버킷 크기: {len(self.liquidation_bucket)})")
+    def _execute_fade_reentry_1m_strategy(self):
+        """빠른 패스 전략 실행"""
+        if not self.fade_reentry_strategy:
+            return
         
-        # 청산 전략 분석
-        signal = self.advanced_liquidation_strategy.analyze_bucket_liquidations(self.liquidation_bucket)
+        self.fade_reentry_strategy.on_bucket_close(self.liquidation_bucket)
+    
+    def _execute_fade_reentry_3m_strategy(self):
+        """빠른 패스 전략 실행"""
+        if not self.fade_reentry_strategy:
+            return
         
-        if signal:
-            print(f"⚡ 청산 신호 감지: {signal.get('action', 'UNKNOWN')} - {signal.get('tier', 'UNKNOWN')}")
-        else:
-            print(f"📊 청산 신호 없음")
+        self.fade_reentry_strategy.on_kline_close_3m()
+
+    def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
+        """SQUEEZE 모멘텀 전략 실행"""
+        if not self.squeeze_momentum_strategy:
+            return
         
-        # 버킷 초기화
-        self.liquidation_bucket = []
-        self.bucket_start_time = self.time_manager.get_current_time()
-        print(f"🔄 청산 버킷 초기화 완료")
+        self.squeeze_momentum_strategy.on_bucket_close(self.liquidation_bucket)
+        
+        # 딕셔너리를 DataFrame으로 변환 (리스트로 감싸기)
+        df_1m = pd.DataFrame([price_data])
+        df_1m.set_index('timestamp', inplace=True)
             
-    
-    async def _execute_session_strategy(self, series_3m: pd.Series):
+        result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
+
+        if result:
+            print(f"🎯 [SQUEEZE] SQUEEZE 1M 전략 신호: {result['action']} {result['entry']} | {result['stop']} | {result['targets'][0]} {result['targets'][1]}")
+        else:
+            print(f"📊 [SQUEEZE] SQUEEZE 1M 전략 신호 없음")
+
+    def _execute_session_strategy(self):
         """세션 전략 실행"""
         if not self.session_strategy:
             return
         
-        # Series를 DataFrame으로 변환
-        if not series_3m.empty:
-            # 글로벌 지표 업데이트
-            self.global_manager.update_all_indicators(series_3m)
-        else:
-            print("⚠️ 3분봉 데이터가 비어있음")
+        df_3m = self.data_manager.get_latest_data(count=2)
+        result = self.session_strategy.on_kline_close_3m(df_3m)
+
+    def _execute_vpvr_golden_strategy(self):
+        """VPVR 골든 포켓 전략 실행"""
+        if not self.vpvr_golden_strategy:
             return
         
-        # Series를 DataFrame으로 변환 (name을 인덱스로 사용)
-        df_3m = pd.DataFrame([series_3m.values], 
-                            columns=series_3m.index, 
-                            index=[series_3m.name])
-        
-        # 전략 분석에 필요한 데이터 수집
-        strategy_data = self._collect_strategy_data()
-        
-        # 세션 전략 분석 실행 (DataFrame 사용)
-        session_signal = self.session_strategy.analyze_session_strategy(
-            df_3m, strategy_data['key_levels'], self.time_manager.get_current_time()
-        )
-        
-        # 신호 결과 출력
-        self._print_session_strategy(session_signal)
-    
+        # VPVRConfig 클래스의 인스턴스 생성 (괄호로 인스턴스화)
+        config = self.vpvr_golden_strategy.VPVRConfig()
+        df_3m = self.data_manager.get_latest_data(count=config.lookback_bars + 5)
+        sig = self.vpvr_golden_strategy.evaluate(df_3m)
+
+        if sig:
+            print(f"🎯 [VPVR] VPVR 골든 포켓 전략 신호: {sig['action']} {sig['entry']} | {sig['stop']} | {sig['targets'][0]} {sig['targets'][1]} {sig['targets'][2]}")
+        else:
+            print(f"📊 [VPVR] VPVR 골든 포켓 전략 신호 없음")
+
+
     async def _create_3min_candle(self) -> Optional[pd.Series]:
         """3분봉 데이터 생성 (첫 3분봉 마감 시 API 사용, 이후 웹소켓으로 수집)"""
         try:
@@ -372,62 +418,8 @@ class BinanceWebSocket:
                 return result_series
             
         except Exception as e:
-            self.logger.error(f"3분봉 데이터 생성 오류: {e}")
+            print(f"3분봉 데이터 생성 오류: {e}")
             return None
-
-    
-    def _collect_strategy_data(self) -> Dict:
-        """전략 분석에 필요한 데이터 수집"""
-        strategy_data = {
-            'key_levels': {},
-            'opening_range': {},
-            'vwap': 0.0,
-            'vwap_std': 0.0,
-            'atr': 0.0
-        }
-        
-        try:
-            # 키 레벨 (Daily Levels)
-            daily_levels = self.global_manager.get_indicator('daily_levels')
-            if daily_levels:
-                prev_day_data = daily_levels.get_status()
-                strategy_data['key_levels'] = {
-                    'prev_day_high': prev_day_data.get('prev_day_high'),
-                    'prev_day_low': prev_day_data.get('prev_day_low')
-                }
-            
-            # Opening Range 정보
-            try:
-                session_config = self.time_manager.get_indicator_mode_config()
-                opening_range = self.global_manager.get_indicator('opening_range').get_status()
-                if session_config.get('use_session_mode'):
-                    strategy_data['opening_range'] = {
-                        'high': opening_range.get('high'),
-                        'low': opening_range.get('low'),
-                        'session_name': session_config.get('session_name', 'UNKNOWN'),
-                        'session_start': session_config.get('session_start_time'),
-                        'elapsed_minutes': session_config.get('elapsed_minutes', 0),
-                        'session_status': session_config.get('session_status', 'UNKNOWN')
-                    }
-            except Exception:
-                pass
-            
-            # VWAP 및 VWAP 표준편차
-            vwap_indicator = self.global_manager.get_indicator('vwap')
-            if vwap_indicator:
-                vwap_status = vwap_indicator.get_status()
-                strategy_data['vwap'] = vwap_status.get('vwap')
-                strategy_data['vwap_std'] = vwap_status.get('vwap_std')
-            
-            # ATR
-            atr_indicator = self.global_manager.get_indicator('atr')
-            if atr_indicator:
-                strategy_data['atr'] = atr_indicator.get_status().get('atr')
-                
-        except Exception as e:
-            self.logger.error(f"전략 데이터 수집 오류: {e}")
-        
-        return strategy_data
     
     def _print_session_strategy(self, session_signal: Optional[Dict]):
         """세션 전략 신호 결과 출력"""
@@ -439,9 +431,9 @@ class BinanceWebSocket:
         
         # Entry 신호인 경우 핵심 정보만
         if session_signal.get('stage') == 'ENTRY':
-            entry_price = session_signal.get('entry_price', 0)
-            stop_loss = session_signal.get('stop_loss', 0)
-            take_profit = session_signal.get('take_profit1', 0)
+            entry_price = session_signal.get('entry_price')
+            stop_loss = session_signal.get('stop_loss')
+            take_profit = session_signal.get('take_profit1')
             
             if entry_price and stop_loss and take_profit:
                 risk = abs(entry_price - stop_loss)
@@ -455,7 +447,7 @@ class BinanceWebSocket:
             try:
                 callback(price_data)
             except Exception as e:
-                self.logger.error(f"1분봉 Kline 콜백 실행 오류: {e}")
+                print(f"1분봉 Kline 콜백 실행 오류: {e}")
     
     async def start(self):
         """웹소켓 스트림 시작"""

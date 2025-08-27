@@ -137,7 +137,7 @@ class AdvancedLiquidationStrategy:
     바이낸스 청산 이벤트 형식
     event = {'timestamp': datetime.datetime(2025, 8, 22, 1, 42, 47, 173880), 
         'symbol': 'ETHUSDT', 'side': 'BUY', 
-        'quantity': 0.048, 'price': 4255.65, 'qty_usd': 204.2712, 'time': 1755794568097}
+        'size': 0.048, 'price': 4255.65, 'qty_usd': 204.2712, 'time': 1755794568097}
     """    
     def process_liquidation_event(self, event: Dict) -> None:
         """청산 이벤트 처리"""

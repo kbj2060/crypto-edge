@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 import pytz
 
+from indicators.global_indicators import get_atr, get_opening_range, get_vwap
 from indicators.moving_averages import calculate_ema
 from utils.time_manager import get_time_manager
 
@@ -98,39 +99,35 @@ class SessionBasedStrategy:
         self.prev_day_hlc = None
         self.last_swing_hl = None
         
-        # 세션 매니저 초기화 확인
-        try:
-            from utils.time_manager import get_time_manager
-            self.time_manager = get_time_manager()
-        except Exception as e:
-            pass
+        # Time Manager 초기화
+        self.time_manager = get_time_manager()
         
-    # def calculate_session_vwap(
-    #     self, df: pd.DataFrame, session_start: datetime, session_end: datetime
-    # ) -> Tuple[float, float]:
-    #     """세션 구간 VWAP 및 표준편차 계산 (반개구간 [start, end), 누적 σ) - 글로벌 지표로 대체됨"""
-    #     if df.empty:
-    #         return np.nan, np.nan
-    #     # 안전장치: tz-aware & 정렬
-    #     assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
-    #     df = df.sort_index()
+    def calculate_session_vwap(
+        self, df: pd.DataFrame, session_start: datetime, session_end: datetime
+    ) -> Tuple[float, float]:
+        """세션 구간 VWAP 및 표준편차 계산 (반개구간 [start, end), 누적 σ) - 글로벌 지표로 대체됨"""
+        if df.empty:
+            return np.nan, np.nan
+        # 안전장치: tz-aware & 정렬
+        assert df.index.tz is not None, "df.index must be tz-aware(UTC)"
+        df = df.sort_index()
 
-    #     # 세션 구간 반개구간으로 슬라이스 (다음 세션 첫 봉 중복 방지)
-    #     mask = (df.index >= session_start) & (df.index < session_end)
-    #     s = df.loc[mask]
-    #     if s.empty:
-    #         return np.nan, np.nan
+        # 세션 구간 반개구간으로 슬라이스 (다음 세션 첫 봉 중복 방지)
+        mask = (df.index >= session_start) & (df.index < session_end)
+        s = df.loc[mask]
+        if s.empty:
+            return np.nan, np.nan
 
-    #     # VWAP: typical price * volume 가중 (close만 써도 되지만 안정성↑)
-    #     price = (s["high"] + s["low"] + s["close"]) / 3.0
-    #     vol = s["volume"].astype("float64")
-    #     v_sum = np.maximum(vol.sum(), 1e-9)
-    #     vwap = float((price * vol).sum() / v_sum)
+        # VWAP: typical price * volume 가중 (close만 써도 되지만 안정성↑)
+        price = (s["high"] + s["low"] + s["close"]) / 3.0
+        vol = s["volume"].astype("float64")
+        v_sum = np.maximum(vol.sum(), 1e-9)
+        vwap = float((price * vol).sum() / v_sum)
 
-    #     # 세션 누적 표준편차: expanding std의 마지막 값 사용 (ddof=0 권장)
-    #     # (세션 밴드 = 가격의 분산을 세션 누적 관점으로 측정)
-    #     std = float(price.expanding().std(ddof=0).iloc[-1])
-    #     return vwap, std
+        # 세션 누적 표준편차: expanding std의 마지막 값 사용 (ddof=0 권장)
+        # (세션 밴드 = 가격의 분산을 세션 누적 관점으로 측정)
+        std = float(price.expanding().std(ddof=0).iloc[-1])
+        return vwap, std
 
     def _session_slice(self, df: pd.DataFrame, session_start: datetime) -> pd.DataFrame:
         """세션 시작부터 다음 세션 시작 전까지의 데이터 슬라이스 (세션 경계 정확)"""
@@ -139,43 +136,9 @@ class SessionBasedStrategy:
         
         # DataFrame 복사 및 인덱스 timezone 처리
         df_copy = df.copy()
-        
-        # TimeManager를 사용하여 인덱스 정규화
-        if not pd.api.types.is_datetime64_any_dtype(df_copy.index):
-            print(f"   🔄 TimeManager를 사용하여 인덱스 정규화 중...")
-            
-            try:
-                # TimeManager를 사용하여 인덱스 변환
-                from utils.time_manager import get_time_manager
-                time_manager = get_time_manager()
-                
-                # 인덱스를 datetime으로 변환
-                normalized_index = []
-                for idx in df_copy.index:
-                    # TimeManager를 사용하여 timestamp 정규화
-                    normalized_timestamp = time_manager.extract_and_normalize_timestamp({'timestamp': idx})
-                    normalized_index.append(normalized_timestamp)
-                
-                df_copy.index = pd.DatetimeIndex(normalized_index)
-                print(f"   ✅ TimeManager를 사용한 인덱스 정규화 완료: {df_copy.index.dtype}")
-                
-            except Exception as e:
-                print(f"   ❌ TimeManager를 사용한 인덱스 정규화 실패: {e}")
-                return df_copy
-        
         df_copy = df_copy.sort_index()
         
-        # 세션 매니저에서 다음 세션 시작 시간 가져오기
-        try:
-            from utils.time_manager import get_time_manager
-            time_manager = get_time_manager()
-            session_end = time_manager.get_next_session_start(session_start)
-        except Exception as e:
-            print(f"   ⚠️ 세션 매니저에서 다음 세션 시작 시간 가져오기 실패: {e}")
-            # 폴백: 기본 계산
-            session_end = session_start + timedelta(hours=24)
-        
-        # [start, end) 반개구간
+        session_end = self.time_manager.get_next_session_start(session_start)
         return df_copy.loc[(df_copy.index >= session_start) & (df_copy.index < session_end)]
     
     def process_liquidation_stream(self, liquidation_events: List[Dict], 
@@ -200,12 +163,12 @@ class SessionBasedStrategy:
             short_liquidations = [e for e in recent_events if e.get('side') == 'BUY']
             
             # 누적 청산량 계산
-            long_volume = sum(e.get('size', 0) for e in long_liquidations)
-            short_volume = sum(e.get('size', 0) for e in short_liquidations)
+            long_volume = sum(e.get('size') for e in long_liquidations)
+            short_volume = sum(e.get('size') for e in short_liquidations)
             
             # 청산 강도 계산 (LPI 기반)
-            long_intensity = np.mean([e.get('lpi', 0) for e in long_liquidations]) if long_liquidations else 0
-            short_intensity = np.mean([e.get('lpi', 0) for e in short_liquidations]) if short_liquidations else 0
+            long_intensity = np.mean([e.get('lpi') for e in long_liquidations])
+            short_intensity = np.mean([e.get('lpi') for e in short_liquidations])
             
             return {
                 'long_liquidations': long_liquidations,
@@ -222,9 +185,17 @@ class SessionBasedStrategy:
             print(f"❌ 청산 스트림 처리 오류: {e}")
             return {}
     
-    def check_gates(self, df: pd.DataFrame, session_vwap: float, 
-                    opening_range: Dict[str, float], atr: float, 
-                    playbook: str, side: str, key_levels: Dict[str, float] = None) -> Tuple[bool, Dict[str, Any]]:
+    def check_gates(
+            self, 
+            df: pd.DataFrame, 
+            session_vwap: float, 
+            opening_range: Dict[str, float], 
+            atr: float, 
+            playbook: str, 
+            side: str, 
+            key_levels: Dict[str, float] = None,
+            liquidation_data: Dict[str, float] = None
+        ) -> Tuple[bool, Dict[str, Any]]:
         """Gate(필수 최소 조건) 확인"""
         try:
             # DataFrame이 비어있거나 인덱싱이 불가능한 경우 체크
@@ -541,42 +512,19 @@ class SessionBasedStrategy:
                         orderflow_score += 0.05  # 거래량 증가
             
             # 청산 데이터 활용 (key_levels에서 가져오거나 기본값 사용)
-            liquidation_data = (key_levels or {}).get('liquidation_data', {})
+            liquidation_data = self.bucket_aggregator.get_bucket()
             if liquidation_data:
                 # 롱/숏 청산량 비율 계산
-                long_vol = liquidation_data.get('long_volume', 0)
-                short_vol = liquidation_data.get('short_volume', 0)
+                long_vol = sum(x.get('size')*x.get('price') for x in liquidation_data if x.get('side') == 'SELL')
+                short_vol = sum(x.get('size')*x.get('price') for x in liquidation_data if x.get('side') == 'BUY')
                 total_vol = long_vol + short_vol
                 
-                if total_vol > 0:
-                    if side == 'LONG' and short_vol > long_vol:
-                        # 롱 신호에서 숏 청산이 많으면 가점
-                        orderflow_score += 0.1
-                    elif side == 'SHORT' and long_vol > short_vol:
-                        # 숏 신호에서 롱 청산이 많으면 가점
-                        orderflow_score += 0.1
-                    
-                    # 청산 강도 점수
-                    if side == 'LONG':
-                        intensity = liquidation_data.get('short_intensity', 0)
-                    else:
-                        intensity = liquidation_data.get('long_intensity', 0)
-                    
-                    if intensity > 0:
-                        # 청산 강도 캘리브레이션: 실제 분포 기반 Z-스코어
-                        # 기본값: 0.5 (중간), 1.0 (높음), 2.0 (매우 높음)
-                        if intensity >= 2.0:
-                            intensity_score = 0.1  # 매우 높은 청산 강도
-                        elif intensity >= 1.5:
-                            intensity_score = 0.08  # 높은 청산 강도
-                        elif intensity >= 1.0:
-                            intensity_score = 0.06  # 중간 이상 청산 강도
-                        elif intensity >= 0.5:
-                            intensity_score = 0.04  # 기본 청산 강도
-                        else:
-                            intensity_score = 0.02  # 낮은 청산 강도
-                        
-                        orderflow_score += intensity_score
+                if total_vol > 0 and side == 'LONG' and short_vol > long_vol:
+                    # 롱 신호에서 숏 청산이 많으면 가점
+                    orderflow_score += 0.1
+                elif total_vol > 0 and side == 'SHORT' and long_vol > short_vol:
+                    # 숏 신호에서 롱 청산이 많으면 가점
+                    orderflow_score += 0.1
             else:
                 # 청산 데이터가 없는 경우 기본값
                 orderflow_score += 0.1
@@ -699,17 +647,15 @@ class SessionBasedStrategy:
             current_time = current_time.replace(tzinfo=pytz.UTC)
         
         try:
-            # 세션 매니저에서 세션 시작 시간 가져오기
-            from utils.time_manager import get_time_manager
-            time_manager = get_time_manager()
-            session_start_tuple = time_manager.get_session_open_time()
+            session_start_tuple = self.time_manager.get_session_open_time()
             
             if session_start_tuple:
                 # 현재 활성 세션의 시작 시간 반환 (튜플의 첫 번째 요소가 datetime)
                 return session_start_tuple[0]
             
             # 활성 세션이 없으면 가장 최근 세션 시작 시간 반환
-            session_history = time_manager.get_session_history()
+            session_history = self.time_manager.get_session_history()
+            
             if session_history:
                 # 가장 최근 세션 찾기
                 latest_session = max(session_history.keys(), key=lambda k: session_history[k].get('session_open_time', ''))
@@ -732,11 +678,8 @@ class SessionBasedStrategy:
     
     def _get_session_type(self) -> str:
         """세션 시작 시간으로부터 세션 타입 식별 (세션 매니저 사용)"""
-            # 세션 매니저에서 현재 세션 정보 가져오기
-        from utils.time_manager import get_time_manager
-        time_manager = get_time_manager()
-        
-        session_status = time_manager.get_session_status()
+        # 세션 매니저에서 현재 세션 정보 가져오기
+        session_status = self.time_manager.get_session_status()
         current_session = session_status.get('current_session', 'UNKNOWN')
         
         # 세션 이름을 한글로 변환
@@ -1378,31 +1321,15 @@ class SessionBasedStrategy:
         
         # 세션 시작 시간 확인 (이미 UTC tz-aware)
         session_start = self.get_session_start_time(current_time)
-        
-        # --- 글로벌 지표 시스템에서 지표 데이터 가져오기 ---
-        from indicators.global_indicators import get_global_indicator_manager
-        global_manager = get_global_indicator_manager()
-        
-        # VWAP 및 VWAP 표준편차 (글로벌 지표에서 가져오기)
-        vwap_indicator = global_manager.get_indicator('vwap')
-        vwap_status = vwap_indicator.get_status()
-        session_vwap = vwap_status.get('vwap')
-        session_std = vwap_status.get('vwap_std')
-        
-        # Opening Range 정보 (글로벌 지표에서 가져오기)
-        opening_range_indicator = global_manager.get_indicator('opening_range')
-        or_info = opening_range_indicator.get_status()
-        
-        # ATR (글로벌 지표에서 가져오기)
-        atr_indicator = global_manager.get_indicator('atr')
-        atr = atr_indicator.get_status().get('atr')
-        
-        # 지표 데이터 로드 완료 (출력 없음)
+                
+        session_vwap, session_std = get_vwap()
+        or_info = get_opening_range()
+        atr = get_atr()
         
         # 인스턴스 변수 업데이트
         self.session_vwap = session_vwap
         self.session_std = session_std
-        self.opening_range = or_info if or_info and (or_info.get("ready") or or_info.get("partial")) else None
+        self.opening_range = or_info
         self.session_start_time = session_start  # 세션 시작 시간 저장
 
         # --- 세션 정보 출력 (간단하게) ---
@@ -1463,7 +1390,7 @@ def make_session_trade_plan(df: pd.DataFrame,
             # ENTRY에만 포지션 사이징 적용
             if signal.get("stage") == "ENTRY" and {"entry_price", "stop_loss"} <= signal.keys():
                 risk_percent = 0.4   # 계좌 리스크 0.4%
-                equity = 10000       # 예시 자본
+                equity = 100000       # 예시 자본
                 risk_dollar = equity * risk_percent / 100
                 stop_distance = abs(signal["entry_price"] - signal["stop_loss"])
                 position_size = risk_dollar / stop_distance if stop_distance > 0 else 0

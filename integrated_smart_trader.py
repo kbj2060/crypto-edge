@@ -13,8 +13,12 @@ from typing import Dict, Any, Optional, List
 from core.trader_core import TraderCore
 
 from config.integrated_config import IntegratedConfig
+from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_global_indicator_manager
+from signals.liquidation_strategies_lite import SqueezeMomentumStrategy, MomentumConfig, FadeReentryStrategy, FadeConfig
+from signals.session_or_lite import SessionORLite, SessionORLiteCfg
+from signals.vpvr_golden_strategy import LVNGoldenPocket
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -26,29 +30,25 @@ class IntegratedSmartTrader:
         # 핵심 컴포넌트 초기화
         self.core = TraderCore(config)
         self.global_manager = get_global_indicator_manager()
-        
-        # 상태 관리
-        self.running = False
-        self.last_analysis_time = None
-        self.last_3min_analysis = None
-        self.last_60sec_bucket = None
+        self.bucket_aggregator = None
         
         # 청산 버킷 관리 (60초 단위)
         self.liquidation_bucket = []
-        self.bucket_start_time = self.core.time_manager.get_current_time()
-        self.last_60sec_bucket = None
         
         # 🚀 1단계: DataManager 우선 초기화 (데이터 준비)
         self._init_data_manager()
-        
-        # 🚀 2단계: 글로벌 지표 시스템 초기화
         self._init_global_indicators()
-        
+
+        self._init_bucket_aggregator()
+
         # 🚀 3단계: 고급 청산 전략 초기화
-        self._init_advanced_liquidation_strategy()
+        # self._init_advanced_liquidation_strategy()
         
         # 🚀 4단계: 세션 기반 전략 초기화
+        self._init_vpvr_golden_strategy()
         self._init_session_strategy()
+        self._init_squeeze_momentum_strategy()
+        self._init_fade_reentry_strategy()
     
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
@@ -95,204 +95,89 @@ class IntegratedSmartTrader:
             print(f"❌ 글로벌 지표 시스템 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
+
     
-    def _init_advanced_liquidation_strategy(self):
-        """고급 청산 전략 초기화"""
+
+    def _init_bucket_aggregator(self):
+        """버킷 집계기 초기화"""
+        self.bucket_aggregator = BucketAggregator()
+        self.liquidation_bucket = self.bucket_aggregator.load_external_data()
+
+    def _init_vpvr_golden_strategy(self):
+        """VPVR 골든 포켓 전략 초기화"""
         try:
-            from signals.advanced_liquidation_strategy import AdvancedLiquidationStrategy, AdvancedLiquidationConfig
-            
-            adv_config = AdvancedLiquidationConfig()
-            
-            self._adv_liquidation_strategy = AdvancedLiquidationStrategy(adv_config)
-            
-            # 외부 서버에서 청산 데이터 가져와서 워밍업
-            print("🌐 외부 서버에서 청산 데이터 가져오기 시작...")
-            external_liquidation_data = self._fetch_external_liquidation_data()
-            
-            if external_liquidation_data:
-                print(f"📊 외부 데이터 {len(external_liquidation_data)}개 수신, 워밍업 시작")
-                self._warmup_strategy_with_data(external_liquidation_data)
-            else:
-                print("⚠️ 외부 청산 데이터가 없어 워밍업을 건너뜀")
-                                
+            self._vpvr_golden_strategy = LVNGoldenPocket()
+
         except Exception as e:
-            print(f"❌ 고급 청산 전략 초기화 오류: {e}")
+            print(f"❌ VPVR 골든 포켓 전략 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
-            self._adv_liquidation_strategy = None
+            self._vpvr_golden_strategy = None
+
+    def _init_squeeze_momentum_strategy(self):
+        """스퀴즈 모멘텀 전략 초기화"""
+        try:
+            squeeze_config = MomentumConfig()
+            self._squeeze_momentum_strategy = SqueezeMomentumStrategy(squeeze_config)
+            self._squeeze_momentum_strategy.warmup(self.liquidation_bucket)
+
+        except Exception as e:
+            print(f"❌ 스퀴즈 모멘텀 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._squeeze_momentum_strategy = None
     
+    def _init_fade_reentry_strategy(self):
+        """페이드 리입 전략 초기화"""
+        try:
+            fade_config = FadeConfig()
+            self._fade_reentry_strategy = FadeReentryStrategy(fade_config)
+            self._fade_reentry_strategy.warmup(self.liquidation_bucket)
+
+        except Exception as e:
+            print(f"❌ 페이드 리입 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._fade_reentry_strategy = None
+            
     def _init_session_strategy(self):
         """세션 기반 전략 초기화"""
         try:
-            if not self.config.enable_session_strategy:
-                print("⚠️ 세션 전략이 비활성화됨")
-                self._session_strategy = None
-                return
-                
-            from signals.session_based_strategy import SessionBasedStrategy, SessionConfig
-            
-            session_config = SessionConfig()
-            
-            self._session_strategy = SessionBasedStrategy(session_config)
-                            
+            session_config = SessionORLiteCfg()
+            self._session_strategy = SessionORLite(session_config)
+
         except Exception as e:
             print(f"❌ 세션 기반 전략 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
             self._session_strategy = None
-    
 
-    def _fetch_external_liquidation_data(self) -> List[Dict]:
-        """외부 서버에서 청산 데이터 가져오기"""
+    def _setup_websocket_strategies(self):
+        """웹소켓 전략 설정 - 메인 컨트롤러에서 전략 인스턴스 전달"""
         try:
-            # 외부 API 엔드포인트에서 최근 24시간 청산 데이터 가져오기
-            import requests
+            websocket = self.core.get_websocket()
             
-            # 외부 서버 URL
-            external_server_url = getattr(self.config, 'external_server_url', None)
-            if not external_server_url:
-                print("⚠️ 외부 청산 데이터 API URL이 설정되지 않음")
-                return []
+            # 전략 실행기를 웹소켓에 설정 (None인 전략은 제외)
+            strategies = {
+                'session_strategy': self._session_strategy,
+                'squeeze_momentum_strategy': self._squeeze_momentum_strategy,
+                'fade_reentry_strategy': self._fade_reentry_strategy,
+                'vpvr_golden_strategy': self._vpvr_golden_strategy
+            }
             
-            # 엔드포인트 구성
-            external_api_url = f"{external_server_url.rstrip('/')}/liquidations"
-                        
-            # API 요청 헤더 (인증이 필요한 경우)
-            headers = {}
-            if hasattr(self.config, 'external_api_key'):
-                headers['Authorization'] = f'Bearer {self.config.external_api_key}'
+            # None이 아닌 전략만 필터링하여 전달
+            active_strategies = {k: v for k, v in strategies.items() if v is not None}
             
-            # 외부 서버에서 데이터 가져오기
-            response = requests.get(external_api_url, headers=headers, timeout=10)
-            response.raise_for_status()
-            
-            # 응답 내용 확인 및 디버깅
-            response_text = response.text.strip()
-            if not response_text:
-                print("⚠️ 외부 API에서 빈 응답을 받았습니다.")
-                return []
-
-            # 외부 데이터를 내부 형식으로 변환
-            external_data = response.json()
-            liquidation_data = []
-            
-            # 응답 구조 확인 및 데이터 추출
-            if isinstance(external_data, list):
-                data_items = external_data
+            if active_strategies:
+                websocket.set_strategies(**active_strategies)
+                print(f"🎯 웹소켓에 {len(active_strategies)}개 전략 설정 완료: {list(active_strategies.keys())}")
             else:
-                print("⚠️ 외부 API 응답이 리스트 형태가 아닙니다.")
-                return []
-            
-            if not data_items:
-                print("⚠️ 외부 API 응답에 데이터가 없습니다.")
-                return []
-            
-            for item in data_items:                    
-                # 타임스탬프 처리 (UTC datetime으로 변환)
-                timestamp = item.get('timestamp')
+                print("⚠️ 활성화된 전략이 없습니다")
                 
-                # datetime 문자열을 UTC datetime으로 변환
-                # '2025-08-21 16:06:51.478000' 형식 파싱
-                dt = datetime.datetime.strptime(timestamp, '%Y-%m-%d %H:%M:%S.%f')
-                # UTC timezone 설정
-                utc_dt = dt.replace(tzinfo=datetime.timezone.utc)
-                
-                # 변환된 데이터 생성
-                converted_data = {
-                    'timestamp': utc_dt,
-                    'symbol': item.get('symbol', self.config.symbol),
-                    'side': item.get('side', 'unknown'),
-                    'size': item.get('size', 0.0),
-                    'price': item.get('price', 0.0)
-                }
-                
-                liquidation_data.append(converted_data)
-            
-            # 데이터 품질 검증 및 개선
-            long_count = sum(1 for item in liquidation_data if item.get('side') == 'SELL')
-            short_count = sum(1 for item in liquidation_data if item.get('side') == 'BUY')
-            
-            print(f"📊 데이터 품질: 롱 {long_count}개, 숏 {short_count}개")
-
-            if long_count < 5:
-                print("⚠️ 롱 청산 데이터가 부족합니다 (5개 필요)")
-            if short_count < 5:
-                print("⚠️ 숏 청산 데이터가 부족합니다 (5개 필요)")
-            
-            return liquidation_data
-            
-        except requests.exceptions.RequestException as e:
-            print(f"❌ 외부 API 요청 오류: {e}")
-            return []
-        except ValueError as e:
-            print(f"❌ 외부 API 응답 파싱 오류: {e}")
-            return []
         except Exception as e:
-            print(f"❌ 외부 청산 데이터 가져오기 오류: {e}")
-            return []
-    
-    def _warmup_strategy_with_data(self, liquidation_data: List[Dict]):
-        """외부 데이터로 전략 워밍업"""
-        if not hasattr(self, '_adv_liquidation_strategy') or not self._adv_liquidation_strategy:
-            print("⚠️ 고급 청산 전략이 초기화되지 않음")
-            return
-        
-        # 워밍업 전 데이터 품질 재확인
-        long_count = sum(1 for item in liquidation_data if item.get('side') == 'SELL')
-        short_count = sum(1 for item in liquidation_data if item.get('side') == 'BUY')
-        
-        print(f"📊 워밍업 데이터 품질: 롱 {long_count}개, 숏 {short_count}개")
-        
-        # 워밍업 가능 여부 확인
-        if long_count < 5 or short_count < 5:
-            print("⚠️ 워밍업 데이터가 부족하여 전략 성능이 제한될 수 있습니다")
-            print("💡 제한된 데이터로도 최대한의 워밍업을 시도합니다")
-        else:
-            print("✅ 워밍업 데이터 품질이 양호합니다")
-        
-        try:
-            processed_count = 0
-            
-            # 데이터가 부족할 경우 반복 처리로 워밍업 효과 증대
-            repeat_count = 1
-            if len(liquidation_data) < 50:
-                repeat_count = 2  # 데이터가 적으면 2번 반복
-                print(f"🔄 데이터 부족으로 {repeat_count}번 반복 워밍업 수행")
-            
-            for repeat in range(repeat_count):
-                if repeat > 0:
-                    print(f"🔄 {repeat+1}번째 워밍업 라운드 시작...")
-                
-                for i, data in enumerate(liquidation_data):
-                    # timestamp를 안전하게 처리 (TimeManager 사용)
-                    utc_timestamp = self.core.time_manager.get_timestamp_datetime(data.get('timestamp'))
-                    
-                    liquidation_event = {
-                        'timestamp': utc_timestamp,
-                        'side': data.get('side'),
-                        'qty_usd': data.get('size') * data.get('price')
-                    }
-                    
-                    # 고급 청산 전략에 이벤트 전달
-                    self._adv_liquidation_strategy.process_liquidation_event(liquidation_event)
-                    processed_count += 1
-            
-            print(f"🎯 전략 워밍업 완료: {processed_count}개 이벤트 처리됨 (반복: {repeat_count}회)")
-            
-        except Exception as e:
-            print(f"❌ 전략 워밍업 오류: {e}")
+            print(f"❌ 웹소켓 전략 설정 오류: {e}")
             import traceback
             traceback.print_exc()
-    
-    def _setup_websocket_strategies(self):
-        """웹소켓 전략 설정"""
-        websocket = self.core.get_websocket()
-        
-        # 전략 실행기를 웹소켓에 설정
-        websocket.set_strategies(
-            session_strategy=self._session_strategy,
-            advanced_liquidation_strategy=self._adv_liquidation_strategy
-        )
         
     
     def start(self):
@@ -304,6 +189,7 @@ class IntegratedSmartTrader:
         
         # 웹소켓 백그라운드 시작
         self.core.start_websocket()
+        # self.core.get_websocket().add_callback('kline_1m', self.process_kline_1m)
         
         # 메인 루프
         self._run_main_loop()

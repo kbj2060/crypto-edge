@@ -8,7 +8,7 @@
 - 싱글톤 패턴으로 전역 접근
 """
 
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime, timezone
 import threading
 
@@ -272,3 +272,42 @@ def get_indicators_status():
     """모든 지표 상태 반환 (편의 함수)"""
     manager = get_global_indicator_manager()
     return manager.get_indicators_status()
+
+
+# ============================================================
+# 1줄짜리 편의 함수들 - 지표 값 바로 가져오기
+# ============================================================
+
+def get_vwap() -> Tuple[Optional[float], Optional[float]]:
+    """VWAP 값 바로 가져오기"""
+    manager = get_global_indicator_manager()
+    vwap_indicator = manager.get_indicator('vwap')
+    return (vwap_indicator.get_status().get('vwap'), vwap_indicator.get_status().get('vwap_std'))
+
+def get_atr() -> Optional[float]:
+    """ATR 값 바로 가져오기"""
+    manager = get_global_indicator_manager()
+    atr_indicator = manager.get_indicator('atr')
+    return atr_indicator.get_status().get('atr') if atr_indicator else None
+
+def get_daily_levels() -> Tuple[Optional[float], Optional[float]]:
+    """어제 고가 바로 가져오기"""
+    manager = get_global_indicator_manager()
+    daily_indicator = manager.get_indicator('daily_levels')
+    return (daily_indicator.get_status().get('prev_day_high'), daily_indicator.get_status().get('prev_day_low'))
+
+def get_opening_range() -> Tuple[Optional[float], Optional[float]]:
+    """개장 범위 고가 바로 가져오기"""
+    manager = get_global_indicator_manager()
+    opening_indicator = manager.get_indicator('opening_range')
+    return opening_indicator.get_status()
+
+def get_vpvr() -> Optional[int]:
+    """VPVR 활성 구간 수 바로 가져오기"""
+    manager = get_global_indicator_manager()
+    vpvr_indicator = manager.get_indicator('vpvr')
+    return (
+        vpvr_indicator.get_status().get('poc'), 
+        vpvr_indicator.get_status().get('hvn'), 
+        vpvr_indicator.get_status().get('lvn')
+        )
