@@ -145,9 +145,6 @@ class FadeReentryStrategy:
         self._update_stats(long_usd, short_usd)
         self.bucket_log.append((now, long_usd, short_usd, total))
         
-        print(f"📊 [FADE] 통계: 롱=${long_usd:,.0f}, 숏=${short_usd:,.0f}, 총=${total:,.0f}")
-        print(f"📊 [FADE] Z-score: 롱={zL:.2f}, 숏={zS:.2f}, LPI={lpi:.3f}")
-            
         max_z = max(zL, zS)
         if (max_z < self.cfg.z_setup) or (abs(lpi) < self.cfg.lpi_min): 
             return None

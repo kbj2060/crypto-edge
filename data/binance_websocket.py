@@ -322,11 +322,9 @@ class BinanceWebSocket:
         df_3m = self.data_manager.get_latest_data(count=config.lookback_bars + 5)
         sig = self.vpvr_golden_strategy.evaluate(df_3m)
 
-        if sig:
-            print(f"🎯 [VPVR] VPVR 골든 포켓 전략 신호: {sig['action']} {sig['entry']} | {sig['stop']} | {sig['targets'][0]} {sig['targets'][1]} {sig['targets'][2]}")
-        else:
+        if not sig:
             print(f"📊 [VPVR] VPVR 골든 포켓 전략 신호 없음")
-
+        
 
     async def _create_3min_candle(self) -> Optional[pd.Series]:
         """3분봉 데이터 생성 (첫 3분봉 마감 시 API 사용, 이후 웹소켓으로 수집)"""
