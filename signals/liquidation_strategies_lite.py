@@ -56,7 +56,7 @@ class BaseLiqConfig:
 @dataclass
 class FadeConfig(BaseLiqConfig):
     agg_window_sec: int = 60
-    min_bucket_notional_usd: float = 50_000.0
+    min_bucket_notional_usd: float = 50000.0
     z_setup: float = 1.8
     lpi_min: float = 0.12
     setup_ttl_min: int = 10
@@ -147,9 +147,6 @@ class FadeReentryStrategy:
         
         print(f"📊 [FADE] 통계: 롱=${long_usd:,.0f}, 숏=${short_usd:,.0f}, 총=${total:,.0f}")
         print(f"📊 [FADE] Z-score: 롱={zL:.2f}, 숏={zS:.2f}, LPI={lpi:.3f}")
-
-        if total < self.cfg.min_bucket_notional_usd: 
-            return None
             
         max_z = max(zL, zS)
         if (max_z < self.cfg.z_setup) or (abs(lpi) < self.cfg.lpi_min): 

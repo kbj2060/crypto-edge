@@ -110,7 +110,7 @@ class ATR3M:
     
     def calculate_atr_from_dataframe(self, df: pd.DataFrame) -> float:
         """
-        200개의 최근 데이터프레임에서 ATR 계산
+        100개의 최근 데이터프레임에서 ATR 계산
         
         Args:
             df: OHLCV 데이터프레임 (high, low, close 컬럼 필요)
