@@ -176,11 +176,6 @@ class SessionVWAP:
             # 세션 상태 업데이트
             session_config = self.time_manager.get_indicator_mode_config()
             
-            if session_config['use_session_mode']:
-                print("🔄 세션 진행 중 - 세션 VWAP 업데이트")
-            else:
-                print("🔄 세션 외 시간 - 세션 외 VWAP 업데이트")
-            
             # 세션 변경 확인 및 리셋
             self._check_session_reset(session_config)
             
@@ -190,18 +185,14 @@ class SessionVWAP:
             
             # 현재 시간을 UTC로 통일
             current_time_utc = datetime.now(timezone.utc)
-            
-            print(f"   📊 세션 데이터 누적: {len(self.session_data)}개 캔들")
-            print(f"   ⏰ 현재 시간: {current_time_utc.strftime('%Y-%m-%d %H:%M UTC')}")
-            
+
             # VWAP 재계산
             df = pd.DataFrame(self.session_data)
             self._calculate_session_vwap(df)
             
             # 세션 정보 출력
             elapsed_minutes = session_config.get('elapsed_minutes', 0)
-            print(f"   📊 세션 VWAP 업데이트 완료 - 거래량: {candle_data.get('volume', 0):.2f}, 가격: ${candle_data.get('close', 0):.2f}")
-            print(f"   📊 누적 데이터: {len(self.session_data)}개 캔들")
+            print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] VWAP 업데이트 VWAP: {self.current_vwap:.2f} VWAP_STD: {self.current_vwap_std:.2f}")
 
         except Exception as e:
             print(f"❌ VWAP 업데이트 오류: {e}")

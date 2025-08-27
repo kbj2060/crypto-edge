@@ -57,8 +57,8 @@ class LVNGoldenPocket:
         risk: Optional['LVNGoldenPocket.TargetsStopsCfg'] = None,
     ):
         self.vpvr = vpvr or LVNGoldenPocket.VPVRConfig()
-        self.lvn  = lvn  or LVNGoldenPocket.LVNSettings()
-        self.gp   = gp   or LVNGoldenPocket.GoldenPocketCfg()
+        self.lvn = lvn or LVNGoldenPocket.LVNSettings()
+        self.gp = gp or LVNGoldenPocket.GoldenPocketCfg()
         self.risk = risk or LVNGoldenPocket.TargetsStopsCfg()
 
     # ===== Utilities =====
@@ -317,8 +317,7 @@ class LVNGoldenPocket:
             if ok:
                 sat += 1
 
-        # 디버그 출력 (운영시 주석 처리 가능)
-        print(f"DEBUG: sat={sat}/{lookback}, require_k={require_k}")
+
 
         return sat >= require_k
 
@@ -329,37 +328,26 @@ class LVNGoldenPocket:
         """Evaluate on the last bar of df. Returns signal dict or None.
         df: OHLCV DataFrame (open, high, low, close, volume[, quote_volume]) in time order.
         """
-        print(f"🔍 [VPVR] 전략 평가 시작 - 데이터 길이: {len(df) if df is not None else 'None'}")
-        
         if df is None:
-            print(f"❌ [VPVR] 데이터가 None입니다")
             return None
             
         need = max(self.vpvr.lookback_bars, self.gp.swing_lookback) + 5
         if len(df) < need:
-            print(f"⚠️ [VPVR] 데이터 부족: {len(df)} < {need} (필요: {need})")
             return None
-            
-        print(f"✅ [VPVR] 데이터 검증 통과 - 길이: {len(df)}")
 
         df = df.copy()
         df.index = pd.Index(range(len(df)))
 
         # 1) ATR & tolerance
-        print(f"📊 [VPVR] ATR 계산 시작 - 기간: {self.gp.atr_len}")
         atr_last = global_indicators.get_atr()
         if atr_last is None:
-            print("⚠️ ATR 값을 가져올 수 없습니다. (global_indicators.get_atr() 반환값 None)")
             atr_last = float(self._atr(df, self.gp.atr_len).iloc[-1])
         tol = self.gp.tolerance_atr_mult * atr_last
-        print(f"📊 [VPVR] ATR: {atr_last:.4f}, 허용오차: {tol:.4f} (ATR × {self.gp.tolerance_atr_mult})")
 
         # 2) VPVR (전역 우선) & LVN
-        print(f"📊 [VPVR] 전역 VPVR 조회 시도...")
         try:
             poc_global, hvn_global, lvn_global = global_indicators.get_vpvr()
         except Exception as e:
-            print(f"⚠️ 전역 VPVR 조회 중 오류: {e}")
             poc_global, hvn_global, lvn_global = (None, None, None)
 
         vp = None
@@ -378,59 +366,37 @@ class LVNGoldenPocket:
                 lvns = [(0, lvn_price, 0.0)]
             else:
                 lvns = []
-
-            print(f"📊 [GLOBAL VPVR] POC: ${poc_price:.2f}, HVN: {hvn_price if hvn_price else 'N/A'}, LVN: {lvn_price if lvn_price else 'N/A'} (전역 사용)")
         else:
             # fallback: 로컬 VPVR 계산
-            print(f"📊 [VPVR] 전역 VPVR 없음 — 로컬 VPVR 계산 (폴백)")
             vp = self._compute_vpvr(df)
             lvns = self._find_lvn_nodes(vp)
             poc_price = float(vp["poc_price"])
             hvn_price = None
             lvn_price = None
-            print(f"📊 [LOCAL VPVR] POC: ${poc_price:.2f}, LVN count: {len(lvns)}")
 
         # 3) Swing & Golden Pocket zone
-        print(f"📊 [VPVR] 스윙 분석 시작 - 룩백: {self.gp.swing_lookback}")
         swing = self._detect_last_swing(df, self.gp.swing_lookback)
         if swing is None:
-            print(f"❌ [VPVR] 스윙 패턴을 찾을 수 없습니다")
             return None
             
         gp_low, gp_high, direction = self._golden_pocket_zone(df, swing)
-        print(f"📊 [VPVR] 골든 포켓 구간: {direction.upper()} - ${gp_low:.2f}~${gp_high:.2f}")
-        print(f"   📍 스윙: 인덱스 {swing[0]} → {swing[1]}")
 
         zone_mid = 0.5 * (gp_low + gp_high)
         nearest_lvn = self._nearest_lvn_to_price(lvns, zone_mid) if lvns else None
         lvn_price = nearest_lvn[1] if nearest_lvn else None
-        
-        print(f"📊 [VPVR] 골든 포켓 중간: ${zone_mid:.2f}")
-        if nearest_lvn:
-            print(f"📊 [VPVR] 가장 가까운 LVN: ${lvn_price:.2f}")
-        else:
-            print(f"📊 [VPVR] LVN이 골든 포켓 근처에 없습니다")
 
         # 4) Volume dry-up
-        print(f"📊 [VPVR] 볼륨 드라이업 검사 - 룩백: {self.gp.dryup_lookback}, 윈도우: {self.gp.dryup_window}, 임계값: {self.gp.dryup_frac}")
         if not self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k):
-            print(f"❌ [VPVR] 볼륨 드라이업 조건 불만족")
             return None
-        print(f"✅ [VPVR] 볼륨 드라이업 조건 만족")
 
         # 5) Rejection confirmation
-        print(f"📊 [VPVR] 거부 확인 검사 - 방향: {direction.upper()}, 바디 비율 최소: {self.gp.confirm_body_ratio}")
         if not self._rejection_confirm(df, gp_low, gp_high, direction, lvn_price, tol,
                                         self.gp.confirm_body_ratio, self.gp.tick):
-            print(f"❌ [VPVR] 거부 확인 조건 불만족")
             return None
-        print(f"✅ [VPVR] 거부 확인 조건 만족")
 
         # 6) Orders
-        print(f"📊 [VPVR] 주문 계산 시작 - 방향: {direction.upper()}")
         last = df.iloc[-1]
         h = float(last['high']); l = float(last['low']); c = float(last['close'])
-        print(f"   📍 마지막 캔들: H=${h:.2f}, L=${l:.2f}, C=${c:.2f}")
 
         if direction == 'long':
             entry = h + self.gp.tick
@@ -439,8 +405,6 @@ class LVNGoldenPocket:
             R = entry - stop
             tp1, tp2 = entry + self.risk.tp_R1 * R, entry + self.risk.tp_R2 * R
             action = "BUY"
-            print(f"   📍 롱 진입: ${entry:.2f}, 스탑: ${stop:.2f}, 리스크: ${R:.2f}")
-            print(f"   📍 목표: TP1=${tp1:.2f}, TP2=${tp2:.2f}")
         else:
             entry = l - self.gp.tick
             stop  = max(h, gp_high, (lvn_price if lvn_price is not None else h)) + self.gp.tick
@@ -448,8 +412,6 @@ class LVNGoldenPocket:
             R = stop - entry
             tp1, tp2 = entry - self.risk.tp_R1 * R, entry - self.risk.tp_R2 * R
             action = "SELL"
-            print(f"   📍 숏 진입: ${entry:.2f}, 스탑: ${stop:.2f}, 리스크: ${R:.2f}")
-            print(f"   📍 목표: TP1=${tp1:.2f}, TP2=${tp2:.2f}")
 
         ctx = {
             "mode": "VPVR_LVN_GP_DRYUP",
@@ -479,11 +441,5 @@ class LVNGoldenPocket:
             "targets": [float(tp1), float(tp2), float(poc_price)],
             "context": ctx
         }
-        
-        print(f"🎯 [VPVR] 전략 신호 생성 완료!")
-        print(f"   📊 액션: {action}")
-        print(f"   📊 진입가: ${result['entry']:.2f}")
-        print(f"   📊 스탑로스: ${result['stop']:.2f}")
-        print(f"   📊 목표가: TP1=${result['targets'][0]:.2f}, TP2=${result['targets'][1]:.2f}, POC=${result['targets'][2]:.2f}")
         
         return result

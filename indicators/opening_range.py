@@ -36,8 +36,8 @@ class OpeningRange:
         self.symbol = symbol
         self.or_minutes = or_minutes
         self.time_manager = get_time_manager()
-        self._or = {}
         self._current_session_start = None
+        self._or = {}
 
         self._initialize_or()
         
@@ -46,6 +46,7 @@ class OpeningRange:
     def _initialize_or(self):
         """OR 계산"""
         current_session_start = self._get_or_time()
+        
         self.calculate_opening_range(
             current_session_start + timedelta(seconds=1), 
             current_session_start + timedelta(minutes=self.or_minutes)
@@ -92,8 +93,12 @@ class OpeningRange:
     
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 업데이트 (호환성용)"""
-        # TODO: 실시간 업데이트 구현
-        pass
+        current_time = self.time_manager.get_current_time()
+        next_session_start = self.time_manager.get_next_session_start(current_time)
+        if current_time >= next_session_start:
+            self._initialize_or()
+        print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
+        
 
     def get_data(self, start_time: datetime, end_time: datetime) ->  pd.DataFrame:
         """OR 시간 정보 반환"""

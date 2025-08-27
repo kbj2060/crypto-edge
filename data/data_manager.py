@@ -32,29 +32,22 @@ class DataManager:
         # 이미 초기화된 경우 중복 초기화 방지
         if hasattr(self, '_initialized'):
             return
-            
+        
         self.data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])  # 3분봉 데이터
         self._data_loaded = False
         self.time_manager = get_time_manager()
         self.dataloader = BinanceDataLoader()
         
         self._initialized = True
-        
-        print(f"🚀 DataManager 싱글톤 초기화: 3분봉 캔들 관리")
-        
+
     
     def load_initial_data(self, symbol: str = 'ETHUSDT') -> bool:
         """초기 데이터 로딩 (전날 00시부터 현재까지)"""
         try:
-            print("📊 DataManager: 초기 데이터 로딩 시작...")
-            
             # 전날 00시부터 현재까지 데이터 가져오기
             current_time = self.time_manager.get_current_time()
             yesterday_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
-            
-            print(f"📊 데이터 기간: 전날 00시({yesterday_start.strftime('%Y-%m-%d %H:%M')}) ~ 현재({current_time.strftime('%Y-%m-%d %H:%M')})")
-            print(f"🎯 목표: 전체 기간 3분봉 데이터 로딩")
-            
+
             # 3분봉 데이터 직접 가져오기 (긴 기간은 자동으로 여러 번에 나누어 요청)
             df_3m = self.dataloader.fetch_data(
                 interval=3,
@@ -68,23 +61,20 @@ class DataManager:
                 
                 # 마지막 3분봉 타임스탬프 설정
                 if not self.data.empty:
-                    print(f"📊 마지막 3분봉 시간: {self.data.index[-1].strftime('%H:%M')}")
+                    pass
                 
                 self._data_loaded = True
                 return True
             else:
-                print("❌ DataManager: 3분봉 데이터 로드 실패")
                 return False
-                
+        
         except Exception as e:
-            print(f"❌ DataManager 초기 로딩 오류: {e}")
             return False
     
     def update_with_candle(self, candle_data: pd.Series) -> None:
         """새로운 캔들 데이터로 업데이트 (실시간 용)"""
         try:
             if candle_data is None:
-                print("⚠️ DataManager: 빈 캔들 데이터로 업데이트 시도")
                 return
             
             # Series에서 직접 값 가져오기
@@ -114,11 +104,10 @@ class DataManager:
             # 최대 1000개 캔들 유지
             if len(self.data) > 1000:
                 self.data = self.data.tail(1000)
-                                
+
+            print(f"✅ 3분봉 데이터 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
         except Exception as e:
-            print(f"❌ DataManager 캔들 업데이트 오류: {e}")
-            import traceback
-            traceback.print_exc()
+            pass
 
     
     def get_dataframe(self) -> pd.DataFrame:
@@ -131,7 +120,6 @@ class DataManager:
             return self.data.copy()
             
         except Exception as e:
-            print(f"❌ DataManager DataFrame 반환 오류: {e}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     
     def get_latest_data(self, count: int = 1) -> pd.DataFrame:
@@ -144,7 +132,6 @@ class DataManager:
             return latest_df
                 
         except Exception as e:
-            print(f"❌ DataManager 최신 데이터 조회 오류: {e}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     
     def get_data_range(self, start_time: datetime, end_time: datetime) -> pd.DataFrame:
@@ -166,7 +153,6 @@ class DataManager:
             return filtered_df.copy()
             
         except Exception as e:
-            print(f"❌ DataManager 시간 범위 조회 오류: {e}")
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     
     def is_ready(self) -> bool:
@@ -177,7 +163,6 @@ class DataManager:
         """모든 데이터 초기화"""
         self.data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
         self._data_loaded = False
-        print("🔄 DataManager: 모든 데이터 초기화 완료")
 
 
 # 전역 DataManager 인스턴스 생성 함수

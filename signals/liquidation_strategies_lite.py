@@ -1,16 +1,21 @@
+#!/usr/bin/env python3
+"""
+간소화된 청산 전략들
+- Fade Reentry Strategy
+- Squeeze Momentum Strategy
+"""
 
-from dataclasses import dataclass
-from collections import deque
-from datetime import datetime, timedelta, timezone
-from typing import Optional, List, Dict, Any, Tuple
 import numpy as np
 import pandas as pd
+from typing import Dict, List, Any, Optional, Tuple
+from dataclasses import dataclass
+from datetime import datetime, timedelta
+from collections import deque
 from math import sqrt
 
-# Time Manager import
-from data.data_manager import get_data_manager
-from indicators.global_indicators import get_atr, get_vwap
 from utils.time_manager import get_time_manager
+from indicators.global_indicators import get_atr, get_vwap
+from data.data_manager import get_data_manager
 
 # ============================================================
 # 청산 기반 전략 (심플) - 사용자의 고급 전략 코드 스타일을 따름
@@ -172,11 +177,10 @@ class FadeReentryStrategy:
         # VWAP 및 VWAP 표준편차
         vwap, vwap_std = get_vwap()
         atr = get_atr()
-        print(f"📊 [FADE] 지표: VWAP=${vwap:.2f}, VWAP_STD=${vwap_std:.2f}, ATR=${atr:.2f}")
         
         ps = self.pending_setup
         if not ps or now > ps['expires']:
-            print("⚠️ [FADE] 보류 SETUP 없음 또는 만료")
+            print("📊 [FADE] 보류 SETUP 없음 또는 만료")
             return None
             
         age = self._recent_nonempty_bucket_age(now)
@@ -189,8 +193,6 @@ class FadeReentryStrategy:
         last_l = float(df_3m["low"].iloc[-1])
         last_c = float(df_3m["close"].iloc[-1])
         
-        print(f"📊 [FADE] 가격: 이전={prev_c:.2f}, 현재={last_c:.2f}, 고가={last_h:.2f}, 저가={last_l:.2f}")
-
         n = self.cfg.vwap_sigma_entry
         if ps['side'] == 'BUY':
             reentry = (prev_c <= vwap - n*vwap_std) and (last_c >= vwap - n*vwap_std)
@@ -314,7 +316,6 @@ class SqueezeMomentumStrategy:
         self._update_stats(long_usd, short_usd)
         self.bucket_log.append((now, long_usd, short_usd, total))
         
-        print(f"📊 [SQUEEZE] μ/σ: 롱(μ={self.mu_long:.0f}, σ={self.sd_long:.0f}), 숏(μ={self.mu_short:.0f}, σ={self.sd_short:.0f})")
         return None
 
     # ---- 2) 1분봉 마감(패스트) ----
@@ -330,7 +331,6 @@ class SqueezeMomentumStrategy:
         vwap, vwap_std = get_vwap()
         atr_3m = get_atr()
         atr1m = float(atr_3m) / sqrt(3.0)
-        print(f"📊 [SQUEEZE] 지표: VWAP=${vwap:.2f}, VWAP_STD=${vwap_std:.2f}, ATR_1M=${atr1m:.2f}")
 
         age = self._recent_nonempty_bucket_age(now)
         if age is None or age > self.cfg.recency_sec: 
@@ -350,9 +350,7 @@ class SqueezeMomentumStrategy:
         zL, zS = self._zN(L, S, N)
         side = 'BUY' if S > L else 'SELL'
         zN = zS if side == 'BUY' else zL
-        
-        print(f"📊 [SQUEEZE] Z-score: 롱={zL:.2f}, 숏={zS:.2f}, 선택={zN:.2f}")
-        
+                
         if (share < self.cfg.fast_dir_share) or (zN < self.cfg.fast_zN): 
             return None
 
@@ -367,7 +365,6 @@ class SqueezeMomentumStrategy:
         last_close = float(last['close']); last_high = float(last['high']); last_low = float(last['low'])
         prev_high = float(prev['high']);  prev_low  = float(prev['low'])
         sigma = float(self.cfg.fast_sigma)
-        print(f"📊 [SQUEEZE] 가격: 이전(고가={prev_high:.2f}, 저가={prev_low:.2f}), 현재(고가={last_high:.2f}, 저가={last_low:.2f}, 종가={last_close:.2f})")
 
         rng_ok = (last_high - last_low) >= self.cfg.fast_range_atr1m * atr1m
 
@@ -386,7 +383,6 @@ class SqueezeMomentumStrategy:
             stop  = min(last_high, prev_high) + self.cfg.tick
             R = stop - entry; tp1, tp2 = entry - self.cfg.tp_R1*R, entry - self.cfg.tp_R2*R
 
-        print(f"🎯 [SQUEEZE] 1M ENTRY 신호 생성: {side} | 진입=${entry:.2f} | 손절=${stop:.2f} | 목표1=${tp1:.2f} | 목표2=${tp2:.2f}")
         return {"stage":"ENTRY","action":side,"entry":float(entry),"stop":float(stop),
                 "targets":[float(tp1), float(tp2)],
                 "context":{"mode":"LIQ_SQUEEZE_FAST_1M","minutes":N,"share":float(share),"zN":float(zN),

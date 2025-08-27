@@ -249,7 +249,6 @@ class SessionVPVR:
         session_config = self.time_manager.get_indicator_mode_config()
         self._check_session_reset(session_config)
 
-        # ATR 업데이트
         try:
             if hasattr(self.atr, 'update_with_candle'):
                 self.atr.update_with_candle(candle_data)
@@ -285,6 +284,8 @@ class SessionVPVR:
 
         # VPVR 결과 갱신
         self._update_vpvr_result(session_config)
+        print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] VPVR 업데이트 POC: {self.cached_result['poc']:.2f} HVN: {self.cached_result['hvn']:.2f} LVN: {self.cached_result['lvn']:.2f}")
+        print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] ATR 업데이트 {self.atr.current_atr:.2f}")
 
     def _process_candle_data(self, row: pd.Series, timestamp):
         """배치 로드 시 캔들 데이터 처리 (update_with_candle과 거의 동일)"""

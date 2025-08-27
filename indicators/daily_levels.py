@@ -47,7 +47,7 @@ class DailyLevels:
             if self._is_new_day():
                 print("🔄 새로운 날이 되었습니다. Daily Levels 데이터를 갱신합니다.")
                 self._initialize_levels()
-                
+
         except Exception as e:
             print(f"❌ Daily Levels 업데이트 오류: {e}")
     

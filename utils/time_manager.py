@@ -84,9 +84,7 @@ class TimeManager:
             
             # 초기 세션 시간 계산
             self._update_session_times_cache()
-            
-            print("🕐 TimeManager 초기화 완료")
-    
+                
     def _update_session_times_cache(self):
         """세션 시간 캐시 업데이트"""
         try:
@@ -129,7 +127,6 @@ class TimeManager:
             self._session_times_cache['all_sessions'].sort(key=lambda x: x[0])
             
             self._last_cache_update_date = current_date
-            print(f"📅 세션 시간 캐시 업데이트 완료: {current_date}")
             
         except Exception as e:
             print(f"❌ 세션 시간 캐시 업데이트 오류: {e}")
@@ -396,14 +393,6 @@ class TimeManager:
     def get_session_open_time(self, current_time: Optional[datetime] = None) -> Tuple[datetime, str]:
         """get_previous_session_open의 별칭 (호환성)"""
         return self.get_previous_session_open(current_time)
-    
-    def get_previous_session_end_time(self, current_time: Optional[datetime] = None) -> Optional[datetime]:
-        """get_previous_session_close의 별칭 (호환성)"""
-        return self.get_previous_session_close(current_time)
-    
-    def get_previous_session_end(self, current_time: Optional[datetime] = None) -> Optional[datetime]:
-        """get_previous_session_close의 별칭 (호환성)"""
-        return self.get_previous_session_close(current_time)
     
     def get_next_session_start(self, current_time: Optional[datetime] = None) -> datetime:
         """다음 세션 시작 시간 반환 (캐시 사용)"""
@@ -746,8 +735,3 @@ def is_session_active(current_time: Optional[datetime] = None) -> bool:
         return get_time_manager().is_session_active()
     return get_time_manager()._is_session_active(current_time)
 
-def get_session_open_time(current_time: Optional[datetime] = None) -> Tuple[datetime, str]:
-    """opening_range.py 호환성을 위한 별칭"""
-    if current_time is None:
-        current_time = get_time_manager().get_current_time()
-    return get_time_manager().get_session_open_time(current_time)

@@ -15,7 +15,7 @@ from collections import deque
 import pandas as pd
 
 from data.data_manager import get_data_manager
-
+from utils.time_manager import get_time_manager
 
 class ATR3M:
     """3분봉 실시간 ATR 관리 클래스 - 연속 롤링 방식"""
@@ -28,13 +28,14 @@ class ATR3M:
         self.candles = []
         self.true_ranges = []  # deque 대신 list 사용
         
-        
         # ATR 값
         self.current_atr = 0.0
         self.last_update_time = None
 
+        self.time_manager = get_time_manager()
+
         self._initialize_atr()
-        print(f"🚀 ATR3M 초기화 완료 (기간: {length}, 연속 롤링 모드)")
+
     
     def _initialize_atr(self):
         df = self.get_data()
@@ -45,7 +46,7 @@ class ATR3M:
         data_manager = get_data_manager()
         
         if not data_manager.is_ready():
-            print("⚠️ DataManager가 준비되지 않았습니다")
+
             return {}
         
         df = data_manager.get_latest_data(self.max_candles)
@@ -158,7 +159,6 @@ class ATR3M:
             return float(self.current_atr)
             
         except Exception as e:
-            print(f"❌ DataFrame에서 ATR 계산 오류: {e}")
             return 0.0
 
     def is_ready(self) -> bool:

@@ -38,7 +38,6 @@ class IntegratedSmartTrader:
         # 🚀 1단계: DataManager 우선 초기화 (데이터 준비)
         self._init_data_manager()
         self._init_global_indicators()
-
         self._init_bucket_aggregator()
 
         # 🚀 3단계: 고급 청산 전략 초기화
@@ -199,7 +198,7 @@ class IntegratedSmartTrader:
         try:
             print("🔄 메인 루프 시작 - 웹소켓에서 전략 실행")
             while self.running:
-                time.sleep(1)  # 1초마다 상태 체크만
+                time.sleep(0.5)  # 1초마다 상태 체크만
                 
         except KeyboardInterrupt:
             print("\n⏹️ 사용자에 의해 중지됨")

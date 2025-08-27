@@ -65,58 +65,37 @@ class GlobalIndicatorManager:
             }
         }
         
-        print("🚀 GlobalIndicatorManager 초기화 완료")
+
     
-    def _initialize_vpvr_indicator(self):
-        """VPVR 지표 초기화 - 공통 데이터 사용"""
-        vpvr_config = self.indicator_configs['vpvr']
-        self._indicators['vpvr'] = vpvr_config['class'](
-            bins=vpvr_config['bins'],
-            price_bin_size=vpvr_config['price_bin_size'],
-            lookback=vpvr_config['lookback'],
-        )
-
-    def _initialize_atr_indicator(self):
-        """ATR 지표 초기화 및 초기 데이터 로딩"""
-        atr_config = self.indicator_configs['atr']
-        self._indicators['atr'] = atr_config['class'](
-            length=atr_config['length'],
-            max_candles=atr_config['max_candles']
-        )
-        
-        print("   ✅ ATR 지표 초기화 완료")
-
-    def _initialize_daily_levels_indicator(self):
-        """Daily Levels 지표 초기화"""
-        daily_config = self.indicator_configs['daily_levels']
-        self._indicators['daily_levels'] = daily_config['class']()
-        print("   ✅ Daily Levels 지표 초기화 완료")
-
-    def _initialize_vwap_indicator(self):
-        """VWAP 지표 초기화 - DataIndicator에서 데이터 가져오기"""
+    def _initialize_indicator(self, name: str):
+        """지표 초기화 - 공통 메서드"""
         try:
-            vwap_config = self.indicator_configs['vwap']
-            self._indicators['vwap'] = vwap_config['class'](
-                symbol=vwap_config['symbol']
-            )
-            print("   ✅ VWAP 지표 초기화 완료")
+            config = self.indicator_configs[name]
+            indicator_class = config['class']
             
+            if name == 'vpvr':
+                self._indicators[name] = indicator_class(
+                    bins=config['bins'],
+                    price_bin_size=config['price_bin_size'],
+                    lookback=config['lookback']
+                )
+            elif name == 'atr':
+                self._indicators[name] = indicator_class(
+                    length=config['length'],
+                    max_candles=config['max_candles']
+                )
+            elif name == 'vwap':
+                self._indicators[name] = indicator_class(
+                    symbol=config['symbol']
+                )
+            elif name == 'opening_range':
+                self._indicators[name] = indicator_class(or_minutes=30)
+            else:
+                # 기본 초기화 (매개변수 없음)
+                self._indicators[name] = indicator_class()
+                
         except Exception as e:
-            print(f"❌ VWAP 지표 초기화 오류: {e}")
-            self._indicators['vwap'] = None
-
-    def _initialize_opening_range_indicator(self):
-        """Opening Range 지표 초기화 - DataManager에서 데이터 가져오기"""
-        try:
-            print("🚀 OpeningRange 초기화 시작...")
-            
-            self._indicators['opening_range'] = OpeningRange(or_minutes=30)
-            
-            print("   ✅ Opening Range 지표 초기화 완료")
-            
-        except Exception as e:
-            print(f"❌ Opening Range 지표 초기화 오류: {e}")
-            self._indicators['opening_range'] = None
+            self._indicators[name] = None
 
     def initialize_indicators(self):
         """모든 지표 초기화"""
@@ -127,25 +106,19 @@ class GlobalIndicatorManager:
             try:
                 data_manager = self.get_data_manager()
                 if not data_manager.is_ready():
-                    print("❌ DataManager가 아직 준비되지 않음. smart_trader에서 먼저 초기화하세요.")
                     return
                                 
                 # 🚀 2단계: 나머지 지표들 초기화 (DataManager 완료 후)
                 print("\n🔥 2단계: 나머지 지표들 초기화 시작...")
-                self._initialize_atr_indicator()
-                self._initialize_daily_levels_indicator()
-                self._initialize_vpvr_indicator()
-                self._initialize_vwap_indicator()
-                self._initialize_opening_range_indicator()
+                
+                # 모든 지표를 순차적으로 초기화
+                for indicator_name in self.indicator_configs.keys():
+                    self._initialize_indicator(indicator_name)
                 
                 self._initialized = True
                 print("🎯 모든 전역 지표 초기화 완료!")
-                
-                
+            
             except Exception as e:
-                print(f"❌ 전역 지표 초기화 오류: {e}")
-                import traceback
-                traceback.print_exc()
                 self._initialized = False
     
     def update_all_indicators(self, candle_data: pd.Series):
@@ -156,53 +129,32 @@ class GlobalIndicatorManager:
             candle_data: 3분봉 캔들 데이터프레임 (1개 행) 
         """
         if not self._initialized:
-            print("⚠️ 지표들이 아직 초기화되지 않음. 먼저 초기화하세요.")
             return
-        
-        print(f"🔄 전체 지표 업데이트 시작...")
-        data_manager = self.get_data_manager()
-        data_manager.update_with_candle(candle_data)
-        print(f"   📊 DataManager 업데이트")
 
         # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
         if 'atr' in self._indicators:
             self._indicators['atr'].update_with_candle(candle_data)
-            atr_value = self._indicators['atr'].get_status().get('atr')
-            print(f"   📊 ATR 업데이트: {atr_value:.3f}")
         
         # 2. VPVR 업데이트
         if 'vpvr' in self._indicators:
             self._indicators['vpvr'].update_with_candle(candle_data)
-            vpvr_status = self._indicators['vpvr'].get_status()
-            active_bins = vpvr_status.get('active_bins')
-            print(f"   📈 VPVR 업데이트: 활성 구간 {active_bins}개")
         
         # 3. VWAP 업데이트
         if 'vwap' in self._indicators:
             self._indicators['vwap'].update_with_candle(candle_data)
-            vwap_status = self._indicators['vwap'].get_status()
-            vwap = vwap_status.get('vwap')
-            print(f"   📊 VWAP 업데이트: ${vwap:.2f}")
         
         # 4. Daily Levels는 자동 업데이트 (어제 데이터이므로)
         if 'daily_levels' in self._indicators:
             self._indicators['daily_levels'].update_with_candle(candle_data)
-            daily_status = self._indicators['daily_levels'].get_status()
-            print(f"   📅 Daily Levels 상태: {'로드됨' if daily_status else '로드 안됨'}")
         
         if 'opening_range' in self._indicators:
             self._indicators['opening_range'].update_with_candle(candle_data)
-            opening_range_status = self._indicators['opening_range'].get_status()
-            is_open = opening_range_status.get('is_open', False)
-            print(f"   🌅 Opening Range 업데이트: {'개장 중' if is_open else '폐장'}")
-
-        print(f"✅ 전체 지표 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
             
-    
+        print(f"✅ 전체 지표 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+        print(f"")
     def get_indicator(self, name: str):
         """특정 지표 반환"""
         if not self._initialized:
-            print("⚠️ 지표들이 아직 초기화되지 않음")
             return None
         
         return self._indicators.get(name)
@@ -216,7 +168,6 @@ class GlobalIndicatorManager:
     def get_all_indicators(self) -> Dict[str, Any]:
         """모든 지표 반환"""
         if not self._initialized:
-            print("⚠️ 지표들이 아직 초기화되지 않음")
             return {}
         
         return self._indicators.copy()
@@ -261,23 +212,6 @@ def update_all_indicators_with_candle(candle_data: Dict[str, Any]):
     manager = get_global_indicator_manager()
     manager.update_all_indicators(candle_data)
 
-
-def get_indicator(name: str):
-    """특정 지표 반환 (편의 함수)"""
-    manager = get_global_indicator_manager()
-    return manager.get_indicator(name)
-
-
-def get_indicators_status():
-    """모든 지표 상태 반환 (편의 함수)"""
-    manager = get_global_indicator_manager()
-    return manager.get_indicators_status()
-
-
-# ============================================================
-# 1줄짜리 편의 함수들 - 지표 값 바로 가져오기
-# ============================================================
-
 def get_vwap() -> Tuple[Optional[float], Optional[float]]:
     """VWAP 값 바로 가져오기"""
     manager = get_global_indicator_manager()
@@ -300,7 +234,7 @@ def get_opening_range() -> Tuple[Optional[float], Optional[float]]:
     """개장 범위 고가 바로 가져오기"""
     manager = get_global_indicator_manager()
     opening_indicator = manager.get_indicator('opening_range')
-    return opening_indicator.get_status()
+    return (opening_indicator.get_status().get('high'), opening_indicator.get_status().get('low'))
 
 def get_vpvr() -> Optional[int]:
     """VPVR 활성 구간 수 바로 가져오기"""
