@@ -20,6 +20,7 @@ from signals.bollinger_squeeze_strategy import BBSqueezeCfg, BollingerSqueezeStr
 from signals.liquidation_strategies_lite import SqueezeMomentumStrategy, MomentumConfig, FadeReentryStrategy, FadeConfig
 from signals.session_or_lite import SessionORLite, SessionORLiteCfg
 from signals.vpvr_golden_strategy import LVNGoldenPocket
+from signals.vwap_pinball_strategy import VWAPPinballStrategy, VWAPPinballCfg
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -50,7 +51,8 @@ class IntegratedSmartTrader:
         self._init_squeeze_momentum_strategy()
         self._init_fade_reentry_strategy()
         self._init_bollinger_squeeze_strategy()
-        
+        self._init_vwap_pinball_strategy()
+
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
         try:
@@ -97,7 +99,17 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
 
-    
+    def _init_vwap_pinball_strategy(self):
+        """VWAP 피니언 전략 초기화"""
+        try:
+            config = VWAPPinballCfg()
+            self._vwap_pinball_strategy = VWAPPinballStrategy(config)
+
+        except Exception as e:
+            print(f"❌ VWAP 피니언 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._vwap_pinball_strategy = None
 
     def _init_bucket_aggregator(self):
         """버킷 집계기 초기화"""
@@ -176,7 +188,8 @@ class IntegratedSmartTrader:
                 'squeeze_momentum_strategy': self._squeeze_momentum_strategy,
                 'fade_reentry_strategy': self._fade_reentry_strategy,
                 'vpvr_golden_strategy': self._vpvr_golden_strategy,
-                'bollinger_squeeze_strategy': self._bollinger_squeeze_strategy
+                'bollinger_squeeze_strategy': self._bollinger_squeeze_strategy,
+                'vwap_pinball_strategy': self._vwap_pinball_strategy
             }
             
             # None이 아닌 전략만 필터링하여 전달

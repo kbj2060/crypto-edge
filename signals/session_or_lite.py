@@ -1,7 +1,7 @@
 
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any
 
 import pandas as pd
 
@@ -13,6 +13,18 @@ from indicators.global_indicators import get_atr, get_opening_range, get_vwap
 class SessionORLiteCfg:
     """
     Lightweight Opening Range strategy config.
+    - or_minutes: minutes to build OR (session open -> lock)
+    - valid_minutes_after_open: only trade within this window after session open
+    - body_ratio_min: min candle body/range ratio for a breakout candle
+    - retest_atr: ATR multiplier buffer around OR edge to validate retest
+    - retest_atr_mult_short: extra buffer multiplier for SHORT side retest
+    - atr_stop_mult: base stop sizing (used with 0.5xATR for OR anchor stop)
+    - tp_R1 / tp_R2: targets in multiples of R
+    - vwap_filter_mode: 'off' | 'location' | 'slope'
+        - location: long c>=vwap, short c<=vwap
+        - slope:   uses vwap_prev; long if vwap>=vwap_prev else short
+    - allow_wick_break: allow wick-based breakout in addition to body close
+    - wick_needs_body_sign: if wick breakout used, body must agree with direction
     """
     or_minutes: int = 30
     body_ratio_min: float = 0.10
@@ -31,7 +43,7 @@ class SessionORLiteCfg:
 
 
 class SessionORLite:
-    """Simplified Opening Range breakout→retest strategy with scoring."""
+    """Simplified Opening Range breakout→retest strategy."""
 
     def __init__(self, cfg: SessionORLiteCfg = SessionORLiteCfg()):
         self.cfg = cfg
@@ -41,20 +53,12 @@ class SessionORLite:
         self.time_manager = get_time_manager()
         self.data_manager = get_data_manager()
 
-        # Simple debug counters
+        # Simple debug counters to diagnose side bias
         self.debug = {
             "break_long": 0, "break_short": 0,
             "retest_long_miss": 0, "retest_short_miss": 0,
             "vwap_long_block": 0, "vwap_short_block": 0
         }
-
-    # ---- scoring helpers ----
-    def _lin(self, x: float, a: float, b: float) -> float:
-        if b == a: return 0.0
-        return max(0.0, min(1.0, (x - a) / (b - a)))
-
-    def _conf(self, v: float) -> str:
-        return "HIGH" if v >= 0.75 else ("MEDIUM" if v >= 0.5 else "LOW")
 
     # ---- main hook (3m close) ----
     def on_kline_close_3m(
@@ -63,7 +67,11 @@ class SessionORLite:
         vwap_prev: Optional[float] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Evaluate on 3m candle close. Returns signal dict or None.
+        Evaluate on 3m candle close.
+        df3: pandas DataFrame with columns open, high, low, close (3m)
+        vwap, vwap_std, atr: session-anchored preferred (floats)
+        vwap_prev: previous value for slope filtering (optional)
+        returns: signal dict or None
         """
         now = self.time_manager.get_current_time()
 
@@ -82,11 +90,16 @@ class SessionORLite:
         o = float(last["open"]); h = float(last["high"]); l = float(last["low"]); c = float(last["close"])
         ph = float(prev["high"]); pl = float(prev["low"])
 
+        # 1) Build/lock OR (include the last candle if now == or_end)
+        or_end = self.session_open + timedelta(minutes=self.cfg.or_minutes)
+
+
         # safety
         if self.or_high is None or self.or_low is None or self.or_high <= self.or_low:
+            print('High, Low 데이터 없음')
             return None
 
-        # 2) Breakout qualification
+        # 2) Breakout qualification (body or wick-based, configurable)
         rng = h - l
         if rng <= 0:
             return None
@@ -94,7 +107,7 @@ class SessionORLite:
         body = abs(c - o)
         body_ok = (body / rng) >= self.cfg.body_ratio_min
 
-        # wick-based breakout
+        # wick based breakout allowance
         wick_break_long  = (h >= self.or_high + self.cfg.tick)
         wick_break_short = (l <= self.or_low  - self.cfg.tick)
 
@@ -113,6 +126,7 @@ class SessionORLite:
         buf_long  = self.cfg.retest_atr * float(atr)
         buf_short = self.cfg.retest_atr * self.cfg.retest_atr_mult_short * float(atr)
 
+        # use min low for long (deeper touch), max high for short (shallower touch)
         min_low = min(l, pl)
         max_high = max(h, ph)
         
@@ -140,6 +154,7 @@ class SessionORLite:
         if not vwap_ok_short:
             self.debug["vwap_short_block"] += 1
 
+        # 5) Signals (one per side per session)
         sigs = []
         
         if break_long_ok and touched_long and vwap_ok_long:
@@ -147,24 +162,6 @@ class SessionORLite:
             stop  = min(l, self.or_high - self.cfg.atr_stop_mult * float(atr)) - self.cfg.tick
             R = entry - stop
             tp1, tp2 = entry + self.cfg.tp_R1 * R, entry + self.cfg.tp_R2 * R
-
-            # ---- scoring ----
-            body_ratio = (body / rng) if rng > 0 else 0.0
-            dev = abs(min_low - self.or_high)
-            ret_sc = 1.0 - self._lin(dev, 0.0, buf_long)
-            brk_sc = 0.7*self._lin(body_ratio, self.cfg.body_ratio_min, 0.40) + (0.3 if wick_break_long else 0.0)
-            rr = abs(tp1 - entry) / max(1e-9, abs(entry - stop))
-            rr_sc = self._lin(rr, 0.9, 2.0)
-            vwap_bonus = 0.05 if vwap_ok_long else 0.0
-            score = max(0.0, min(1.0, 0.4*brk_sc + 0.35*ret_sc + 0.20*rr_sc + vwap_bonus))
-            confidence = self._conf(score)
-            reasons: List[str] = [
-                f"Body ratio={body_ratio:.2f} (score {0.7*self._lin(body_ratio, self.cfg.body_ratio_min, 0.40):.2f})",
-                f"Retest deviation={dev:.2f} (score {ret_sc:.2f})",
-                f"R/R={rr:.2f} (score {rr_sc:.2f})"
-            ]
-            if vwap_bonus > 0: reasons.append("VWAP filter passed (+0.05)")
-            
             
             sigs.append({
                 "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
@@ -173,33 +170,14 @@ class SessionORLite:
                     "mode": "SESSION_OR_LITE", "or_high": float(self.or_high),
                     "atr": float(atr), "vwap": float(vwap), "vwap_std": float(vwap_std),
                     "touched_buf": float(buf_long), "body_ok": body_ok, "wick_break": wick_break_long
-                },
-                "score": float(score), "confidence": confidence, "reasons": reasons
+                }
             })
-
         if break_short_ok and touched_short and vwap_ok_short:
             entry = l - self.cfg.tick
             stop  = max(h, self.or_low + self.cfg.atr_stop_mult * float(atr)) + self.cfg.tick
             R = stop - entry
             tp1, tp2 = entry - self.cfg.tp_R1 * R, entry - self.cfg.tp_R2 * R
-
-            # ---- scoring ----
-            body_ratio = (body / rng) if rng > 0 else 0.0
-            dev = abs(max_high - self.or_low)
-            ret_sc = 1.0 - self._lin(dev, 0.0, buf_short)
-            brk_sc = 0.7*self._lin(body_ratio, self.cfg.body_ratio_min, 0.40) + (0.3 if wick_break_short else 0.0)
-            rr = abs(tp1 - entry) / max(1e-9, abs(entry - stop))
-            rr_sc = self._lin(rr, 0.9, 2.0)
-            vwap_bonus = 0.05 if vwap_ok_short else 0.0
-            score = max(0.0, min(1.0, 0.4*brk_sc + 0.35*ret_sc + 0.20*rr_sc + vwap_bonus))
-            confidence = self._conf(score)
-            reasons: List[str] = [
-                f"Body ratio={body_ratio:.2f} (score {0.7*self._lin(body_ratio, self.cfg.body_ratio_min, 0.40):.2f})",
-                f"Retest deviation={dev:.2f} (score {ret_sc:.2f})",
-                f"R/R={rr:.2f} (score {rr_sc:.2f})"
-            ]
-            if vwap_bonus > 0: reasons.append("VWAP filter passed (+0.05)")
-
+            
             sigs.append({
                 "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
                 "targets": [float(tp1), float(tp2)],
@@ -207,10 +185,7 @@ class SessionORLite:
                     "mode": "SESSION_OR_LITE", "or_low": float(self.or_low),
                     "atr": float(atr), "vwap": float(vwap), "vwap_std": float(vwap_std),
                     "touched_buf": float(buf_short), "body_ok": body_ok, "wick_break": wick_break_short
-                },
-                "score": float(score), "confidence": confidence, "reasons": reasons
+                }
             })
-
-        print(f"🎯 [SESSION_OR_LITE] 신호: {sigs[0]['action']} | 진입=${sigs[0]['entry']:.4f} | 손절=${sigs[0]['stop']:.4f} | 목표=${sigs[0]['targets'][0]:.4f}, ${sigs[0]['targets'][1]:.4f} | 신뢰도={sigs[0]['confidence']:.0%} | 점수={sigs[0]['score']:.2f}")
 
         return sigs[0] if sigs else None

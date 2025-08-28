@@ -1,4 +1,3 @@
-
 #!/usr/bin/env python3
 """
 간소화된 청산 전략들
@@ -19,7 +18,12 @@ from indicators.global_indicators import get_atr, get_vwap
 from data.data_manager import get_data_manager
 
 # ============================================================
-# 청산 기반 전략 (심플)
+# 청산 기반 전략 (심플) - 사용자의 고급 전략 코드 스타일을 따름
+# - SELL = 롱 청산, BUY = 숏 청산 (사용자 코드 기준)
+# - μ/σ는 "1분 버킷 합계" 기준으로 0 버킷도 포함해 롤링 추정
+# - on_bucket_close(): 1분마다 호출 (버킷 닫힘)
+# - on_kline_close_1m(): 1분봉 마감(모멘텀 패스트)
+# - on_kline_close_3m(): 3분봉 마감(페이드/모멘텀 보조)
 # ============================================================
 
 # -------------------- 공통 유틸/설정 --------------------
@@ -30,6 +34,7 @@ def _usd_from_event(ev: Dict[str, Any]) -> Tuple[str, float]:
     size = float(ev.get('size', 0))
     price = float(ev.get('price', 0))
     
+    # qty_usd가 있으면 사용, 없으면 계산
     if 'qty_usd' in ev and ev['qty_usd'] is not None:
         usd = float(ev['qty_usd'])
     else:
@@ -42,14 +47,6 @@ def _atr(df: pd.DataFrame, n: int = 14) -> pd.Series:
     prev_c = c.shift(1)
     tr = pd.concat([(h - l).abs(), (h - prev_c).abs(), (l - prev_c).abs()], axis=1).max(axis=1)
     return tr.rolling(n).mean()
-
-# ---- scoring helpers ----
-def _lin(x: float, a: float, b: float) -> float:
-    if b == a: return 0.0
-    return max(0.0, min(1.0, (x - a) / (b - a)))
-
-def _conf(v: float) -> str:
-    return "HIGH" if v >= 0.75 else ("MEDIUM" if v >= 0.5 else "LOW")
 
 
 @dataclass
@@ -76,16 +73,21 @@ class FadeConfig(BaseLiqConfig):
 
 class FadeReentryStrategy:
     """
-    VWAP 밴드 재진입(페이드) — 1m에서 SETUP, 3m에서 ENTRY 확정.
+    VWAP 밴드 재진입(페이드) — 사용자의 고급 전략에서 단순화.
+    버킷(1m)에서 SETUP, 3분봉 마감에서 ENTRY 확정.
     """
     def __init__(self, cfg: FadeConfig):
         self.cfg = cfg
+        # Time Manager 초기화
         self.time_manager = get_time_manager()
+        # 1분 버킷 롤링 통계(0 버킷 포함)
         self.long_hist = deque(maxlen=cfg.lookback_buckets)
         self.short_hist = deque(maxlen=cfg.lookback_buckets)
         self.mu_long = 0.0; self.sd_long = 1.0
         self.mu_short = 0.0; self.sd_short = 1.0
+        # 비어있지 않은 버킷 로그(신선도 체크)
         self.bucket_log: List[Tuple[datetime, float, float, float]] = []
+        # 보류 SETUP
         self.pending_setup: Optional[Dict[str, Any]] = None
 
     # ---- 내부 ----
@@ -111,8 +113,12 @@ class FadeReentryStrategy:
         return (now_utc - self.bucket_log[-1][0]).total_seconds()
 
     def warmup(self, bucket_events: List[Dict[str, Any]]) -> None:
+        print(f"🔥 [FADE] 전략 워밍업 시작 - {len(bucket_events)}개 이벤트")
+        
+        # bucket_log 초기화 및 형태 변환
         self.bucket_log = []
-        for ev in bucket_events:
+        
+        for i, ev in enumerate(bucket_events):
             side, usd = _usd_from_event(ev)
             timestamp = self.time_manager.get_timestamp_datetime(ev['timestamp'])
             if side in ('sell', 'long'):
@@ -121,6 +127,8 @@ class FadeReentryStrategy:
             elif side in ('buy', 'short'): 
                 self._update_stats(0.0, float(usd))
                 self.bucket_log.append((timestamp, 0.0, float(usd), float(usd)))
+        
+        print(f"✅ [FADE] 워밍업 완료 - 롱 μ={self.mu_long:.0f}, σ={self.sd_long:.0f}, 숏 μ={self.mu_short:.0f}, σ={self.sd_short:.0f}")
 
     # ---- 1) 버킷 닫힘(1m) ----
     def on_bucket_close(self, bucket_events: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
@@ -152,18 +160,10 @@ class FadeReentryStrategy:
             'expires': now + timedelta(minutes=self.cfg.setup_ttl_min),
             'z': float(max_z),'lpi': float(lpi), 'bucket_total_usd': float(total)
         }
-
-        # --- score (setup power) ---
-        setup_power = 0.5*_lin(max_z, 1.2, 3.5) + 0.3*_lin(abs(lpi), 0.10, 0.60) + 0.2*_lin(total, 5e4, 5e6)
-
-        print(f"🎯 [FADE] SETUP 신호 생성: {side} | 점수=${float(max(0.0, min(1.0, setup_power))):.2f} | 신뢰도=${_conf(setup_power):.2f}")
-
-        return {
-            "stage":"SETUP","action":side,"z":float(max_z),"lpi":float(lpi),
-            "bucket_total_usd":float(total),"created":now.isoformat(),
-            "score": float(max(0.0, min(1.0, setup_power))),
-            "confidence": _conf(setup_power)
-        }
+        
+        print(f"🎯 [FADE] 신호 생성: {side} | Z={max_z:.2f} | LPI={lpi:.3f} | 총액=${total:,.0f}")
+        return {"stage":"SETUP","action":side,"z":float(max_z),"lpi":float(lpi),
+                "bucket_total_usd":float(total),"created":now.isoformat()}
 
     # ---- 2) 3분봉 마감 ----
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
@@ -174,15 +174,18 @@ class FadeReentryStrategy:
         
         now = self.time_manager.get_current_time()
         
+        # VWAP 및 VWAP 표준편차
         vwap, vwap_std = get_vwap()
         atr = get_atr()
         
         ps = self.pending_setup
         if not ps or now > ps['expires']:
+            print("📊 [FADE] 보류 SETUP 없음 또는 만료")
             return None
             
         age = self._recent_nonempty_bucket_age(now)
         if age is None or age > self.cfg.recency_sec: 
+            print("⚠️ [FADE] 최근 버킷 신선도 불만족")
             return None
 
         prev_c = float(df_3m["close"].iloc[-2])
@@ -207,33 +210,12 @@ class FadeReentryStrategy:
             R = stop - entry; tp1, tp2 = entry - self.cfg.tp_R1*R, entry - self.cfg.tp_R2*R
 
         self.pending_setup = None
-
-        # --- scoring ---
-        RR = abs(tp1 - entry) / max(1e-9, abs(entry - stop))
-        rr_sc = _lin(RR, 0.9, 2.2)
-        z_sc  = _lin(ps['z'], 1.8, 3.5)
-        lpi_sc= _lin(abs(ps['lpi']), 0.12, 0.60)
-        notional_sc = _lin(ps.get("bucket_total_usd", 0.0) or 0.0, 1e5, 5e6)
-        score = max(0.0, min(1.0, 0.35*z_sc + 0.25*lpi_sc + 0.15*notional_sc + 0.25*rr_sc))
-        conf  = _conf(score)
-        reasons = [
-            f"Z={ps['z']:.2f} (score {z_sc:.2f})",
-            f"LPI={ps['lpi']:.2f} (score {lpi_sc:.2f})",
-            f"Notional=${(ps.get('bucket_total_usd') or 0):,.0f} (score {notional_sc:.2f})",
-            f"R/R={RR:.2f} (score {rr_sc:.2f})"
-        ]
-
-        print(f"🎯 [FADE] 신호: {ps['side']} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${tp1:.4f}, ${tp2:.4f} | 신뢰도={conf:.0%} | 점수={score:.2f}")
-
-        return {
-            "stage":"ENTRY","action":ps['side'],"entry":float(entry),"stop":float(stop),
-            "targets":[float(tp1), float(tp2)],
-            "context":{"mode":"LIQ_FADE","z":ps['z'],"lpi":ps['lpi'],
-                        "vwap":float(vwap),"vwap_std":float(vwap_std),"atr":float(atr),
-                        "bucket_total_usd":ps.get("bucket_total_usd", None)},
-            "score": float(score), "confidence": conf, "reasons": reasons
-        }
-        
+        print(f"🎯 [FADE] ENTRY 신호 생성: {ps['side']} | 진입=${entry:.2f} | 손절=${stop:.2f} | 목표1=${tp1:.2f} | 목표2=${tp2:.2f}")
+        return {"action":ps['side'],"entry":float(entry),"stop":float(stop),
+                "targets":[float(tp1), float(tp2)],
+                "context":{"mode":"LIQ_FADE","z":ps['z'],"lpi":ps['lpi'],
+                            "vwap":float(vwap),"vwap_std":float(vwap_std),"atr":float(atr),
+                            "bucket_total_usd":ps.get("bucket_total_usd", None)}}
 
 
 # -------------------- 스퀴즈(모멘텀) --------------------
@@ -263,6 +245,7 @@ class SqueezeMomentumStrategy:
     """
     def __init__(self, cfg: MomentumConfig):
         self.cfg = cfg
+        # Time Manager 초기화
         self.time_manager = get_time_manager()
         self.long_hist = deque(maxlen=cfg.lookback_buckets)
         self.short_hist = deque(maxlen=cfg.lookback_buckets)
@@ -297,7 +280,10 @@ class SqueezeMomentumStrategy:
         return zL, zS
 
     def warmup(self, bucket_events: List[Dict[str, Any]]) -> None:
+        print(f"🔥 [SQUEEZE] 전략 워밍업 시작 - {len(bucket_events)}개 이벤트")
+        # bucket_log 초기화 및 형태 변환
         self.bucket_log = []
+        
         for ev in bucket_events:
             side, usd = _usd_from_event(ev)
             timestamp = self.time_manager.get_timestamp_datetime(ev['timestamp'])
@@ -307,6 +293,8 @@ class SqueezeMomentumStrategy:
             elif side in ('buy', 'short'): 
                 self._update_stats(0.0, float(usd))
                 self.bucket_log.append((timestamp, 0.0, float(usd), float(usd)))
+        
+        print(f"✅ [SQUEEZE] 워밍업 완료 - 롱 μ={self.mu_long:.0f}, σ={self.sd_long:.0f}, 숏 μ={self.mu_short:.0f}, σ={self.sd_short:.0f}")
 
     # ---- 1) 버킷 닫힘(1m) ----
     def on_bucket_close(self, bucket_events: List[Dict[str, Any]]) -> None:
@@ -339,6 +327,7 @@ class SqueezeMomentumStrategy:
         if df_1m is None: 
             return None
 
+        # VWAP 및 VWAP 표준편차
         vwap, vwap_std = get_vwap()
         atr_3m = get_atr()
         atr1m = float(atr_3m) / sqrt(3.0)
@@ -354,6 +343,7 @@ class SqueezeMomentumStrategy:
         
         L = sum(b[1] for b in lastN); S = sum(b[2] for b in lastN); T = L + S
         if T <= 0: 
+            print(f"⚠️ [SQUEEZE] 총 청산 금액 0: 롱=${L:,.0f}, 숏=${S:,.0f}")
             return None
         
         share = max(L, S) / T
@@ -393,27 +383,10 @@ class SqueezeMomentumStrategy:
             stop  = min(last_high, prev_high) + self.cfg.tick
             R = stop - entry; tp1, tp2 = entry - self.cfg.tp_R1*R, entry - self.cfg.tp_R2*R
 
-        # --- scoring ---
-        rr_sc = _lin(abs(tp1 - entry) / max(1e-9, abs(entry - stop)), 0.9, 2.0)
-        share_sc = _lin(share, self.cfg.fast_dir_share, 0.95)
-        z_sc = _lin(zN, self.cfg.fast_zN, self.cfg.fast_zN*4.0)
-        score = max(0.0, min(1.0, 0.40*z_sc + 0.35*share_sc + 0.25*rr_sc))
-        conf  = _conf(score)
-        reasons = [
-            f"zN={zN:.2f} (score {z_sc:.2f})",
-            f"dir_share={share:.2f} (score {share_sc:.2f})",
-            f"R/R={abs(tp1 - entry) / max(1e-9, abs(entry - stop)):.2f} (score {rr_sc:.2f})"
-        ]
-
-        print(f"🎯 [SQUEEZE] 신호: {side} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${tp1:.4f}, ${tp2:.4f} | 신뢰도={conf:.0%} | 점수={score:.2f}")
-
-        return {
-            "stage":"ENTRY","action":side,"entry":float(entry),"stop":float(stop),
-            "targets":[float(tp1), float(tp2)],
-            "context":{"mode":"LIQ_SQUEEZE_FAST_1M","minutes":N,"share":float(share),"zN":float(zN),
-                        "vwap":float(vwap),"vwap_std":float(vwap_std),"atr1m":float(atr1m)},
-            "score": float(score), "confidence": conf, "reasons": reasons
-        }
+        return {"stage":"ENTRY","action":side,"entry":float(entry),"stop":float(stop),
+                "targets":[float(tp1), float(tp2)],
+                "context":{"mode":"LIQ_SQUEEZE_FAST_1M","minutes":N,"share":float(share),"zN":float(zN),
+                            "vwap":float(vwap),"vwap_std":float(vwap_std),"atr1m":float(atr1m)}}
 
     # ---- 3) 3분봉 마감(보조) ----
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
@@ -422,11 +395,14 @@ class SqueezeMomentumStrategy:
         if df_3m is None or len(df_3m) < 2: return None
         now = self.time_manager.get_current_time()
         
+        # VWAP 및 VWAP 표준편차
         vwap, vwap_std = get_vwap()
         atr = get_atr()
         
+        # ATR
         age = self._recent_nonempty_bucket_age(now)
-        if age is None or age > self.cfg.recency_sec: 
+        if age > self.cfg.recency_sec: 
+            print(f"⚠️ [SQUEEZE] 3M 버킷 데이터 오래됨: age={age:.1f}s > {self.cfg.recency_sec}s")
             return None
 
         cut = now - timedelta(minutes=3)
@@ -464,24 +440,7 @@ class SqueezeMomentumStrategy:
             stop  = min(float(last['high']), float(prev['high'])) + self.cfg.tick
             R = stop - entry; tp1, tp2 = entry - self.cfg.tp_R1*R, entry - self.cfg.tp_R2*R
 
-        # --- scoring ---
-        rr_sc   = _lin(abs(tp1 - entry) / max(1e-9, abs(entry - stop)), 0.9, 2.0)
-        share_sc= _lin(share, self.cfg.cascade_dir_share, 0.95)
-        z3_sc   = _lin(z3, self.cfg.cascade_z3, self.cfg.cascade_z3*2.5)
-        score = max(0.0, min(1.0, 0.45*z3_sc + 0.30*share_sc + 0.25*rr_sc))
-        conf  = _conf(score)
-        reasons = [
-            f"z3={z3:.2f} (score {z3_sc:.2f})",
-            f"share={share:.2f} (score {share_sc:.2f})",
-            f"R/R={abs(tp1 - entry) / max(1e-9, abs(entry - stop)):.2f} (score {rr_sc:.2f})"
-        ]
-
-        print(f"🎯 [SQUEEZE] 신호: {side} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${tp1:.4f}, ${tp2:.4f} | 신뢰도={conf:.0%} | 점수={score:.2f}")
-
-        return {
-            "stage":"ENTRY","action":side,"entry":float(entry),"stop":float(stop),
-            "targets":[float(tp1), float(tp2)],
-            "context":{"mode":"LIQ_SQUEEZE_3M","share":float(share),"z3":float(z3),
-                        "vwap":float(vwap),"vwap_std":float(vwap_std),"atr":float(atr)},
-            "score": float(score), "confidence": conf, "reasons": reasons
-        }
+        return {"stage":"ENTRY","action":side,"entry":float(entry),"stop":float(stop),
+                "targets":[float(tp1), float(tp2)],
+                "context":{"mode":"LIQ_SQUEEZE_3M","share":float(share),"z3":float(z3),
+                            "vwap":float(vwap),"vwap_std":float(vwap_std),"atr":float(atr)}}

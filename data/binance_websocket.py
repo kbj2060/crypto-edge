@@ -48,6 +48,7 @@ class BinanceWebSocket:
         self.advanced_liquidation_strategy = None
         self.vpvr_golden_strategy = None
         self.bollinger_squeeze_strategy = None
+        self.vwap_pinball_strategy = None
         
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
@@ -74,11 +75,11 @@ class BinanceWebSocket:
     def set_strategies(
         self,
         session_strategy=None,
-        advanced_liquidation_strategy=None,
         squeeze_momentum_strategy=None,
         fade_reentry_strategy=None,
         bollinger_squeeze_strategy=None,
-        vpvr_golden_strategy=None
+        vpvr_golden_strategy=None,
+        vwap_pinball_strategy=None
     ):
         """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
         try:
@@ -102,6 +103,10 @@ class BinanceWebSocket:
             if vpvr_golden_strategy is not None:
                 self.vpvr_golden_strategy = vpvr_golden_strategy
                 print(f"✅ VPVR 골든 포켓 전략 설정 완료: {type(vpvr_golden_strategy).__name__}")
+                
+            if vwap_pinball_strategy is not None:
+                self.vwap_pinball_strategy = vwap_pinball_strategy
+                print(f"✅ VWAP 피니언 전략 설정 완료: {type(vwap_pinball_strategy).__name__}")
                 
         except Exception as e:
             print(f"❌ 전략 설정 오류: {e}")
@@ -211,8 +216,10 @@ class BinanceWebSocket:
 
             self._execute_session_strategy()
             self._execute_fade_reentry_3m_strategy()
+            self._execute_squeeze_momentum_3m_strategy()
             self._execute_vpvr_golden_strategy()
             self._execute_bollinger_squeeze_strategy()
+            self._execute_vwap_pinball_strategy()
 
         # SQUEEZE 모멘텀 전략 실행
         self._execute_fade_reentry_1m_strategy()
@@ -220,7 +227,7 @@ class BinanceWebSocket:
         
         # 1분봉 콜백 실행
         self._execute_kline_callbacks(price_data)
-        self.ask_ai_decision(price_data)
+        # self.ask_ai_decision(price_data)
     
     def ask_ai_decision(self, price_data: Dict):
         indicators = self.global_manager.get_all_indicators()
@@ -277,39 +284,85 @@ class BinanceWebSocket:
         
         self.fade_reentry_strategy.on_bucket_close(self.liquidation_bucket)
     
-    def _execute_fade_reentry_3m_strategy(self):
-        """빠른 패스 전략 실행"""
-        if not self.fade_reentry_strategy:
+    def _execute_vwap_pinball_strategy(self):
+        """VWAP 피니언 전략 실행"""
+        if not self.vwap_pinball_strategy:
             return
         
-        result = self.fade_reentry_strategy.on_kline_close_3m()
+        df_3m = self.data_manager.get_latest_data(count=4)
+        result = self.vwap_pinball_strategy.on_kline_close_3m(df_3m)
+        self._features.update({"vwap_pinball_strategy": result})
 
-        self._features.update({"fade_reentry_strategy": result})
-
-    def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
-        """SQUEEZE 모멘텀 전략 실행"""
-        if not self.squeeze_momentum_strategy:
-            return
-        
-        self.squeeze_momentum_strategy.on_bucket_close(self.liquidation_bucket)
-        
-        # 딕셔너리를 DataFrame으로 변환 (리스트로 감싸기)
-        df_1m = pd.DataFrame([price_data])
-        df_1m.set_index('timestamp', inplace=True)
-        
-        result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
-        self._features.update({"squeeze_momentum_strategy": result})
-
-        # 전략 분석 결과 출력
         if result:
             action = result.get('action', 'UNKNOWN')
             entry = result.get('entry', 0)
             stop = result.get('stop', 0)
             targets = result.get('targets', [0, 0])
             
-            print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            print(f"🎯 [VWAP PINBALL] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
         else:
-            print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
+            print(f"📊 [VWAP PINBALL] 전략 신호 없음")
+
+    def _execute_fade_reentry_3m_strategy(self):
+        """페이드 리입 전략 실행 (3분봉)"""
+        if not self.fade_reentry_strategy:
+            return
+        
+        try:
+            result = self.fade_reentry_strategy.on_kline_close_3m()
+            if result:
+                action = result.get('action', 'UNKNOWN')
+                entry = result.get('entry', 0)
+                stop = result.get('stop', 0)
+                targets = result.get('targets', [0, 0])
+                print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            self._features.update({"fade_reentry_3m": result})
+        except Exception as e:
+            print(f"❌ [FADE] 3M 전략 실행 오류: {e}")
+
+    def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
+        """SQUEEZE 모멘텀 전략 실행 (1분봉)"""
+        if not self.squeeze_momentum_strategy:
+            return
+        
+        try:
+            # 1분 버킷 처리
+            self.squeeze_momentum_strategy.on_bucket_close(self.liquidation_bucket)
+            
+            # 1분봉 Kline 처리
+            df_1m = pd.DataFrame([price_data])
+            df_1m.set_index('timestamp', inplace=True)
+            
+            result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
+            if result:
+                action = result.get('action', 'UNKNOWN')
+                entry = result.get('entry', 0)
+                stop = result.get('stop', 0)
+                targets = result.get('targets', [0, 0])
+                print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            else:
+                print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
+            self._features.update({"squeeze_momentum_1m": result})
+        except Exception as e:
+            print(f"❌ [SQUEEZE] 1M 전략 실행 오류: {e}")
+
+    def _execute_squeeze_momentum_3m_strategy(self):
+        """SQUEEZE 모멘텀 전략 실행 (3분봉)"""
+        if not self.squeeze_momentum_strategy:
+            return
+        
+        try:
+            result = self.squeeze_momentum_strategy.on_kline_close_3m()
+            if result:
+                action = result.get('action', 'UNKNOWN')
+                entry = result.get('entry', 0)
+                stop = result.get('stop', 0)
+                targets = result.get('targets', [0, 0])
+                print(f"🎯 [SQUEEZE] 3M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            
+            self._features.update({"squeeze_momentum_3m": result})
+        except Exception as e:
+            print(f"❌ [SQUEEZE] 3M 전략 실행 오류: {e}")
 
     def _execute_session_strategy(self):
         """세션 전략 실행"""
