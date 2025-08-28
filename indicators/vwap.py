@@ -98,7 +98,7 @@ class SessionVWAP:
             current_time_utc = self.time_manager.get_current_time()
             
             # 이전 세션 종료 시점 찾기 (TimeManager 사용)
-            previous_session_end = self.time_manager.get_previous_session_end_time(current_time_utc)
+            previous_session_end = self.time_manager.get_previous_session_close(current_time_utc)
             
             if previous_session_end:
                 print(f"📊 세션 외 시간: 이전 세션 종료 시점({self.time_manager.format_datetime(previous_session_end)})부터 현재({self.time_manager.format_datetime(current_time_utc)})까지 데이터 로딩")

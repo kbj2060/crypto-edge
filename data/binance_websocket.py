@@ -47,6 +47,7 @@ class BinanceWebSocket:
         self.session_strategy = None
         self.advanced_liquidation_strategy = None
         self.vpvr_golden_strategy = None
+        self.bollinger_squeeze_strategy = None
         
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
@@ -76,7 +77,7 @@ class BinanceWebSocket:
         advanced_liquidation_strategy=None,
         squeeze_momentum_strategy=None,
         fade_reentry_strategy=None,
-        liquidation_strategy=None,
+        bollinger_squeeze_strategy=None,
         vpvr_golden_strategy=None
     ):
         """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
@@ -86,9 +87,9 @@ class BinanceWebSocket:
                 self.session_strategy = session_strategy
                 print(f"✅ 세션 전략 설정 완료: {type(session_strategy).__name__}")
             
-            if advanced_liquidation_strategy is not None:
-                self.advanced_liquidation_strategy = advanced_liquidation_strategy
-                print(f"✅ 고급 청산 전략 설정 완료: {type(advanced_liquidation_strategy).__name__}")
+            if bollinger_squeeze_strategy is not None:
+                self.bollinger_squeeze_strategy = bollinger_squeeze_strategy
+                print(f"✅ 볼린저 스퀴즈 전략 설정 완료: {type(bollinger_squeeze_strategy).__name__}")
             
             if squeeze_momentum_strategy is not None:
                 self.squeeze_momentum_strategy = squeeze_momentum_strategy
@@ -211,6 +212,7 @@ class BinanceWebSocket:
             self._execute_session_strategy()
             self._execute_fade_reentry_3m_strategy()
             self._execute_vpvr_golden_strategy()
+            self._execute_bollinger_squeeze_strategy()
 
         # SQUEEZE 모멘텀 전략 실행
         self._execute_fade_reentry_1m_strategy()
@@ -333,6 +335,23 @@ class BinanceWebSocket:
         else:
             print(f"📊 [SESSION] 전략 신호 없음")
 
+    def _execute_bollinger_squeeze_strategy(self):
+
+        if not self.bollinger_squeeze_strategy:
+            return
+        
+        result = self.bollinger_squeeze_strategy.evaluate()
+        if result:
+            action = result.get('action', 'UNKNOWN')
+            entry = result.get('entry', 0)
+            stop = result.get('stop', 0)
+            targets = result.get('targets', [0, 0])
+            print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 신뢰도={confidence:.0%}")
+        else:
+            print(f"📊 [BB Squeeze] 전략 신호 없음")
+
+        self._features.update({"bollinger_squeeze_strategy": result})
+
     def _execute_vpvr_golden_strategy(self):
         """VPVR 골든 포켓 전략 실행"""
         if not self.vpvr_golden_strategy:
@@ -350,11 +369,10 @@ class BinanceWebSocket:
             entry = sig.get('entry', 0)
             stop = sig.get('stop', 0)
             targets = sig.get('targets', [0, 0])
+            score = sig.get('score', 0)
             confidence = sig.get('confidence', 0)
-            lvn_price = sig.get('lvn_price', 0)
-            golden_zone = sig.get('golden_zone', 'UNKNOWN')
-            
-            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | LVN=${lvn_price:.4f} | 구간={golden_zone} | 신뢰도={confidence:.0%}")
+
+            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 신뢰도={confidence:.0%} | 점수={score:.2f}")
         else:
             print(f"📊 [VPVR] 골든 포켓 전략 신호 없음")
 

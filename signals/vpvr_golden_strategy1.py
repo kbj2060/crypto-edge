@@ -1,4 +1,3 @@
-
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,15 +33,15 @@ class LVNGoldenPocket:
         swing_lookback: int = 180
         dryup_lookback: int = 20
         dryup_window: int = 5         # 4 -> 5
-        dryup_frac: float = 0.7       # 0.6 -> 0.7 (완화된 드라이업 임계)
+        dryup_frac: float = 0.7      # 0.6 -> 0.75 (완화)
         dryup_k: int = 3              # 최근 N봉 중 최소 k개 만족
-        tolerance_atr_mult: float = 0.6
-        confirm_body_ratio: float = 0.3
+        tolerance_atr_mult: float = 0.6  # 0.3 -> 0.5 (완화)
+        confirm_body_ratio: float = 0.3 # 0.3 -> 0.25 (조금 완화)
         atr_len: int = 14
         tick: float = 0.1
-        lvn_max_atr: float = 4.0
+        lvn_max_atr: float = 4.0      # LVN이 GP중앙에서 4×ATR 이내면 LVN 인정
         confirm_mode: str = "wick_or_break"  # 'wick' | 'break' | 'wick_or_break'
-        zone_widen_atr: float = 0.3
+        zone_widen_atr: float = 0.3   # GP 존을 ±(0.2×ATR) 만큼 넓혀 허용
 
     @dataclass
     class TargetsStopsCfg:
@@ -72,7 +71,7 @@ class LVNGoldenPocket:
 
     def _compute_vpvr(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Local VPVR calculation — used only if global VPVR is unavailable.
+        (기존 로컬 VPVR 계산) — 전역 VPVR이 없을 때만 폴백으로 사용됩니다.
         """
         cfg = self.vpvr
         df_ = df.tail(cfg.lookback_bars).copy()
@@ -183,8 +182,9 @@ class LVNGoldenPocket:
 
     def _volume_dryup(self, df: pd.DataFrame, sma_len: int, window: int, dry_frac: float, dry_k: int = 3) -> bool:
         """
-        Dry-up: among the last `window` bars, at least `dry_k` bars must have
-        volume <= dry_frac * SMA(volume, sma_len).
+        dry-up 판정: 최근 window봉 중에서 sma_len 으로 계산한 SMA 대비 dry_frac 이하인 봉이
+        최소 dry_k 개 이상이면 dry-up으로 간주.
+        (기존 '모두 True' 방식보다 관대함)
         """
         # choose correct volume series
         if 'quote_volume' in df.columns:
@@ -196,29 +196,9 @@ class LVNGoldenPocket:
         last_idx = df.tail(window).index
         conds = (v.loc[last_idx] <= dry_frac * sma.loc[last_idx]).to_list()
         sat = sum(1 for c in conds if bool(c))
+        # require at least dry_k successes
         return sat >= max(1, min(dry_k, window))
 
-    # ---------- scoring helpers ----------
-    def _confidence_bucket(self, v: float) -> str:
-        if v >= 0.75: return "HIGH"
-        if v >= 0.50: return "MEDIUM"
-        return "LOW"
-
-    def _score_ratio(self, x: float, lo: float, hi: float) -> float:
-        if hi == lo: return 0.0
-        return max(0.0, min(1.0, (x - lo) / (hi - lo)))
-
-    def _dryup_strength(self, df: pd.DataFrame, sma_len: int, window: int, dry_frac: float, dry_k: int) -> float:
-        """Return fraction (0..1) of bars in last `window` satisfying dry-up condition."""
-        if 'quote_volume' in df.columns:
-            v = df['quote_volume'].astype(float)
-        else:
-            v = (df['volume'] * df['close']).astype(float)
-        sma = v.rolling(sma_len, min_periods=1).mean()
-        last_idx = df.tail(window).index
-        conds = (v.loc[last_idx] <= dry_frac * sma.loc[last_idx]).to_list()
-        sat = sum(1 for c in conds if bool(c))
-        return float(sat) / float(max(1, window))
 
     def _rejection_confirm(self,
                        df: pd.DataFrame,
@@ -236,9 +216,10 @@ class LVNGoldenPocket:
                        allow_wick_only: bool = True
                        ) -> bool:
         """
-        Modified rejection confirmation (lookback=3, require_k=2).
-        - LONG: wick touches down into zone_high then closes back up (or equivalent).
-        - SHORT: inverse.
+        수정된 거부 확인 (lookback=3, require_k=2).
+        - LONG은 '윅이 zone 상단(zone_high)으로 들어갔는지'를 확인합니다.
+        - SHORT은 '윅이 zone 하단(zone_low)으로 들어갔는지'를 확인합니다.
+        - allow_wick_only=True 이면 wick/close 만으로도 통과 가능(조건부).
         """
         n = len(df)
         if n == 0:
@@ -261,10 +242,11 @@ class LVNGoldenPocket:
 
         seg = df.iloc[-lookback:]
         sat = 0
+        debug_rows = []
         zone_mid = 0.5 * (zone_low + zone_high)
         zone_width = max(1e-9, (zone_high - zone_low))
 
-        for _, row in seg.iterrows():
+        for idx, row in seg.iterrows():
             o = float(row.get('open', row.get('o', 0.0)))
             h = float(row.get('high', row.get('h', 0.0)))
             l = float(row.get('low', row.get('l', 0.0)))
@@ -272,47 +254,73 @@ class LVNGoldenPocket:
             rng = max(1e-9, h - l)
             body = abs(c - o) / rng if rng > 0 else 0.0
 
-            # overlap / proximity
+            # bar가 zone 범위와 겹치는지 (엄격)
             bar_overlaps = (h >= zone_low - tol) and (l <= zone_high + tol)
 
+            # proximity 허용: 바 중간이 zone 중심 근처에 있으면 허용
             mid = 0.5 * (h + l)
             prox_tol = max(tol * 1.5, zone_width * 0.5)
             near_zone_prox = abs(mid - zone_mid) <= prox_tol
 
             in_zone = bar_overlaps or (allow_proximity and near_zone_prox)
 
+            # LVN 근접성 검사
             near_lvn = True
             if lvn_price is not None:
                 mid_bar = (l + h) * 0.5
                 near_lvn = (abs(lvn_price - mid_bar) <= tol) or (l - tol <= lvn_price <= h + tol)
 
+            # body 기준 약간 완화
             body_ok = body >= max(0.10, body_ratio_min * 0.75)
 
+            # 방향별 핵심 판정 (수정된 비교 기준)
             if direction == 'long':
+                # LONG: price가 위에 있을 때, '윅이 아래로 내려가 zone 상단(zone_high)을 찍고' 다시 위로 복귀해야 함
                 wick_through = (l <= zone_high + tol) or (lvn_price is not None and l <= lvn_price + tol)
                 close_back = (c > o and c >= zone_high - tick) or (c >= zone_high - (0.5 * tick))
                 wick_or_close = (wick_through or close_back)
             else:
+                # SHORT: 반대 방향
                 wick_through = (h >= zone_low - tol) or (lvn_price is not None and h >= lvn_price - tol)
                 close_back = (c < o and c <= zone_low + tick) or (c <= zone_low + (0.5 * tick))
                 wick_or_close = (wick_through or close_back)
 
             ok = False
+
+            # 기본 승인: zone 겹침(or prox) + near_lvn + body_ok + wick_or_close
             if in_zone and near_lvn and body_ok and wick_or_close:
                 ok = True
             else:
+                # 보완 승인: wick/close가 있고 LVN 근접하면 허용 (단, body 완화 또는 volume 조건 필요)
                 if allow_wick_only and near_lvn and wick_or_close:
                     vol_ok = True
                     if vol_series is not None and vol_sma is not None and vol_multiplier is not None:
-                        sma_v = float(vol_sma.iloc[-1])
-                        vol_ok = (sma_v > 0) and (float(vol_series.iloc[-1]) >= vol_multiplier * sma_v)
+                        sma_v = float(vol_sma.loc[idx])
+                        vol_ok = (sma_v > 0) and (float(vol_series.loc[idx]) >= vol_multiplier * sma_v)
+                    # 느슨한 body 허용(더 낮게), 또는 volume이 충분하면 허용
                     if (body >= max(0.08, body_ratio_min * 0.6)) and vol_ok:
                         ok = True
+
+            debug_rows.append({
+                "idx": idx, "o": o, "h": h, "l": l, "c": c, "body": round(body, 3),
+                "zone_low": zone_low, "zone_high": zone_high, "tol": tol,
+                "bar_overlaps": bool(bar_overlaps),
+                "near_zone_prox": bool(near_zone_prox),
+                "in_zone": bool(in_zone),
+                "near_lvn": bool(near_lvn),
+                "wick_through": bool(wick_through),
+                "close_back": bool(close_back),
+                "body_ok": bool(body_ok),
+                "ok": bool(ok)
+            })
 
             if ok:
                 sat += 1
 
+
+
         return sat >= require_k
+
 
     # ===== Public API =====
 
@@ -322,7 +330,7 @@ class LVNGoldenPocket:
         """
         if df is None:
             return None
-
+            
         need = max(self.vpvr.lookback_bars, self.gp.swing_lookback) + 5
         if len(df) < need:
             return None
@@ -336,10 +344,10 @@ class LVNGoldenPocket:
             atr_last = float(self._atr(df, self.gp.atr_len).iloc[-1])
         tol = self.gp.tolerance_atr_mult * atr_last
 
-        # 2) VPVR (global preferred) & LVN
+        # 2) VPVR (전역 우선) & LVN
         try:
             poc_global, hvn_global, lvn_global = get_vpvr()
-        except Exception:
+        except Exception as e:
             poc_global, hvn_global, lvn_global = (None, None, None)
 
         vp = None
@@ -347,15 +355,19 @@ class LVNGoldenPocket:
         used_global = False
 
         if poc_global is not None:
+            # 전역 VPVR 사용
             used_global = True
             poc_price = float(poc_global)
             hvn_price = float(hvn_global) if hvn_global is not None else None
             lvn_price = float(lvn_global) if lvn_global is not None else None
+
+            # make a compatible lvns list (index, price, vol) so other functions can use it
             if lvn_price is not None:
                 lvns = [(0, lvn_price, 0.0)]
             else:
                 lvns = []
         else:
+            # fallback: 로컬 VPVR 계산
             vp = self._compute_vpvr(df)
             lvns = self._find_lvn_nodes(vp)
             poc_price = float(vp["poc_price"])
@@ -366,8 +378,9 @@ class LVNGoldenPocket:
         swing = self._detect_last_swing(df, self.gp.swing_lookback)
         if swing is None:
             return None
-
+            
         gp_low, gp_high, direction = self._golden_pocket_zone(df, swing)
+
         zone_mid = 0.5 * (gp_low + gp_high)
         nearest_lvn = self._nearest_lvn_to_price(lvns, zone_mid) if lvns else None
         lvn_price = nearest_lvn[1] if nearest_lvn else None
@@ -420,43 +433,13 @@ class LVNGoldenPocket:
             }
         }
 
-        # ---------- scoring ----------
-        # R/R vs tp1
-        Rabs = abs(entry - stop)
-        RR = abs(tp1 - entry) / max(1e-9, Rabs)
-        rr_score = self._score_ratio(RR, 0.8, 2.5)
-
-        lvn_score = 0.0
-        if lvn_price is not None:
-            zone_mid = 0.5 * (gp_low + gp_high)
-            d = abs(lvn_price - zone_mid)
-            lvn_score = 1.0 - self._score_ratio(d, 0.0, 2.0 * (self.gp.tolerance_atr_mult * atr_last))
-            lvn_score = max(0.0, lvn_score)
-
-        dry_score = self._dryup_strength(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k)
-        vpvr_bonus = 0.05 if ctx["vpvr"]["source"] == "global" else 0.0
-
-        score = max(0.0, min(1.0, 0.45*rr_score + 0.30*lvn_score + 0.20*dry_score + vpvr_bonus))
-        confidence = self._confidence_bucket(score)
-
-        reasons: List[str] = []
-        reasons.append(f"R/R={RR:.2f} (score {rr_score:.2f})")
-        if lvn_price is not None: reasons.append(f"LVN proximity (score {lvn_score:.2f})")
-        reasons.append(f"Dry-up strength={dry_score:.2f}")
-        if vpvr_bonus > 0: reasons.append("Global VPVR in use (+0.05)")
-
-        print(f"🎯 [VPVR] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${tp1:.4f}, ${tp2:.4f} | 신뢰도={confidence:.0%} | 점수={score:.2f}")
-        
         result = {
             "stage": "ENTRY",
             "action": action,
             "entry": float(entry),
             "stop": float(stop),
             "targets": [float(tp1), float(tp2), float(poc_price)],
-            "context": ctx,
-            "score": float(score),
-            "confidence": confidence,
-            "reasons": reasons
+            "context": ctx
         }
-
+        
         return result
