@@ -42,14 +42,15 @@ class SessionORLite:
             "vwap_long_block": 0, "vwap_short_block": 0,
             "low_conf_signals": 0
         }
-
+    
     def on_kline_close_3m(self, df3: pd.DataFrame, session_activated: bool, vwap_prev: Optional[float] = None) -> Optional[Dict[str, Any]]:
         now = self.time_manager.get_current_time()
+
         if session_activated:
-            self.session_open, _ = self.time_manager.get_session_open_time(now)
-        if not self.session_open:
-            return None
+            self.session_open = self.time_manager.get_current_session_info(now).open_time
+
         if df3 is None or len(df3) < 2:
+            print("df3 is None or len(df3) < 2")
             return None
 
         # opening range + indicators
@@ -62,10 +63,12 @@ class SessionORLite:
         ph = float(prev["high"]); pl = float(prev["low"])
 
         if self.or_high is None or self.or_low is None or self.or_high <= self.or_low:
+            print("self.or_high is None or self.or_low is None or self.or_high <= self.or_low")
             return None
 
         rng = h - l
-        if rng <= 0:
+        if rng < 0:
+            print("rng <= 0")
             return None
 
         body = abs(c - o)
@@ -154,13 +157,10 @@ class SessionORLite:
         # long low-conf detection
         if accept_long:
             if (not body_ok) or (not touched_long and wick_break_long):
-                # wick-only or small body or missing retest -> mark low_conf unless volume or vwap suggests otherwise
                 if not vol_ok:
                     low_conf_long = True
                 elif not touched_long:
-                    # if touched is missing but wick present, still allow but mark low_conf
                     low_conf_long = True
-            # else keep low_conf_long False
 
         # short low-conf detection
         if accept_short:
@@ -215,14 +215,13 @@ class SessionORLite:
                 "trade_size_scale": trade_scale
             })
 
-        # choose best (if both present, choose by larger body or higher confidence)
         if not sigs:
             if self.cfg.debug_print:
                 print("[SESSION_OR] no signals: break_long_ok=%s touched_long=%s wick_long=%s vwap_ok_long=%s | break_short_ok=%s touched_short=%s wick_short=%s vwap_ok_short=%s" %
                       (break_long_ok, touched_long, wick_break_long, vwap_ok_long, break_short_ok, touched_short, wick_break_short, vwap_ok_short))
+            print("no signals")
             return None
 
-        # prefer non-low-conf over low-conf; prefer BUY/SELL based on greater absolute body size
         sigs_sorted = sorted(sigs, key=lambda s: (0 if not s.get("low_confidence", False) else 1, -abs((s["entry"] - s["stop"])) ))
         chosen = sigs_sorted[0]
         if self.cfg.debug_print:

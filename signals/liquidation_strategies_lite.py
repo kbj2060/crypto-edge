@@ -25,18 +25,18 @@ def _usd_from_event(ev: Dict[str, Any]) -> Tuple[str, float]:
 @dataclass
 class BaseLiqConfig:
     lookback_buckets: int = 240
-    recency_sec: int = 120     # relaxed: allow slightly older buckets to count
-    tick: float = 0.02        # smaller tick for futures
+    recency_sec: int = 600     # 더 민감: 최근성 체크 강화
+    tick: float = 0.05        # 선물 시장에 맞춰 tick 작게
 
 @dataclass
 class FadeConfig(BaseLiqConfig):
     agg_window_sec: int = 60
-    min_bucket_notional_usd: float = 2000.0  # detect smaller liquidations (more permissive)
-    z_setup: float = 0.9                       # relaxed z threshold (more sensitive)
-    lpi_min: float = 0.02                      # lower LPI threshold
-    setup_ttl_min: int = 8                     # longer TTL to reduce missed entries
-    vwap_sigma_entry: float = 0.9              # looser sigma for re-entry detection
-    atr_stop_mult: float = 0.7                 # slightly larger stop multiplier (or keep tight based on risk)
+    min_bucket_notional_usd: float = 5000.0  # 더 작은 청산도 감지
+    z_setup: float = 1.0                        # z 기준 완화 (민감)
+    lpi_min: float = 0.03                       # LPI 문턱 낮춤
+    setup_ttl_min: int = 15                      # SETUP TTL 단축
+    vwap_sigma_entry: float = 1.5              # 엔트리 시그마 완화
+    atr_stop_mult: float = 0.5                  # 스탑 타이트닝
     tp_R1: float = 0.9
     tp_R2: float = 1.6
 
@@ -54,7 +54,7 @@ class FadeReentryStrategy:
     def _update_stats(self, long_usd: float, short_usd: float) -> None:
         self.long_hist.append(float(long_usd))
         self.short_hist.append(float(short_usd))
-        if len(self.long_hist) >= 20:  # keep relatively small window for quicker adaptation
+        if len(self.long_hist) >= 20:  # 더 빠르게 통계 반영
             self.mu_long = float(np.mean(self.long_hist))
             self.mu_short = float(np.mean(self.short_hist))
             self.sd_long = float(np.std(self.long_hist, ddof=1)) or 1.0
@@ -97,7 +97,6 @@ class FadeReentryStrategy:
         self._update_stats(long_usd, short_usd)
         self.bucket_log.append((now, long_usd, short_usd, total))
         max_z = max(zL, zS)
-        # relaxed criteria: smaller z and lpi still allowed
         if (max_z < self.cfg.z_setup) or (abs(lpi) < self.cfg.lpi_min):
             return None
         side = 'BUY' if zL > zS else 'SELL'
@@ -113,33 +112,36 @@ class FadeReentryStrategy:
         data_manager = get_data_manager()
         df_3m = data_manager.get_latest_data(count=2)
         if df_3m is None or len(df_3m) < 2:
+            print(f"🔍 [FADE] 데이터 부족: 필요한 데이터 길이={2}")
             return None
         now = self.time_manager.get_current_time()
         vwap, vwap_std = get_vwap()
         atr = get_atr()
         ps = self.pending_setup
         if not ps or now > ps['expires']:
+            print(f"{ps} expired")
             return None
         age = (now - self.bucket_log[-1][0]).total_seconds() if self.bucket_log else None
         if age is None or age > self.cfg.recency_sec:
+            print(f"{age} > {self.cfg.recency_sec}")
             return None
         prev_c = float(df_3m["close"].iloc[-2])
         last_h = float(df_3m["high"].iloc[-1])
         last_l = float(df_3m["low"].iloc[-1])
         last_c = float(df_3m["close"].iloc[-1])
         n = self.cfg.vwap_sigma_entry
-        # relaxed reentry: allow looser reentry patterns
         if ps['side'] == 'BUY':
-            # allow either tight reentry OR looser "close >= vwap - n*vwap_std - small_margin"
-            reentry = (prev_c <= vwap - n*vwap_std and last_c >= vwap - n*vwap_std) or (last_c >= vwap - (n+0.2)*vwap_std)
+            reentry = (prev_c <= vwap - n*vwap_std) and (last_c >= vwap - n*vwap_std)
             if not reentry:
+                print(f"{reentry} not reentry")
                 return None
             entry = last_h + self.cfg.tick
             stop  = min(last_l, last_c - self.cfg.atr_stop_mult * float(atr)) - self.cfg.tick
             R = entry - stop; tp1, tp2 = entry + self.cfg.tp_R1*R, entry + self.cfg.tp_R2*R
         else:
-            reentry = (prev_c > vwap + n*vwap_std and last_c < vwap + n*vwap_std) or (last_c <= vwap + (n+0.2)*vwap_std)
+            reentry = (prev_c > vwap + n*vwap_std) and (last_c < vwap + n*vwap_std)
             if not reentry:
+                print(f"{reentry} not reentry")
                 return None
             entry = last_l - self.cfg.tick
             stop  = max(last_h, last_c + self.cfg.atr_stop_mult * float(atr)) + self.cfg.tick
@@ -151,24 +153,22 @@ class FadeReentryStrategy:
                             "vwap":float(vwap),"vwap_std":float(vwap_std),"atr":float(atr),
                             "bucket_total_usd":ps.get("bucket_total_usd", None)}}
 
-# ----------------- Momentum / Squeeze Strategy -----------------
-
 @dataclass
 class MomentumConfig(BaseLiqConfig):
-    cascade_dir_share: float = 0.6
-    cascade_z3: float = 1.5
-    cont_sigma: float = 0.45
-    cont_range_atr: float = 0.45
+    cascade_dir_share: float = 0.7
+    cascade_z3: float = 2.0
+    cont_sigma: float = 0.6
+    cont_range_atr: float = 0.6
     vol_mult: Optional[float] = 1.0
     tp_R1: float = 0.9
-    tp_R2: float = 1.4
-    atr_stop_mult: float = 0.8
+    tp_R2: float = 1.6
+    atr_stop_mult: float = 0.9
     enable_fast_1m: bool = True
     fast_minutes: int = 2
-    fast_dir_share: float = 0.40
-    fast_zN: float = 1.2
-    fast_sigma: float = 0.4
-    fast_range_atr1m: float = 0.20
+    fast_dir_share: float = 0.45
+    fast_zN: float = 1.5
+    fast_sigma: float = 0.5
+    fast_range_atr1m: float = 0.25
 
 class SqueezeMomentumStrategy:
     def __init__(self, cfg: MomentumConfig):
@@ -192,6 +192,7 @@ class SqueezeMomentumStrategy:
 
     def _recent_nonempty_bucket_age(self, now_utc: datetime) -> Optional[float]:
         if not self.bucket_log:
+            print("no bucket log")
             return None
         return (now_utc - self.bucket_log[-1][0]).total_seconds()
 
@@ -237,29 +238,34 @@ class SqueezeMomentumStrategy:
 
     def on_kline_close_1m(self, df_1m: pd.DataFrame) -> Optional[Dict[str, Any]]:
         if not getattr(self.cfg, "enable_fast_1m", False):
+            print("not enable_fast_1m")
             return None
         now = self.time_manager.get_current_time()
         if df_1m is None:
+            print("df_1m is None")
             return None
         vwap, vwap_std = get_vwap()
         atr_3m = get_atr()
         atr1m = float(atr_3m) / sqrt(3.0) if atr_3m else 0.0
         age = self._recent_nonempty_bucket_age(now)
         if age is None or age > self.cfg.recency_sec:
+            print(f"{age} > {self.cfg.recency_sec}")
             return None
         N = int(self.cfg.fast_minutes)
         lastN = self._lastN(now, minutes=N)
         if len(lastN) == 0:
+            print("len(lastN) == 0")
             return None
         L = sum(b[1] for b in lastN); S = sum(b[2] for b in lastN); T = L + S
         if T <= 0:
+            print("T <= 0")
             return None
         share = max(L, S) / T
         zL, zS = self._zN(L, S, N)
         side = 'BUY' if S > L else 'SELL'
         zN = zS if side == 'BUY' else zL
-        # relaxed direction/share/z thresholds
         if (share < self.cfg.fast_dir_share) or (zN < self.cfg.fast_zN):
+            print("(share < self.cfg.fast_dir_share) or (zN < self.cfg.fast_zN)")
             return None
         if self.prev_1m is None:
             self.prev_1m = df_1m.iloc[-1]
@@ -270,10 +276,11 @@ class SqueezeMomentumStrategy:
         last_close = float(last['close']); last_high = float(last['high']); last_low = float(last['low'])
         prev_high = float(prev['high']);  prev_low  = float(prev['low'])
         sigma = float(self.cfg.fast_sigma)
-        rng_ok = (last_high - last_low) >= self.cfg.fast_range_atr1m * atr1m if atr1m and self.cfg.fast_range_atr1m>0 else True
+        rng_ok = (last_high - last_low) >= max(0.0, self.cfg.fast_range_atr1m * atr1m)
         if side == 'BUY':
             cont = (last_close > vwap + sigma * vwap_std) and (last_high > prev_high) and rng_ok
             if not cont:
+                print("not cont")
                 return None
             entry = last_high + self.cfg.tick
             stop  = max(last_low, prev_low) - self.cfg.tick
@@ -281,6 +288,7 @@ class SqueezeMomentumStrategy:
         else:
             cont = (last_close < vwap - sigma * vwap_std) and (last_low < prev_low) and rng_ok
             if not cont:
+                print("not cont")
                 return None
             entry = last_low - self.cfg.tick
             stop  = min(last_high, prev_high) + self.cfg.tick

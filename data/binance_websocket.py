@@ -12,7 +12,7 @@ import logging
 # Global Indicator Manager import
 from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
-from indicators.global_indicators import get_global_indicator_manager
+from indicators.global_indicators import get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
 # Time Manager import
 from signals import vpvr_golden_strategy
 from utils.time_manager import get_time_manager
@@ -54,7 +54,8 @@ class BinanceWebSocket:
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
         self._session_activated = self.time_manager.is_session_active()
-        self._features = {}
+        self._features = {"symbol": self.symbol, 'minutes': '3minutes'}
+
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
@@ -222,7 +223,7 @@ class BinanceWebSocket:
             self._execute_vwap_pinball_strategy()
 
         # SQUEEZE 모멘텀 전략 실행
-        self._execute_fade_reentry_1m_strategy()
+        # self._execute_fade_reentry_1m_strategy()
         self._execute_squeeze_momentum_1m_strategy(price_data)
         
         # 1분봉 콜백 실행
@@ -230,11 +231,34 @@ class BinanceWebSocket:
         # self.ask_ai_decision(price_data)
     
     def ask_ai_decision(self, price_data: Dict):
-        indicators = self.global_manager.get_all_indicators()
-
-        for indicator in indicators.keys():
-            self._features.update({indicator: indicators[indicator].get_status()})
+        atr = get_atr()
+        vwap, vwap_std = get_vwap()
+        prev_day_high, prev_day_low = get_daily_levels()
+        high, low = get_opening_range()
+        poc, hvn, lvn = get_vpvr()
+        tech = {
+            'atr': atr, 
+            'vwap': vwap, 
+            'vwap_std': vwap_std,
+            'prev_day_high': prev_day_high,
+            'prev_day_low': prev_day_low,
+            'session_high': high,
+            'session_low': low,
+            'poc': poc,
+            'hvn': hvn,
+            'lvn': lvn
+            }
+        session = self.time_manager.get_current_session_info()
+        session_info = {
+            'session': session,
+            'elapsed_minutes': session.elapsed_minutes,
+            'remaining_minutes': session.remaining_minutes,
+            'is_session_active': session.is_active
+            }
+        self._features.update({"session_info": session_info})
+        self._features.update({"technical_indicators": tech})
         self._features.update({"current_price": price_data})
+        self._features.update({"liquidation_bucket": self.liquidation_bucket})
         print(self._features)
         
     def _create_price_data(self, kline: Dict) -> Dict:
@@ -312,13 +336,13 @@ class BinanceWebSocket:
         
         try:
             result = self.fade_reentry_strategy.on_kline_close_3m()
+            self._features.update({"fade_reentry_3m": result})
             if result:
                 action = result.get('action', 'UNKNOWN')
                 entry = result.get('entry', 0)
                 stop = result.get('stop', 0)
                 targets = result.get('targets', [0, 0])
                 print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
-            self._features.update({"fade_reentry_3m": result})
         except Exception as e:
             print(f"❌ [FADE] 3M 전략 실행 오류: {e}")
 
@@ -336,6 +360,8 @@ class BinanceWebSocket:
             df_1m.set_index('timestamp', inplace=True)
             
             result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
+            self._features.update({"squeeze_momentum_1m": result})
+
             if result:
                 action = result.get('action', 'UNKNOWN')
                 entry = result.get('entry', 0)
@@ -344,7 +370,6 @@ class BinanceWebSocket:
                 print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
             else:
                 print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
-            self._features.update({"squeeze_momentum_1m": result})
         except Exception as e:
             print(f"❌ [SQUEEZE] 1M 전략 실행 오류: {e}")
 
@@ -373,7 +398,6 @@ class BinanceWebSocket:
         
         df_3m = self.data_manager.get_latest_data(count=2)
         result = self.session_strategy.on_kline_close_3m(df_3m, self._session_activated)
-
         self._features.update({"session_strategy": result})
         
         # 전략 분석 결과 출력
@@ -394,16 +418,17 @@ class BinanceWebSocket:
             return
         
         result = self.bollinger_squeeze_strategy.evaluate()
+        self._features.update({"bollinger_squeeze_strategy": result})
         if result:
             action = result.get('action', 'UNKNOWN')
             entry = result.get('entry', 0)
             stop = result.get('stop', 0)
             targets = result.get('targets', [0, 0])
-            print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 신뢰도={confidence:.0%}")
+            confidence = result.get('confidence', 'LOW')
+            print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 신뢰도={confidence}")
         else:
             print(f"📊 [BB Squeeze] 전략 신호 없음")
 
-        self._features.update({"bollinger_squeeze_strategy": result})
 
     def _execute_vpvr_golden_strategy(self):
         """VPVR 골든 포켓 전략 실행"""

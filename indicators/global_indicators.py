@@ -95,6 +95,7 @@ class GlobalIndicatorManager:
                 self._indicators[name] = indicator_class()
                 
         except Exception as e:
+            print(f"❌ {name} 지표 초기화 오류: {e}")
             self._indicators[name] = None
 
     def initialize_indicators(self):

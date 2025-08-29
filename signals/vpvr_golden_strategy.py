@@ -25,40 +25,29 @@ class LVNGoldenPocket:
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 80
-        dryup_lookback: int = 12
+        swing_lookback: int = 60       # 짧게
+        dryup_lookback: int = 8
         dryup_window: int = 3
-        dryup_frac: float = 0.7
-        dryup_k: int = 2
+        dryup_frac: float = 0.6      # dry-up 판단 완화 (낮출수록 더 쉽게 dryup)
+        dryup_k: int = 1
         tolerance_atr_mult: float = 0.6
-        confirm_body_ratio: float = 0.3
+        confirm_body_ratio: float = 0.06
         atr_len: int = 14
-        tick: float = 0.1
-        lvn_max_atr: float = 4.0
+        tick: float = 0.01
+        lvn_max_atr: float = 6.0
         confirm_mode: str = "wick_or_break"
-        zone_widen_atr: float = 0.3
+        zone_widen_atr: float = 0.6
 
         # ----- 새로 추가된 설정(민감도 조절용) -----
-        # proximity(근접) 관련
-        prox_tol_mult: float = 2.0         # tol 대비 proximity 허용 배수 (기본 2.0)
-        prox_zone_frac: float = 0.75       # zone_width 대비 proximity 비율
-
-        # LVN 근접성 완화
-        lvn_tol_mult: float = 1.5          # LVN 허용 배수
-
-        # body/volume 완화
-        min_body_allow: float = 0.04       # body 허용 최소값 (바디 비율)
-        vol_multiplier_relax: float = 0.6  # vol_multiplier 적용 시 완화 계수(0~1)
-        soft_accept_min_vol_ratio: float = 0.8   # soft-accept시 최근봉이 sma 대비 몇 %이상인지
-
-        # soft-accept 제어
+        prox_tol_mult: float = 2.0
+        prox_zone_frac: float = 0.75
+        lvn_tol_mult: float = 1.5
+        min_body_allow: float = 0.04
+        vol_multiplier_relax: float = 0.6
+        soft_accept_min_vol_ratio: float = 0.8
         enable_soft_accept: bool = True
-        soft_accept_zone_frac: float = 0.5  # soft-accept에서 zone 중심 근접 허용 비율
-
-        # require_k 최소값 강제화 (최소 1)
+        soft_accept_zone_frac: float = 0.5
         require_k_min: int = 1
-
-        # 전체 허용을 끄기/켜기
         allow_wick_only: bool = True
 
     @dataclass
@@ -222,10 +211,7 @@ class LVNGoldenPocket:
                        ) -> bool:
         """
         설정값 기반 완화된 rejection 확인.
-        - dataclass(GoldenPocketCfg)에 추가한 설정들을 우선 사용합니다.
-        - 기존 시그니처는 유지되어 외부 호출부와 호환됩니다.
         """
-        # 안전한 기본값 로드 (self.gp 가 없을 수 있으니 getattr 사용)
         gp = getattr(self, "gp", None)
         prox_tol_mult = getattr(gp, "prox_tol_mult", 2.0)
         prox_zone_frac = getattr(gp, "prox_zone_frac", 0.75)
@@ -245,7 +231,6 @@ class LVNGoldenPocket:
         lookback = min(max(1, int(lookback)), n)
         require_k = max(int(require_k), int(require_k_min_cfg), 1)
 
-        # optional volume series 준비
         if vol_multiplier is not None:
             if 'quote_volume' in df.columns:
                 vol_series = df['quote_volume'].astype(float)
@@ -262,7 +247,6 @@ class LVNGoldenPocket:
         zone_mid = 0.5 * (zone_low + zone_high)
         zone_width = max(1e-9, (zone_high - zone_low))
 
-        # use configured or calculated thresholds
         prox_tol = max(tol * float(prox_tol_mult), zone_width * float(prox_zone_frac))
         min_body_allow = float(min_body_allow_cfg) if min_body_allow_cfg is not None else max(0.04, body_ratio_min * 0.4)
 
@@ -276,22 +260,18 @@ class LVNGoldenPocket:
             rng = max(1e-9, h - l)
             body = abs(c - o) / rng if rng > 0 else 0.0
 
-            # bar overlaps or proximity
             bar_overlaps = (h >= zone_low - tol) and (l <= zone_high + tol)
             mid = 0.5 * (h + l)
             near_zone_prox = abs(mid - zone_mid) <= prox_tol
             in_zone = bar_overlaps or (allow_proximity and near_zone_prox)
 
-            # LVN proximity (relaxed)
             near_lvn = True
             if lvn_price is not None:
                 mid_bar = 0.5 * (l + h)
                 near_lvn = (abs(lvn_price - mid_bar) <= (tol * float(lvn_tol_mult))) or (l - tol*lvn_tol_mult <= lvn_price <= h + tol*lvn_tol_mult)
 
-            # body check (configurable)
             body_ok = body >= min_body_allow
 
-            # direction-specific checks
             if direction == 'long':
                 wick_through = (l <= zone_high + tol) or (lvn_price is not None and l <= lvn_price + tol*lvn_tol_mult)
                 close_back = (c > o and c >= zone_high - tick) or (c >= zone_high - (1.0 * tick))
@@ -303,25 +283,21 @@ class LVNGoldenPocket:
 
             ok = False
 
-            # 기본 승인
             if in_zone and near_lvn and body_ok and wick_or_close:
                 ok = True
             else:
-                # wick-only 보완 승인 (설정 기반)
                 if (allow_wick_only and allow_wick_only_cfg) and near_lvn and wick_or_close:
                     vol_ok = True
                     if vol_series is not None and vol_sma is not None and vol_multiplier is not None:
                         try:
                             sma_v = float(vol_sma.loc[idx])
                             if sma_v > 0:
-                                # relaxed multiplier
                                 vol_req = max(1.0, (vol_multiplier * float(vol_relax)) * sma_v)
                                 vol_ok = float(vol_series.loc[idx]) >= vol_req
                             else:
                                 vol_ok = True
                         except Exception:
                             vol_ok = True
-                    # 완화된 body 기준 허용
                     if (body >= max(0.03, body_ratio_min * 0.35)) and vol_ok:
                         ok = True
 
@@ -335,13 +311,10 @@ class LVNGoldenPocket:
             if ok:
                 sat += 1
 
-        # 판단: require_k 이상이면 OK
         if sat >= require_k:
             result = True
         elif sat >= 1 and enable_soft_accept:
-            # soft accept: 최근봉 볼륨 또는 zone 중심 근접성으로 허용
             soft_ok = False
-            # 1) recent volume check
             if vol_series is not None and vol_sma is not None:
                 last_idx = seg.index[-1]
                 try:
@@ -351,7 +324,6 @@ class LVNGoldenPocket:
                         soft_ok = True
                 except Exception:
                     soft_ok = True
-            # 2) zone-mid proximity check
             if not soft_ok:
                 last_mid = 0.5 * (seg.iloc[-1]['high'] + seg.iloc[-1]['low'])
                 if abs(last_mid - zone_mid) <= max(prox_tol, zone_width * float(soft_zone_frac)):
@@ -368,9 +340,6 @@ class LVNGoldenPocket:
         return bool(result)
 
     def evaluate(self, df: pd.DataFrame, now_utc: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
-        """Evaluate on the last bar of df. Returns signal dict or None.
-        df: OHLCV DataFrame (open, high, low, close, volume[, quote_volume]) in time order.
-        """
         if df is None:
             print('df 없음')
             return None
@@ -414,10 +383,12 @@ class LVNGoldenPocket:
         zone_mid = 0.5 * (gp_low + gp_high)
         nearest_lvn = self._nearest_lvn_to_price(lvns, zone_mid) if lvns else None
         lvn_price = nearest_lvn[1] if nearest_lvn else None
+        
         # volume dry-up (완화된 판정)
-        if not self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k):
-            print('volume dryup 없음')
-            return None
+        # if not self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k):
+        #     print('volume dryup 없음')
+        #     return None
+
         # rejection confirmation (완화된 조건)
         if not self._rejection_confirm(df, gp_low, gp_high, direction, lvn_price, tol,
                                         self.gp.confirm_body_ratio, self.gp.tick, lookback=3, require_k=1):

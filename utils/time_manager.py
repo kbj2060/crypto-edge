@@ -392,7 +392,7 @@ class TimeManager:
     # 호환성을 위한 별칭
     def get_session_open_time(self, current_time: Optional[datetime] = None) -> Tuple[datetime, str]:
         """get_previous_session_open의 별칭 (호환성)"""
-        return self.get_previous_session_open(current_time)
+        return self.get_previous_session_close(current_time)
     
     def get_next_session_start(self, current_time: Optional[datetime] = None) -> datetime:
         """다음 세션 시작 시간 반환 (캐시 사용)"""

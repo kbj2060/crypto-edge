@@ -1,3 +1,4 @@
+# vwap_pinball_strategy.py
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
 import pandas as pd
@@ -7,32 +8,30 @@ from utils.time_manager import get_time_manager
 
 @dataclass
 class VWAPPinballCfg:
-    entry_sigma_steps: Tuple[float, ...] = (0.15, 0.3, 0.6, 1.0)   # 기존보다 촘촘
+    entry_sigma_steps: Tuple[float, ...] = (0.08, 0.15, 0.3)   # 훨씬 촘촘하게
     max_entries: int = 3
     tick: float = 0.02
-    atr_stop_mult: float = 0.6
-    tp_vwap_bonus_sigma: float = 0.2
-    require_bounce_confirmation: bool = True
-    bounce_lookback_bars: int = 2
-    min_body_ratio: float = 0.14
-    w_distance: float = 0.40
+    atr_stop_mult: float = 0.5          # 스탑 더 타이트
+    tp_vwap_bonus_sigma: float = 0.15
+    require_bounce_confirmation: bool = False   # 일단 꺼서 윅-온리 걸러내지 않음
+    bounce_lookback_bars: int = 1
+    min_body_ratio: float = 0.08
+    w_distance: float = 0.45
     w_bounce: float = 0.35
-    w_volume: float = 0.15
-    min_vol_req: float = 0.03
-    min_bounce_score: float = 0.12
+    w_volume: float = 0.20
+    min_vol_req: float = 0.00
+    min_bounce_score: float = 0.00
     debug: bool = False
-
     # 추가된 파라미터
-    score_threshold: float = 0.40      # 이 값 미만이면 신호 무시 (기본 0.40)
+    score_threshold: float = 0.30      # 이 값 미만이면 신호 무시 (기본 0.60)
     momentum_weight: float = 0.20      # 모멘텀 가중치
     slope_weight: float = 0.20         # price-vs-vwap 가중치
-    # distance/bounce/volume 가중치의 합과 momentum+ slope 합이 1.0 이되도록 권장
-    # (기본 w_distance+w_bounce+w_volume = 0.90, momentum+slope=0.40 -> 총 1.3 이므로 내부에서 정규화 처리)
 
 class VWAPPinballStrategy:
     """
     VWAP Pinball with balanced scoring and low-score suppression.
     - Automatically skips wick-only triggers unless bounce/vol/close-reentry criteria pass.
+      (윅-온리 자동 스킵: 그러나 require_bounce_confirmation=False이면 더 관대)
     - Adds momentum & price-vs-vwap bias and a score threshold to avoid low-score outputs.
     """
     def __init__(self, cfg: VWAPPinballCfg = VWAPPinballCfg()):
@@ -93,13 +92,13 @@ class VWAPPinballStrategy:
         return float((ratio - 1.0) / 1.0)
 
     def _momentum_score(self, prev_c: float, last_c: float, vwap_std: float) -> float:
-        # normalize price change by vwap_std; map to (0,1) with tanh
         denom = max(1e-9, vwap_std)
         raw = (last_c - prev_c) / denom
         return float((np.tanh(raw) + 1.0) / 2.0)
 
     def on_kline_close_3m(self, df3: pd.DataFrame) -> Optional[Dict[str, Any]]:
         if df3 is None or len(df3) < 3:
+            print("df3 is None or len(df3) < 3")
             return None
 
         try:
@@ -110,6 +109,7 @@ class VWAPPinballStrategy:
             vwap_std = float(np.std(df3['close'].values)) * 0.02
 
         if vwap_val is None:
+            print("vwap_val is None")
             return None
         vwap_val = float(vwap_val)
         vwap_std = float(vwap_std) if vwap_std and vwap_std > 0 else max(0.01, float(np.std(df3['close'].values)) * 0.02)
@@ -129,7 +129,6 @@ class VWAPPinballStrategy:
         cand_signals = []
         reentry_margin = max(0.01, 0.10 * vwap_std)
 
-        # compute momentum once
         mom_score_global = self._momentum_score(prev_c, last_c, vwap_std)
 
         for idx, sigma in enumerate(self.cfg.entry_sigma_steps[:self.cfg.max_entries]):
@@ -140,7 +139,7 @@ class VWAPPinballStrategy:
             bounce_q_buy = self._bounce_quality(df3.iloc[-(self.cfg.bounce_lookback_bars+1):], "BUY") if self.cfg.require_bounce_confirmation else 0.5
             bounce_q_sell = self._bounce_quality(df3.iloc[-(self.cfg.bounce_lookback_bars+1):], "SELL") if self.cfg.require_bounce_confirmation else 0.5
 
-            # ---------- BUY detection ----------
+            # BUY
             buy_trigger = False; buy_reason = None
             if last_l <= threshold_buy:
                 buy_trigger = True; buy_reason = "low_touched"
@@ -156,7 +155,6 @@ class VWAPPinballStrategy:
                     if not allow_wick:
                         if self.cfg.debug:
                             print(f"[VWAP_PINBALL DEBUG] BUY skipped (wick-only): bounce_q={bounce_q_buy:.3f} vol_q={vol_q:.3f} last_c={last_c:.3f} th={threshold_buy:.3f}")
-                        # skip
                     else:
                         entry = last_h + self.cfg.tick
                         stop = last_l - self.cfg.atr_stop_mult * atr
@@ -170,7 +168,7 @@ class VWAPPinballStrategy:
                     tp2 = vwap_val + self.cfg.tp_vwap_bonus_sigma * vwap_std
                     cand_signals.append(("BUY", sigma, entry, stop, tp1, tp2, bounce_q_buy, vol_q, buy_reason))
 
-            # ---------- SELL detection ----------
+            # SELL
             sell_trigger = False; sell_reason = None
             if last_h >= threshold_sell:
                 sell_trigger = True; sell_reason = "high_touched"
@@ -186,7 +184,6 @@ class VWAPPinballStrategy:
                     if not allow_wick:
                         if self.cfg.debug:
                             print(f"[VWAP_PINBALL DEBUG] SELL skipped (wick-only): bounce_q={bounce_q_sell:.3f} vol_q={vol_q:.3f} last_c={last_c:.3f} th={threshold_sell:.3f}")
-                        # skip
                     else:
                         entry = last_l - self.cfg.tick
                         stop = last_h + self.cfg.atr_stop_mult * atr
@@ -201,16 +198,14 @@ class VWAPPinballStrategy:
                     cand_signals.append(("SELL", sigma, entry, stop, tp1, tp2, bounce_q_sell, vol_q, sell_reason))
 
         if not cand_signals:
+            print("not cand_signals")
             if self.cfg.debug:
                 print("[VWAP_PINBALL DEBUG] no candidates for any sigma steps")
             return None
 
-        # scoring & include momentum and price-vs-vwap bias
         scored = []
-        # normalize weights so total contribution = 1
         base_w_sum = (self.cfg.w_distance + self.cfg.w_bounce + self.cfg.w_volume)
         extra_w_sum = (self.cfg.momentum_weight + self.cfg.slope_weight)
-        # if overall >1, scale down proportionally
         scale = 1.0 / max(1.0, base_w_sum + extra_w_sum)
 
         for (direction, sigma, entry, stop, tp1, tp2, bounce_q, vol_q, reason) in cand_signals:
@@ -219,20 +214,16 @@ class VWAPPinballStrategy:
             vol_score = float(vol_q)
             base_score = (self.cfg.w_distance * dist_score + self.cfg.w_bounce * bounce_score + self.cfg.w_volume * vol_score)
 
-            # momentum: high positive favors BUY
             mom = mom_score_global
-            # price vs vwap bias (price_score in [0,1], >0.5 means price above vwap)
             price_vs_vwap_raw = (last_c - vwap_val) / max(1e-9, vwap_std)
             price_score = float((np.tanh(price_vs_vwap_raw) + 1.0) / 2.0)
 
-            # direction-specific combination
             if direction == "BUY":
                 dir_extra = self.cfg.momentum_weight * mom + self.cfg.slope_weight * (1.0 - price_score)
             else:
                 dir_extra = self.cfg.momentum_weight * (1.0 - mom) + self.cfg.slope_weight * price_score
 
             total_score = (base_score * (1.0 - extra_w_sum) + dir_extra) * scale
-            # clamp
             total_score = max(0.0, min(1.0, float(total_score)))
 
             scored.append({
@@ -250,11 +241,11 @@ class VWAPPinballStrategy:
                 "reason": reason
             })
 
-        # filter by threshold
+        # apply threshold (LOW confidence suppressed)
         scored_filtered = [s for s in scored if s["score"] >= float(self.cfg.score_threshold)]
         if not scored_filtered:
+            print("not scored_filtered")
             if self.cfg.debug:
-                # show best candidate even if below threshold for debugging
                 best_tmp = sorted(scored, key=lambda x: x["score"], reverse=True)[0]
                 print(f"[VWAP_PINBALL DEBUG] best below threshold score={best_tmp['score']:.3f} reason={best_tmp['reason']} "
                       f"mom={best_tmp['momentum']:.3f} price_score={best_tmp['price_score']:.3f}")

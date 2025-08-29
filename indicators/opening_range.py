@@ -36,42 +36,39 @@ class OpeningRange:
         self.symbol = symbol
         self.or_minutes = or_minutes
         self.time_manager = get_time_manager()
+        self.data_manager = get_data_manager()
         self._current_session_start = None
         self._or = {}
 
-        self._initialize_or()
+        self.is_initialized = self._initialize_or()
         
         print(f"🚀 OpeningRange 초기화 완료 (OR 분: {or_minutes}분)")
         
     def _initialize_or(self):
         """OR 계산"""
         current_session_start = self._get_or_time()
-        
-        self.calculate_opening_range(
-            current_session_start + timedelta(seconds=1), 
-            current_session_start + timedelta(minutes=self.or_minutes)
-            )
-        
+        if current_session_start <= self.time_manager.get_current_time() <= current_session_start + timedelta(minutes=self.or_minutes):
+            return False
+
+        if current_session_start :
+            self.calculate_opening_range(
+                current_session_start + timedelta(seconds=1), 
+                current_session_start + timedelta(minutes=self.or_minutes)
+                )
+        else:
+            prev_session_close = self.time_manager.get_previous_session_close(self.time_manager.get_current_time())
+            self.calculate_opening_range(
+                prev_session_close + timedelta(seconds=1), 
+                prev_session_close + timedelta(minutes=self.or_minutes)
+                )
+        return True
+
     def _get_or_time(self):
         """세션 상태 초기화"""
         try:
             current_time = self.time_manager.get_current_time()
-            session_open_time, session_name = self.time_manager.get_session_open_time(current_time)
-            
-            if session_open_time:
-                current_session_start = session_open_time
-                
-            else:
-                # 직전 세션 확인
-                prev_session = self.time_manager.get_previous_session_open(current_time)
-                if prev_session[0]:
-                    prev_start, prev_name = prev_session
-                    if self.is_or_completed(current_time, prev_start):
-                        current_session_start = prev_start
-                else:
-                    current_session_start = None
-
-            return current_session_start
+            session_open_time = self.time_manager.get_current_session_info().open_time
+            return session_open_time
         
         except Exception as e:
             print(f"❌ 세션 상태 초기화 오류: {e}")
@@ -93,13 +90,11 @@ class OpeningRange:
     
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 업데이트 (호환성용)"""
-        current_time = self.time_manager.get_current_time()
-        next_session_start = self.time_manager.get_next_session_start(current_time)
-        if current_time >= next_session_start:
-            self._initialize_or()
-        print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
-        
-
+        self.is_initialized = self._initialize_or()   
+        if self.is_initialized:
+            print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
+        else:
+            print(f"❌ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 현재 진행 중..")
     def get_data(self, start_time: datetime, end_time: datetime) ->  pd.DataFrame:
         """OR 시간 정보 반환"""
         data_manager = get_data_manager()
@@ -114,7 +109,7 @@ class OpeningRange:
         # DataManager에서 지정된 기간 데이터 가져오기
         or_data = data_manager.get_data_range(start_utc, end_utc)
         return or_data
-    
+
     def calculate_opening_range(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
         """
         지정된 시간 범위로 DataManager에서 데이터를 가져와서 OR 계산
@@ -128,7 +123,7 @@ class OpeningRange:
         """
         try:
             df = self.get_data(start_time, end_time)
-
+            print(start_time, end_time)
             if not df.empty:
                 start_utc = self.time_manager.ensure_utc(start_time)
                 end_utc = self.time_manager.ensure_utc(end_time)
@@ -150,7 +145,7 @@ class OpeningRange:
                 
                 return self._or
             else:
-                print(f"⚠️ 지정된 기간에 해당하는 데이터가 없습니다: {start_utc} ~ {end_utc}")
+                print(f"⚠️ 지정된 기간에 해당하는 데이터가 없습니다.")
                 return {}
             
         except Exception as e:
