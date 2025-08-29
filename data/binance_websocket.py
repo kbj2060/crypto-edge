@@ -223,7 +223,7 @@ class BinanceWebSocket:
             self._execute_vwap_pinball_strategy()
 
         # SQUEEZE 모멘텀 전략 실행
-        # self._execute_fade_reentry_1m_strategy()
+        self._execute_fade_reentry_1m_strategy()
         self._execute_squeeze_momentum_1m_strategy(price_data)
         
         # 1분봉 콜백 실행
@@ -334,17 +334,17 @@ class BinanceWebSocket:
         if not self.fade_reentry_strategy:
             return
         
-        try:
-            result = self.fade_reentry_strategy.on_kline_close_3m()
-            self._features.update({"fade_reentry_3m": result})
-            if result:
-                action = result.get('action', 'UNKNOWN')
-                entry = result.get('entry', 0)
-                stop = result.get('stop', 0)
-                targets = result.get('targets', [0, 0])
-                print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
-        except Exception as e:
-            print(f"❌ [FADE] 3M 전략 실행 오류: {e}")
+        result = self.fade_reentry_strategy.on_kline_close_3m()
+        self._features.update({"fade_reentry_3m": result})
+
+        if result:
+            action = result.get('action', 'UNKNOWN')
+            entry = result.get('entry', 0)
+            stop = result.get('stop', 0)
+            targets = result.get('targets', [0, 0])
+            print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+        else:
+            print(f"📊 [FADE] 3M ENTRY 전략 신호 없음")
 
     def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
         """SQUEEZE 모멘텀 전략 실행 (1분봉)"""

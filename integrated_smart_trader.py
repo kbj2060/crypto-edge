@@ -17,7 +17,7 @@ from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_global_indicator_manager
 from signals.bollinger_squeeze_strategy import BBSqueezeCfg, BollingerSqueezeStrategy
-from signals.liquidation_strategies_lite import SqueezeMomentumStrategy, MomentumConfig, FadeReentryStrategy, FadeConfig
+from signals.liquidation_strategies_lite import SqueezeMomentumStrategy, MomentumConfig, FadeReentryStrategy
 from signals.session_or_lite import SessionORLite, SessionORLiteCfg
 from signals.vpvr_golden_strategy import LVNGoldenPocket
 from signals.vwap_pinball_strategy import VWAPPinballStrategy, VWAPPinballCfg
@@ -155,8 +155,7 @@ class IntegratedSmartTrader:
     def _init_fade_reentry_strategy(self):
         """페이드 리입 전략 초기화"""
         try:
-            fade_config = FadeConfig()
-            self._fade_reentry_strategy = FadeReentryStrategy(fade_config)
+            self._fade_reentry_strategy = FadeReentryStrategy()
             self._fade_reentry_strategy.warmup(self.liquidation_bucket)
 
         except Exception as e:

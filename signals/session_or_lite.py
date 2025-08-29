@@ -13,20 +13,20 @@ from indicators.global_indicators import get_atr, get_opening_range, get_vwap
 class SessionORLiteCfg:
     or_minutes: int = 30
     body_ratio_min: float = 0.03    # more permissive: smaller body accepted
-    retest_atr: float = 0.45        # larger retest buffer (more permissive)
+    retest_atr: float = 0.25        # larger retest buffer (more permissive)
     retest_atr_mult_short: float = 1.2
     atr_stop_mult: float = 1.0
     tp_R1: float = 1.0
     tp_R2: float = 1.6
-    tick: float = 0.03
+    tick: float = 0.01
     vwap_filter_mode: str = "off"   # default off
     allow_wick_break: bool = True
     wick_needs_body_sign: bool = False
     # extra permissive flags
     allow_either_touched_or_wick: bool = True
-    low_conf_trade_scale: float = 0.35
+    low_conf_trade_scale: float = 0.3
     debug_print: bool = False
-
+    session_score_threshold: float = 0.50
 class SessionORLite:
     def __init__(self, cfg: SessionORLiteCfg = SessionORLiteCfg()):
         self.cfg = cfg
@@ -47,7 +47,7 @@ class SessionORLite:
         now = self.time_manager.get_current_time()
 
         if session_activated:
-            self.session_open = self.time_manager.get_current_session_info(now).open_time
+            self.session_open = self.time_manager.get_current_session_info().open_time
 
         if df3 is None or len(df3) < 2:
             print("df3 is None or len(df3) < 2")
@@ -56,8 +56,9 @@ class SessionORLite:
         # opening range + indicators
         self.or_high, self.or_low = get_opening_range()
         vwap, vwap_std = get_vwap()
-        atr = get_atr() or 0.0
+        atr = get_atr()
 
+        print(self.session_open, session_activated, self.or_high, self.or_low, vwap, vwap_std, atr)
         last = df3.iloc[-1]; prev = df3.iloc[-2]
         o = float(last["open"]); h = float(last["high"]); l = float(last["low"]); c = float(last["close"])
         ph = float(prev["high"]); pl = float(prev["low"])
@@ -130,16 +131,48 @@ class SessionORLite:
         sigs = []
         # permissive acceptance rule:
         # require break_ok AND (touched OR wick_break) AND vwap_ok
-        accept_long = break_long_ok and (touched_long or wick_break_long) and vwap_ok_long
-        accept_short = break_short_ok and (touched_short or wick_break_short) and vwap_ok_short
+        W = {"break": 0.30, "touched": 0.30, "wick": 0.20, "vwap": 0.10, "vol": 0.10}
+        SCORE_THRESHOLD = getattr(self.cfg, "session_score_threshold", 0.50)
+
+        vol_ok = True
+        vol_ratio = None
+        
+        # component booleans
+        comp_break_long = (body_ok and (c >= self.or_high + self.cfg.tick))
+        comp_break_short = (body_ok and (c <= self.or_low - self.cfg.tick))
+        comp_wick_long = wick_break_long and wick_body_ok_long
+        comp_wick_short = wick_break_short and wick_body_ok_short
+        comp_touched_long = touched_long
+        comp_touched_short = touched_short
+        comp_vwap_long = vwap_ok_long
+        comp_vwap_short = vwap_ok_short
+        comp_vol = vol_ok
+
+        # scores
+        score_long = (W['break']*float(comp_break_long)
+                    + W['touched']*float(comp_touched_long)
+                    + W['wick']*float(comp_wick_long)
+                    + W['vwap']*float(comp_vwap_long)
+                    + W['vol']*float(comp_vol))
+
+        score_short = (W['break']*float(comp_break_short)
+                    + W['touched']*float(comp_touched_short)
+                    + W['wick']*float(comp_wick_short)
+                    + W['vwap']*float(comp_vwap_short)
+                    + W['vol']*float(comp_vol))
+
+        # Final accept: score + at least one primary condition (avoid pure-volume triggers)
+        accept_long = (score_long >= SCORE_THRESHOLD) and (comp_break_long or comp_wick_long or comp_touched_long)
+        accept_short = (score_short >= SCORE_THRESHOLD) and (comp_break_short or comp_wick_short or comp_touched_short)
+
+        print(score_long, score_short, accept_long, accept_short)
 
         # detect low-confidence cases (wick-only with low body or missing retest)
         low_conf_long = False
         low_conf_short = False
 
         # volume-based softness: if volume column exists, allow tiny-volume-based downgrades
-        vol_ok = True
-        vol_ratio = None
+        
         if 'quote_volume' in last.index or 'volume' in last.index:
             try:
                 if 'quote_volume' in df3.columns:
