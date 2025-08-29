@@ -216,7 +216,7 @@ class BinanceWebSocket:
 
             self._execute_session_strategy()
             self._execute_fade_reentry_3m_strategy()
-            self._execute_squeeze_momentum_3m_strategy()
+            # self._execute_squeeze_momentum_3m_strategy()
             self._execute_vpvr_golden_strategy()
             self._execute_bollinger_squeeze_strategy()
             self._execute_vwap_pinball_strategy()
@@ -277,13 +277,6 @@ class BinanceWebSocket:
         except Exception as e:
             print(f"1분봉 데이터 임시 저장 오류: {e}")
     
-    def _execute_fade_reentry_1m_strategy(self):
-        """빠른 패스 전략 실행"""
-        if not self.fade_reentry_strategy:
-            return
-        
-        self.fade_reentry_strategy.on_bucket_close(self.liquidation_bucket)
-    
     def _execute_vwap_pinball_strategy(self):
         """VWAP 피니언 전략 실행"""
         if not self.vwap_pinball_strategy:
@@ -298,10 +291,19 @@ class BinanceWebSocket:
             entry = result.get('entry', 0)
             stop = result.get('stop', 0)
             targets = result.get('targets', [0, 0])
-            
-            print(f"🎯 [VWAP PINBALL] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            score = result.get('score', 0)
+            confidence = result.get('confidence', 'LOW')
+
+            print(f"🎯 [VWAP PINBALL] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [VWAP PINBALL] 전략 신호 없음")
+
+    def _execute_fade_reentry_1m_strategy(self):
+        """빠른 패스 전략 실행"""
+        if not self.fade_reentry_strategy:
+            return
+        
+        self.fade_reentry_strategy.on_bucket_close(self.liquidation_bucket)
 
     def _execute_fade_reentry_3m_strategy(self):
         """페이드 리입 전략 실행 (3분봉)"""
@@ -346,23 +348,23 @@ class BinanceWebSocket:
         except Exception as e:
             print(f"❌ [SQUEEZE] 1M 전략 실행 오류: {e}")
 
-    def _execute_squeeze_momentum_3m_strategy(self):
-        """SQUEEZE 모멘텀 전략 실행 (3분봉)"""
-        if not self.squeeze_momentum_strategy:
-            return
+    # def _execute_squeeze_momentum_3m_strategy(self):
+    #     """SQUEEZE 모멘텀 전략 실행 (3분봉)"""
+    #     if not self.squeeze_momentum_strategy:
+    #         return
         
-        try:
-            result = self.squeeze_momentum_strategy.on_kline_close_3m()
-            if result:
-                action = result.get('action', 'UNKNOWN')
-                entry = result.get('entry', 0)
-                stop = result.get('stop', 0)
-                targets = result.get('targets', [0, 0])
-                print(f"🎯 [SQUEEZE] 3M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+    #     try:
+    #         result = self.squeeze_momentum_strategy.on_kline_close_3m()
+    #         if result:
+    #             action = result.get('action', 'UNKNOWN')
+    #             entry = result.get('entry', 0)
+    #             stop = result.get('stop', 0)
+    #             targets = result.get('targets', [0, 0])
+    #             print(f"🎯 [SQUEEZE] 3M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
             
-            self._features.update({"squeeze_momentum_3m": result})
-        except Exception as e:
-            print(f"❌ [SQUEEZE] 3M 전략 실행 오류: {e}")
+    #         self._features.update({"squeeze_momentum_3m": result})
+    #     except Exception as e:
+    #         print(f"❌ [SQUEEZE] 3M 전략 실행 오류: {e}")
 
     def _execute_session_strategy(self):
         """세션 전략 실행"""
@@ -370,21 +372,19 @@ class BinanceWebSocket:
             return
         
         df_3m = self.data_manager.get_latest_data(count=2)
-        result = self.session_strategy.on_kline_close_3m(df_3m)
+        result = self.session_strategy.on_kline_close_3m(df_3m, self._session_activated)
 
         self._features.update({"session_strategy": result})
         
         # 전략 분석 결과 출력
         if result:
-            playbook = result.get('playbook', 'UNKNOWN')
-            side = result.get('side', 'UNKNOWN')
             stage = result.get('stage', 'UNKNOWN')
-            confidence = result.get('confidence', 0)
-            entry_price = result.get('entry_price', 0)
-            stop_loss = result.get('stop_loss', 0)
-            take_profit = result.get('take_profit1', 0)
+            action = result.get('action', 'UNKNOWN')
+            entry = result.get('entry', 0)
+            stop = result.get('stop', 0)
+            targets = result.get('targets', [0, 0])
             
-            print(f"🎯 [SESSION] {playbook} {side} | {stage} | 신뢰도={confidence:.0%} | 진입=${entry_price:.4f} | 손절=${stop_loss:.4f} | 목표=${take_profit:.4f}")
+            print(f"🎯 [SESSION] {stage} {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
         else:
             print(f"📊 [SESSION] 전략 신호 없음")
 
@@ -422,10 +422,8 @@ class BinanceWebSocket:
             entry = sig.get('entry', 0)
             stop = sig.get('stop', 0)
             targets = sig.get('targets', [0, 0])
-            score = sig.get('score', 0)
-            confidence = sig.get('confidence', 0)
 
-            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 신뢰도={confidence:.0%} | 점수={score:.2f}")
+            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
         else:
             print(f"📊 [VPVR] 골든 포켓 전략 신호 없음")
 
