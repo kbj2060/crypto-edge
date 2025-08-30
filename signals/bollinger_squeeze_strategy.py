@@ -1,4 +1,4 @@
-# bollinger_squeeze_strategy.py
+# bollinger_squeeze_strategy_relaxed.py
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import pandas as pd
@@ -7,16 +7,21 @@ from indicators.global_indicators import get_atr
 
 @dataclass
 class BBSqueezeCfg:
-    ma_period: int = 8                # shorter MA -> 더 빠르게 반응
-    std_period: int = 8               # shorter STD
-    std_dev: float = 1.6              # tighter bands (민감)
-    squeeze_lookback: int = 20        # lookback 축소 (더 자주 체크)
-    squeeze_threshold: float = 1.0   # threshold 늘려 더 자주 '스퀴즈'로 인식
-    breakout_lookback: int = 2        # 최근 2봉으로 강한 돌파 판단 (민감)
+    # 더 예민하게 반응하도록 기본값 완화
+    ma_period: int = 5                # shorter MA -> 더 빠르게 반응
+    std_period: int = 5               # shorter STD
+    std_dev: float = 1.4              # tighter bands (민감)
+    squeeze_lookback: int = 10        # lookback 축소 (더 자주 체크)
+    squeeze_threshold: float = 1.5    # threshold 증가 -> 더 자주 '스퀴즈' 인식
+    breakout_lookback: int = 1        # 최근 1봉으로 빠르게 돌파 판단 (민감)
     tp_R1: float = 0.8                # 목표를 조금 보수적으로(짧은 R)
     tp_R2: float = 1.6
     stop_atr_mult: float = 0.8        # 스탑을 더 타이트하게 (ATR 기반)
     tick: float = 0.01
+    # breakout 완화 파라미터
+    min_body_ratio: float = 0.15      # 바디비율 기준을 낮춤 -> 작은 몸통도 허용
+    allow_wick_break: bool = True     # 윅(꼬리) 중심 돌파 허용
+    debug: bool = False               # 디버그 출력 옵션
 
 class BollingerSqueezeStrategy:
 
@@ -27,43 +32,83 @@ class BollingerSqueezeStrategy:
 
     def evaluate(self) -> Optional[Dict[str, Any]]:
         data_manager = get_data_manager()
-        df = data_manager.get_latest_data(self.cfg.squeeze_lookback + max(self.cfg.ma_period, self.cfg.std_period) + 5)
+        req_len = self.cfg.squeeze_lookback + max(self.cfg.ma_period, self.cfg.std_period) + 5
+        df = data_manager.get_latest_data(req_len)
 
         if df is None or len(df) < max(self.cfg.ma_period, self.cfg.std_period, self.cfg.squeeze_lookback) + 2:
-            print(f"🔍 [BB Squeeze] 데이터 부족: 필요한 데이터 길이={max(self.cfg.ma_period, self.cfg.std_period, self.cfg.squeeze_lookback) + 2}")
+            if self.cfg.debug:
+                print(f"🔍 [BB Squeeze] 데이터 부족: 필요한 데이터 길이={req_len}, 실제={len(df) if df is not None else 'None'}")
             return None
 
         last = df.iloc[-1]
 
-        # Bollinger
+        # Bollinger bands
         ma = df['close'].rolling(self.cfg.ma_period).mean()
-        std = df['close'].rolling(self.cfg.std_period).std()
+        std = df['close'].rolling(self.cfg.std_period).std().fillna(0.0)
         upper_band = ma + (std * self.cfg.std_dev)
         lower_band = ma - (std * self.cfg.std_dev)
+        # relative width in percent
         bb_width = (upper_band - lower_band) / ma * 100
 
-        # squeeze detect (more sensitive)
+        # squeeze detection (더 관대하게)
         bb_width_ma = bb_width.rolling(self.cfg.squeeze_lookback).mean().ffill()
-        is_squeezed = bb_width.iloc[-1] < bb_width_ma.iloc[-1] * self.cfg.squeeze_threshold
+        # when squeeze_threshold > 1.0, 더 자주 스퀴즈로 판정됨
+        is_squeezed_now = bb_width.iloc[-1] < bb_width_ma.iloc[-1] * self.cfg.squeeze_threshold
 
-        if is_squeezed:
+        if is_squeezed_now:
+            # enter squeezed state
             self.is_squeezed = True
 
-        # when squeeze releases
-        if self.is_squeezed and not is_squeezed:
+        # when squeeze releases (width expands above threshold) -> check breakout
+        if self.is_squeezed and not is_squeezed_now:
             self.is_squeezed = False
 
-            long_breakout = last['close'] > upper_band.iloc[-1]
-            short_breakout = last['close'] < lower_band.iloc[-1]
+            long_breakout = last['close'] > upper_band.iloc[-1] or (self.cfg.allow_wick_break and last['high'] >= upper_band.iloc[-1])
+            short_breakout = last['close'] < lower_band.iloc[-1] or (self.cfg.allow_wick_break and last['low'] <= lower_band.iloc[-1])
 
-            # strong breakout: recent close is extreme relative to breakout_lookback
+            # more permissive breakout strength check:
+            #  - allow wick touches as valid breakout if allow_wick_break True
+            #  - or require a minimum body ratio (smaller than before)
             highs = df['high'].rolling(self.cfg.breakout_lookback).max()
-            lows  = df['low'].rolling(self.cfg.breakout_lookback).min()
-            is_strong_breakout = (last['close'] > last['open'] and last['close'] >= highs.iloc[-1]) or \
-                                 (last['close'] < last['open'] and last['close'] <= lows.iloc[-1])
+            lows = df['low'].rolling(self.cfg.breakout_lookback).min()
 
+            body = abs(last['close'] - last['open'])
+            rng = max(1e-9, float(last['high'] - last['low']))
+            body_ratio = (body / rng) if rng > 0 else 0.0
+
+            # permissive is_strong_breakout:
+            # - primary: close past band OR wick touches band
+            # - secondary: OR body_ratio >= min_body_ratio
+            bull_touch = (last['close'] > upper_band.iloc[-1]) or (last['high'] >= upper_band.iloc[-1])
+            bear_touch = (last['close'] < lower_band.iloc[-1]) or (last['low'] <= lower_band.iloc[-1])
+
+            is_strong_breakout = False
+            # bullish breakout conditions
+            if bull_touch:
+                # allow if wick break allowed OR body is decisive OR close above recent highs
+                if self.cfg.allow_wick_break:
+                    is_strong_breakout = True
+                elif body_ratio >= self.cfg.min_body_ratio:
+                    is_strong_breakout = True
+                elif last['close'] >= highs.iloc[-1]:
+                    is_strong_breakout = True
+            # bearish breakout conditions
+            if bear_touch and not is_strong_breakout:
+                if self.cfg.allow_wick_break:
+                    is_strong_breakout = True
+                elif body_ratio >= self.cfg.min_body_ratio:
+                    is_strong_breakout = True
+                elif last['close'] <= lows.iloc[-1]:
+                    is_strong_breakout = True
+
+            if self.cfg.debug:
+                print(f"[BB Squeeze DEBUG] bb_width={bb_width.iloc[-1]:.4f} bb_ma={bb_width_ma.iloc[-1]:.4f} "
+                      f"is_squeezed_now={is_squeezed_now} long_breakout={long_breakout} short_breakout={short_breakout} "
+                      f"body_ratio={body_ratio:.3f} is_strong_breakout={is_strong_breakout}")
+
+            # BUY signal
             if long_breakout and is_strong_breakout:
-                atr = get_atr(df)
+                atr = get_atr()
                 entry = last['close'] + self.cfg.tick
                 stop = last['close'] - float(atr) * self.cfg.stop_atr_mult
                 R = entry - stop
@@ -73,10 +118,12 @@ class BollingerSqueezeStrategy:
                     "targets": [float(tp1), float(tp2)],
                     "context": {
                         "mode": "BB_SQUEEZE", "bb_width": float(bb_width.iloc[-1]), "atr": float(atr),
-                        "upper_band": float(upper_band.iloc[-1]), "lower_band": float(lower_band.iloc[-1])
+                        "upper_band": float(upper_band.iloc[-1]), "lower_band": float(lower_band.iloc[-1]),
+                        "body_ratio": float(body_ratio), "allow_wick_break": bool(self.cfg.allow_wick_break)
                     }
                 }
 
+            # SELL signal
             if short_breakout and is_strong_breakout:
                 atr = get_atr(df)
                 entry = last['close'] - self.cfg.tick
@@ -88,7 +135,8 @@ class BollingerSqueezeStrategy:
                     "targets": [float(tp1), float(tp2)],
                     "context": {
                         "mode": "BB_SQUEEZE", "bb_width": float(bb_width.iloc[-1]), "atr": float(atr),
-                        "upper_band": float(upper_band.iloc[-1]), "lower_band": float(lower_band.iloc[-1])
+                        "upper_band": float(upper_band.iloc[-1]), "lower_band": float(lower_band.iloc[-1]),
+                        "body_ratio": float(body_ratio), "allow_wick_break": bool(self.cfg.allow_wick_break)
                     }
                 }
 

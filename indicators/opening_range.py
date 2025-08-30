@@ -90,25 +90,33 @@ class OpeningRange:
     
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 업데이트 (호환성용)"""
-        self.is_initialized = self._initialize_or()   
-        if self.is_initialized:
-            print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
-        else:
-            print(f"❌ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 현재 진행 중..")
+        try:
+            self.is_initialized = self._initialize_or()   
+            if self.is_initialized and self._or and 'high' in self._or and 'low' in self._or:
+                print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
+            else:
+                print(f"❌ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 현재 진행 중..")
+        except Exception as e:
+            print(f"❌ OR 업데이트 오류: {e}")
+            
     def get_data(self, start_time: datetime, end_time: datetime) ->  pd.DataFrame:
         """OR 시간 정보 반환"""
-        data_manager = get_data_manager()
-        if not data_manager.is_ready():
-            print("⚠️ DataManager가 준비되지 않았습니다")
-            return {}
-        
-        # UTC 시간으로 변환
-        start_utc = self.time_manager.ensure_utc(start_time)
-        end_utc = self.time_manager.ensure_utc(end_time)
-        
-        # DataManager에서 지정된 기간 데이터 가져오기
-        or_data = data_manager.get_data_range(start_utc, end_utc)
-        return or_data
+        try:
+            data_manager = get_data_manager()
+            if not data_manager.is_ready():
+                print("⚠️ DataManager가 준비되지 않았습니다")
+                return pd.DataFrame()  # 빈 DataFrame 반환
+            
+            # UTC 시간으로 변환
+            start_utc = self.time_manager.ensure_utc(start_time)
+            end_utc = self.time_manager.ensure_utc(end_time)
+            
+            # DataManager에서 지정된 기간 데이터 가져오기
+            or_data = data_manager.get_data_range(start_utc, end_utc)
+            return or_data if or_data is not None else pd.DataFrame()
+        except Exception as e:
+            print(f"❌ OR 데이터 가져오기 오류: {e}")
+            return pd.DataFrame()  # 빈 DataFrame 반환
 
     def calculate_opening_range(self, start_time: datetime, end_time: datetime) -> Dict[str, Any]:
         """
@@ -124,7 +132,7 @@ class OpeningRange:
         try:
             df = self.get_data(start_time, end_time)
             print(start_time, end_time)
-            if not df.empty:
+            if df is not None and not df.empty:
                 start_utc = self.time_manager.ensure_utc(start_time)
                 end_utc = self.time_manager.ensure_utc(end_time)
 

@@ -95,7 +95,9 @@ class GlobalIndicatorManager:
                 self._indicators[name] = indicator_class()
                 
         except Exception as e:
+            import traceback
             print(f"❌ {name} 지표 초기화 오류: {e}")
+            print(f"❌ 상세 오류: {traceback.format_exc()}")
             self._indicators[name] = None
 
     def initialize_indicators(self):
@@ -133,22 +135,22 @@ class GlobalIndicatorManager:
             return
 
         # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
-        if 'atr' in self._indicators:
+        if 'atr' in self._indicators and self._indicators['atr'] is not None:
             self._indicators['atr'].update_with_candle(candle_data)
         
         # 2. VPVR 업데이트
-        if 'vpvr' in self._indicators:
+        if 'vpvr' in self._indicators and self._indicators['vpvr'] is not None:
             self._indicators['vpvr'].update_with_candle(candle_data)
         
         # 3. VWAP 업데이트
-        if 'vwap' in self._indicators:
+        if 'vwap' in self._indicators and self._indicators['vwap'] is not None:
             self._indicators['vwap'].update_with_candle(candle_data)
         
         # 4. Daily Levels는 자동 업데이트 (어제 데이터이므로)
-        if 'daily_levels' in self._indicators:
+        if 'daily_levels' in self._indicators and self._indicators['daily_levels'] is not None:
             self._indicators['daily_levels'].update_with_candle(candle_data)
         
-        if 'opening_range' in self._indicators:
+        if 'opening_range' in self._indicators and self._indicators['opening_range'] is not None:
             self._indicators['opening_range'].update_with_candle(candle_data)
             
         print(f"✅ 전체 지표 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")

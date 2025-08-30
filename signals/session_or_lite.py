@@ -58,7 +58,6 @@ class SessionORLite:
         vwap, vwap_std = get_vwap()
         atr = get_atr()
 
-        print(self.session_open, session_activated, self.or_high, self.or_low, vwap, vwap_std, atr)
         last = df3.iloc[-1]; prev = df3.iloc[-2]
         o = float(last["open"]); h = float(last["high"]); l = float(last["low"]); c = float(last["close"])
         ph = float(prev["high"]); pl = float(prev["low"])
@@ -165,28 +164,36 @@ class SessionORLite:
         accept_long = (score_long >= SCORE_THRESHOLD) and (comp_break_long or comp_wick_long or comp_touched_long)
         accept_short = (score_short >= SCORE_THRESHOLD) and (comp_break_short or comp_wick_short or comp_touched_short)
 
-        print(score_long, score_short, accept_long, accept_short)
-
         # detect low-confidence cases (wick-only with low body or missing retest)
         low_conf_long = False
         low_conf_short = False
 
-        # volume-based softness: if volume column exists, allow tiny-volume-based downgrades
-        
-        if 'quote_volume' in last.index or 'volume' in last.index:
-            try:
-                if 'quote_volume' in df3.columns:
-                    v_series = df3['quote_volume'].astype(float)
-                else:
-                    v_series = (df3['volume'] * df3['close']).astype(float)
+        # ---------------- safe volume check ----------------
+        vol_ok = True
+        vol_ratio = None
+        try:
+            if 'quote_volume' in df3.columns:
+                v_series = df3['quote_volume'].astype(float)
+            elif 'volume' in df3.columns and 'close' in df3.columns:
+                v_series = (df3['volume'].astype(float) * df3['close'].astype(float))
+            else:
+                v_series = None
+
+            if v_series is not None:
                 ma = v_series.rolling(20, min_periods=1).mean().iloc[-1]
                 last_v = float(v_series.iloc[-1])
                 vol_ratio = last_v / (ma if ma>0 else 1.0)
-                vol_ok = vol_ratio >= 0.6  # slightly permissive: 60% of MA considered ok
-            except Exception:
+                vol_threshold = getattr(self.cfg, 'vol_ok_threshold', 0.5)
+                vol_ok = vol_ratio >= vol_threshold
+            else:
                 vol_ok = True
                 vol_ratio = None
-
+        except Exception as e:
+            vol_ok = True
+            vol_ratio = None
+            if getattr(self.cfg, 'debug_print', False):
+                print('[SESSION_OR] volume calc error:', repr(e))
+        # ---------------------------------------------------
         # long low-conf detection
         if accept_long:
             if (not body_ok) or (not touched_long and wick_break_long):
@@ -203,6 +210,9 @@ class SessionORLite:
                 elif not touched_short:
                     low_conf_short = True
 
+        def _conf_bucket(s):
+            return "HIGH" if s>=0.75 else ("MEDIUM" if s>=0.5 else "LOW")
+        
         # prepare signals (with low_confidence metadata)
         if accept_long:
             entry = h + self.cfg.tick
@@ -213,6 +223,13 @@ class SessionORLite:
             trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
             if low_conf:
                 self.debug["low_conf_signals"] += 1
+            reasons_long = []
+            if comp_break_long: reasons_long.append("break_body")
+            if comp_wick_long: reasons_long.append("wick_break")
+            if comp_touched_long: reasons_long.append("retest")
+            if comp_vwap_long: reasons_long.append("vwap_ok")
+            if vol_ratio is not None: reasons_long.append(f"vol_ratio={vol_ratio:.2f}")
+            
             sigs.append({
                 "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
                 "targets": [float(tp1), float(tp2)],
@@ -223,7 +240,10 @@ class SessionORLite:
                     "vol_ratio": float(vol_ratio) if vol_ratio is not None else None
                 },
                 "low_confidence": low_conf,
-                "trade_size_scale": trade_scale
+                "trade_size_scale": trade_scale,
+                "score": float(score_long),
+                "confidence": _conf_bucket(score_long),
+                "reasons": reasons_long
             })
 
         if accept_short:
@@ -235,6 +255,12 @@ class SessionORLite:
             trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
             if low_conf:
                 self.debug["low_conf_signals"] += 1
+                reasons_short = []
+            if comp_break_short: reasons_short.append("break_body")
+            if comp_wick_short: reasons_short.append("wick_break")
+            if comp_touched_short: reasons_short.append("retest")
+            if comp_vwap_short: reasons_short.append("vwap_ok")
+            if vol_ratio is not None: reasons_short.append(f"vol_ratio={vol_ratio:.2f}")
             sigs.append({
                 "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
                 "targets": [float(tp1), float(tp2)],
@@ -245,13 +271,16 @@ class SessionORLite:
                     "vol_ratio": float(vol_ratio) if vol_ratio is not None else None
                 },
                 "low_confidence": low_conf,
-                "trade_size_scale": trade_scale
+                "trade_size_scale": trade_scale,
+                "score": float(score_short),
+                "confidence": _conf_bucket(score_short),
+                "reasons": reasons_short
             })
 
         if not sigs:
             if self.cfg.debug_print:
                 print("[SESSION_OR] no signals: break_long_ok=%s touched_long=%s wick_long=%s vwap_ok_long=%s | break_short_ok=%s touched_short=%s wick_short=%s vwap_ok_short=%s" %
-                      (break_long_ok, touched_long, wick_break_long, vwap_ok_long, break_short_ok, touched_short, wick_break_short, vwap_ok_short))
+                        (break_long_ok, touched_long, wick_break_long, vwap_ok_long, break_short_ok, touched_short, wick_break_short, vwap_ok_short))
             print("no signals")
             return None
 

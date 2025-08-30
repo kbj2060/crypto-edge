@@ -1,4 +1,14 @@
 # vwap_pinball_strategy.py
+# 변경 요약:
+# - 기존 로직(트리거/entry/stop/targets)은 수정하지 않았습니다.
+# - 단 하나: scored 계산부(총점 산출)만 수정해서
+#   (1) 각 컴포넌트에 대해 가중합을 명확히 계산하고,
+#   (2) 가중치 합으로 정규화하여 score가 0..1 범위를 잘 쓰도록 함,
+#   (3) 보너스 조건(핀+vwap+볼륨 동시충족)을 소폭 부여,
+#   (4) 기존 cfg 파라미터 이름/값은 그대로 사용.
+#
+# 목적: 기존에 score가 0.4에서 멈추는 문제(가중치/정규화 불일치)를 해결.
+
 from dataclasses import dataclass
 from typing import Optional, Dict, Any, List, Tuple
 import pandas as pd
@@ -124,7 +134,7 @@ class VWAPPinballStrategy:
 
         if self.cfg.debug:
             print(f"[VWAP_PINBALL DEBUG] vwap={vwap_val:.3f} vwap_std={vwap_std:.3f} atr={atr:.3f} "
-                  f"last_h={last_h:.3f} last_l={last_l:.3f} last_c={last_c:.3f} prev_c={prev_c:.3f}")
+                    f"last_h={last_h:.3f} last_l={last_l:.3f} last_c={last_c:.3f} prev_c={prev_c:.3f}")
 
         cand_signals = []
         reentry_margin = max(0.01, 0.10 * vwap_std)
@@ -204,27 +214,51 @@ class VWAPPinballStrategy:
             return None
 
         scored = []
-        base_w_sum = (self.cfg.w_distance + self.cfg.w_bounce + self.cfg.w_volume)
-        extra_w_sum = (self.cfg.momentum_weight + self.cfg.slope_weight)
-        scale = 1.0 / max(1.0, base_w_sum + extra_w_sum)
 
+        # === SCORING (MODIFIED) ===
+        # 이전 방식은 base_score * (1.0 - extra_w_sum) + dir_extra로 처리했음 -> 정규화 문제로 score 상한이 낮게 나오는 경우 발생.
+        # 여기서는 각 컴포넌트(거리/바운스/볼륨/모멘텀/가격편향)를 명확히 가중합한 뒤 가중치 합으로 나누어 0..1로 정규화합니다.
         for (direction, sigma, entry, stop, tp1, tp2, bounce_q, vol_q, reason) in cand_signals:
-            dist_score = self._score_lin(max(0.0, (3.0 - sigma)), 0.0, 3.0)
+            # distance: 더 작은 sigma(=가까움)가 더 좋음 -> transform to score where sigma small => 높음
+            dist_score = self._score_lin(max(0.0, (3.0 - sigma)), 0.0, 3.0)  # 기존 유지
+
             bounce_score = float(bounce_q)
             vol_score = float(vol_q)
-            base_score = (self.cfg.w_distance * dist_score + self.cfg.w_bounce * bounce_score + self.cfg.w_volume * vol_score)
 
+            # momentum & price-vs-vwap components
             mom = mom_score_global
             price_vs_vwap_raw = (last_c - vwap_val) / max(1e-9, vwap_std)
             price_score = float((np.tanh(price_vs_vwap_raw) + 1.0) / 2.0)
 
-            if direction == "BUY":
-                dir_extra = self.cfg.momentum_weight * mom + self.cfg.slope_weight * (1.0 - price_score)
-            else:
-                dir_extra = self.cfg.momentum_weight * (1.0 - mom) + self.cfg.slope_weight * price_score
+            # direction-sensitive components:
+            # - for BUY we like positive momentum and price below vwap (so use 1-price_score)
+            # - for SELL we like negative momentum (1-mom) and price above vwap (price_score)
+            mom_comp = mom if direction == "BUY" else (1.0 - mom)
+            slope_comp = (1.0 - price_score) if direction == "BUY" else price_score
 
-            total_score = (base_score * (1.0 - extra_w_sum) + dir_extra) * scale
-            total_score = max(0.0, min(1.0, float(total_score)))
+            # weights from cfg
+            w_dist = float(self.cfg.w_distance)
+            w_bounce = float(self.cfg.w_bounce)
+            w_vol = float(self.cfg.w_volume)
+            w_mom = float(self.cfg.momentum_weight)
+            w_slope = float(self.cfg.slope_weight)
+
+            # compute raw weighted sum
+            raw = (w_dist * dist_score +
+                   w_bounce * bounce_score +
+                   w_vol * vol_score +
+                   w_mom * mom_comp +
+                   w_slope * slope_comp)
+
+            total_w = (w_dist + w_bounce + w_vol + w_mom + w_slope) or 1.0
+
+            total_score = float(raw) / float(total_w)
+
+            # small conditional bonus if multiple strong components align
+            bonus = 0.0
+            if (bounce_score >= 0.6 and vol_score >= 0.6 and dist_score >= 0.5):
+                bonus = 0.06
+            total_score = max(0.0, min(1.0, total_score + bonus))
 
             scored.append({
                 "direction": direction,
@@ -240,6 +274,7 @@ class VWAPPinballStrategy:
                 "score": total_score,
                 "reason": reason
             })
+        # === END SCORING (MODIFIED) ===
 
         # apply threshold (LOW confidence suppressed)
         scored_filtered = [s for s in scored if s["score"] >= float(self.cfg.score_threshold)]

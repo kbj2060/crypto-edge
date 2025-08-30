@@ -199,13 +199,13 @@ class IntegratedSmartTrader:
                 print(f"🎯 웹소켓에 {len(active_strategies)}개 전략 설정 완료: {list(active_strategies.keys())}")
             else:
                 print("⚠️ 활성화된 전략이 없습니다")
-                
+            
         except Exception as e:
             print(f"❌ 웹소켓 전략 설정 오류: {e}")
             import traceback
             traceback.print_exc()
         
-    
+
     def start(self):
         """트레이더 시작"""
         # 웹소켓 전략 설정 (전략 초기화 완료 후)

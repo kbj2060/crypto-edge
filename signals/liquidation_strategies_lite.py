@@ -32,7 +32,7 @@ class BaseLiqConfig:
 @dataclass
 class FadeConfig(BaseLiqConfig):
     agg_window_sec: int = 60
-    min_bucket_notional_usd: float = 4000.0  # 더 작은 청산도 감지
+    min_bucket_notional_usd: float = 3000.0  # 더 작은 청산도 감지
     z_setup: float = 1.0                        # z 기준 완화 (민감)
     lpi_min: float = 0.03                       # LPI 문턱 낮춤
     setup_ttl_min: int = 15                      # SETUP TTL 단축
@@ -119,9 +119,9 @@ class FadeReentryStrategy:
         now = self.time_manager.get_current_time()
         vwap, vwap_std = get_vwap()
         atr = get_atr()
+
         ps = self.pending_setup
-        if not ps or now > ps['expires']:
-            print(f"{ps} expired")
+        if not ps:
             return None
 
         age = (now - self.bucket_log[-1][0]).total_seconds() if self.bucket_log else None
@@ -171,7 +171,7 @@ class FadeReentryStrategy:
         # Decide reentry robustly
         reentry = False
         if ps['side'] == 'BUY':
-            print(f"prev_c={prev_c}, vwap={vwap_val}, vwap_std={vwap_std_val}, n={n}, last_c={last_c}")
+            # print(f"prev_c={prev_c}, vwap={vwap_val}, vwap_std={vwap_std_val}, n={n}, last_c={last_c}")
             if threshold_buy is None:
                 # fallback: rely on percent move or wick behavior
                 reentry = pct_ok or (last_l <= prev_l if (prev_l := prev_low) is not None else False)
@@ -182,7 +182,6 @@ class FadeReentryStrategy:
                 wick_cross = (prev_low <= (threshold_buy + tol)) or (last_l <= (threshold_buy + tol))
                 # allow reentry if close_cross or wick_cross or enough pct move (or volume support)
                 reentry = (close_cross or wick_cross or pct_ok or vol_ok)
-                # For stricter policy you can require (close_cross or (wick_cross and pct_ok))
             if not reentry:
                 print(f"{reentry} not reentry (close_cross={locals().get('close_cross', None)}, wick_cross={locals().get('wick_cross', None)}, pct_ok={pct_ok}, tol={tol})")
                 return None
@@ -193,7 +192,7 @@ class FadeReentryStrategy:
             tp1, tp2 = entry + self.cfg.tp_R1 * R, entry + self.cfg.tp_R2 * R
 
         else:
-            print(f"prev_c={prev_c}, vwap={vwap_val}, vwap_std={vwap_std_val}, n={n}, last_c={last_c}")
+            # print(f"prev_c={prev_c}, vwap={vwap_val}, vwap_std={vwap_std_val}, n={n}, last_c={last_c}")
             if threshold_sell is None:
                 reentry = (pct_move <= -0.002) or (last_h >= prev_high)
             else:
@@ -209,7 +208,80 @@ class FadeReentryStrategy:
             R = stop - entry
             tp1, tp2 = entry - self.cfg.tp_R1 * R, entry - self.cfg.tp_R2 * R
 
-        # clear pending setup and return structured signal
+        # --------------------- scoring 추가 ---------------------
+        # components: z, vwap proximity, pct move, recency(age), lpi
+        try:
+            z_val = float(ps.get('z', 0.0))
+        except Exception:
+            z_val = 0.0
+        try:
+            lpi_val = float(ps.get('lpi', 0.0))
+        except Exception:
+            lpi_val = 0.0
+        age_sec = (now - self.bucket_log[-1][0]).total_seconds() if self.bucket_log else float('inf')
+
+        # defensive ATR
+        try:
+            atr_safe = float(atr) if atr is not None else 1.0
+        except Exception:
+            atr_safe = 1.0
+
+        # z component (normalized by cfg z_setup)
+        z_comp = 0.0
+        try:
+            z_comp = min(1.0, z_val / max(1e-9, float(getattr(self.cfg, "z_setup", 1.0))))
+            z_comp = max(0.0, z_comp)
+        except Exception:
+            z_comp = 0.0
+
+        # vwap proximity component (forgiving denominator 4*ATR)
+        if vwap_val is not None:
+            vwap_comp = 1.0 - (abs(last_c - float(vwap_val)) / (4.0 * max(1e-6, atr_safe)))
+            vwap_comp = max(0.0, min(1.0, vwap_comp))
+        else:
+            vwap_comp = 0.5
+
+        # pct component (1% move maps to 1.0 -> use 0.2%~0.5% sensitivity)
+        pct_comp = min(1.0, abs(pct_move) / 0.002)  # 0.2% -> 1.0 when 0.2% (adjust if needed)
+
+        # age component: more recent -> higher
+        age_comp = max(0.0, 1.0 - (age_sec / max(1.0, float(getattr(self.cfg, "recency_sec", 600)))))
+
+        # lpi component
+        lpi_comp = 0.0
+        try:
+            lpi_comp = max(0.0, min(1.0, abs(lpi_val) / max(1e-9, float(getattr(self.cfg, "lpi_min", 0.03)))))
+        except Exception:
+            lpi_comp = 0.0
+
+        # weights (sum to 1)
+        W_z, W_vwap, W_pct, W_age, W_lpi = 0.30, 0.25, 0.20, 0.15, 0.10
+        score = (W_z * z_comp + W_vwap * vwap_comp + W_pct * pct_comp + W_age * age_comp + W_lpi * lpi_comp)
+
+        # 간단한 플로어: 완화(fallback) 없이도 0이 나오지 않도록(테스트용). 필요시 올리세요.
+        if score <= 0.0:
+            score = 0.03
+
+        # confidence bucket
+        if score >= 0.75:
+            confidence = "HIGH"
+        elif score >= 0.50:
+            confidence = "MEDIUM"
+        else:
+            confidence = "LOW"
+
+        components = {
+            "z": round(z_comp, 3),
+            "vwap": round(vwap_comp, 3),
+            "pct": round(pct_comp, 3),
+            "age": round(age_comp, 3),
+            "lpi": round(lpi_comp, 3)
+        }
+
+        # print(f"[FADE_SCORE] score={score:.3f} conf={confidence} comps={components} pct_move={pct_move:.4f} age_s={int(age_sec)}")
+        # ---------------------------------------------------------
+
+        # clear pending setup and return structured signal (score 포함)
         return {
             "action": ps['side'],
             "entry": float(entry),
@@ -223,7 +295,10 @@ class FadeReentryStrategy:
                 "vwap_std": float(vwap_std_val) if vwap_std_val is not None else None,
                 "atr": float(atr) if atr is not None else None,
                 "bucket_total_usd": ps.get("bucket_total_usd", None)
-            }
+            },
+            "score": round(float(score), 3),
+            "confidence": confidence,
+            "components": components
         }
 
 @dataclass
@@ -244,7 +319,7 @@ class MomentumConfig(BaseLiqConfig):
     fast_range_atr1m: float = 0.25
 
 class SqueezeMomentumStrategy:
-    def __init__(self, cfg: MomentumConfig):
+    def __init__(self, cfg: MomentumConfig = MomentumConfig()):
         self.cfg = cfg
         self.time_manager = get_time_manager()
         self.long_hist = deque(maxlen=cfg.lookback_buckets)
@@ -440,5 +515,76 @@ class SqueezeMomentumStrategy:
             }
         }
 
+        default_W = {
+            "vwap": 0.25,
+            "hh":   0.15,
+            "rng":  0.15,
+            "mom":  0.20,
+            "pct":  0.05,
+            "share_z": 0.20
+        }
+        W = getattr(self.cfg, "squeeze_score_weights", default_W)
+        # 보정: 가중치 합이 0이면 안전장치
+        total_w = sum(W.values()) if isinstance(W, dict) and sum(W.values())>0 else sum(default_W.values())
+
+        # 컴포넌트 값 (0 or 1 또는 0..1)
+        comp_vwap = 1.0 if vwap_cond else 0.0
+        comp_hh = 1.0 if hh_cond else 0.0
+        comp_rng = 1.0 if rng_ok else 0.0
+        comp_mom = 1.0 if mom_cond else 0.0
+        comp_pct = 1.0 if pct_cond else 0.0
+        comp_share_z = 1.0 if (share >= getattr(self.cfg, "fast_dir_share", 0.45) and zN >= getattr(self.cfg, "fast_zN", 1.5)) else 0.0
+
+        # raw weighted sum (정규화)
+        raw = (W.get("vwap",0.0)*comp_vwap +
+               W.get("hh",0.0)*comp_hh +
+               W.get("rng",0.0)*comp_rng +
+               W.get("mom",0.0)*comp_mom +
+               W.get("pct",0.0)*comp_pct +
+               W.get("share_z",0.0)*comp_share_z)
+
+        score = float(raw) / float(total_w) if total_w else float(raw)
+        # small bonus: 여러 핵심 조건이 동시에 충족되면 소폭 증가
+        if (comp_vwap + comp_mom + comp_share_z) >= 2.0:
+            score = min(1.0, score + 0.06)
+
+        # confidence buckets
+        if score >= 0.75:
+            confidence = "HIGH"
+        elif score >= 0.5:
+            confidence = "MEDIUM"
+        else:
+            confidence = "LOW"
+
+        # human-readable reasons
+        reasons = []
+        if comp_vwap: reasons.append("vwap_cond")
+        if comp_hh: reasons.append("hh_cond")
+        if comp_rng: reasons.append("rng_ok")
+        if comp_mom: reasons.append("mom_cond")
+        if comp_pct: reasons.append(f"pct={pct_move:.4f}")
+        if comp_share_z: reasons.append("share_z_ok")
+
+        # component breakdown (for debugging/analytics)
+        components = {
+            "vwap": comp_vwap,
+            "hh": comp_hh,
+            "rng": comp_rng,
+            "mom": comp_mom,
+            "pct": comp_pct,
+            "share_z": comp_share_z
+        }
+
+        # attach to result (원본 구조 보존)
+        result.update({
+            "score": float(score),
+            "confidence": confidence,
+            "reasons": reasons,
+            "components": components
+        })
+
+        if getattr(self.cfg, "debug_print", False) or getattr(self.cfg, "debug", False):
+            print(f"[SQUEEZE_SCORE] score={score:.3f} conf={confidence} comps={components} pct_move={pct_move:.4f} share={share:.3f} zN={zN:.3f}")
+            
         return result
     

@@ -4,7 +4,7 @@ import websockets
 import threading
 import time
 import requests  # pip install requests 필요
-from typing import Dict, List, Callable, Optional
+from typing import Any, Dict, List, Callable, Optional
 from datetime import datetime, timedelta, timezone
 import pandas as pd
 import logging
@@ -54,7 +54,7 @@ class BinanceWebSocket:
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
         self._session_activated = self.time_manager.is_session_active()
-        self._features = {"symbol": self.symbol, 'minutes': '3minutes'}
+        self.signals = []
 
 
     def update_session_status(self, price_data: Dict):
@@ -221,6 +221,9 @@ class BinanceWebSocket:
             self._execute_vpvr_golden_strategy()
             self._execute_bollinger_squeeze_strategy()
             self._execute_vwap_pinball_strategy()
+            decision = self.decide_trade_realtime(self.signals, leverage=20)
+            self.print_decision_interpretation(decision)
+            self.signals = []
 
         # SQUEEZE 모멘텀 전략 실행
         self._execute_fade_reentry_1m_strategy()
@@ -308,7 +311,6 @@ class BinanceWebSocket:
         
         df_3m = self.data_manager.get_latest_data(count=4)
         result = self.vwap_pinball_strategy.on_kline_close_3m(df_3m)
-        self._features.update({"vwap_pinball_strategy": result})
 
         if result:
             action = result.get('action', 'UNKNOWN')
@@ -318,6 +320,7 @@ class BinanceWebSocket:
             score = result.get('score', 0)
             confidence = result.get('confidence', 'LOW')
 
+            self.signals.append({'name': 'VWAP', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
             print(f"🎯 [VWAP PINBALL] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [VWAP PINBALL] 전략 신호 없음")
@@ -335,14 +338,16 @@ class BinanceWebSocket:
             return
         
         result = self.fade_reentry_strategy.on_kline_close_3m()
-        self._features.update({"fade_reentry_3m": result})
 
         if result:
             action = result.get('action', 'UNKNOWN')
             entry = result.get('entry', 0)
             stop = result.get('stop', 0)
             targets = result.get('targets', [0, 0])
-            print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            score = result.get('score', 0)
+            confidence = result.get('confidence', 'LOW')
+            self.signals.append({'name': 'FADE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [FADE] 3M ENTRY 전략 신호 없음")
 
@@ -360,14 +365,17 @@ class BinanceWebSocket:
             df_1m.set_index('timestamp', inplace=True)
             
             result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
-            self._features.update({"squeeze_momentum_1m": result})
+            
 
             if result:
                 action = result.get('action', 'UNKNOWN')
                 entry = result.get('entry', 0)
                 stop = result.get('stop', 0)
                 targets = result.get('targets', [0, 0])
-                print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+                score = result.get('score', 0)  # 점수
+                confidence = result.get('confidence', 'LOW')
+                print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
+                self.signals.append({'name': 'SQUEEZE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
             else:
                 print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
         except Exception as e:
@@ -398,7 +406,6 @@ class BinanceWebSocket:
         
         df_3m = self.data_manager.get_latest_data(count=2)
         result = self.session_strategy.on_kline_close_3m(df_3m, self._session_activated)
-        self._features.update({"session_strategy": result})
         
         # 전략 분석 결과 출력
         if result:
@@ -407,8 +414,11 @@ class BinanceWebSocket:
             entry = result.get('entry', 0)
             stop = result.get('stop', 0)
             targets = result.get('targets', [0, 0])
+            score = result.get('score', 0)
+            confidence = result.get('confidence', 'LOW')
             
-            print(f"🎯 [SESSION] {stage} {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            self.signals.append({'name': 'SESSION', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            print(f"🎯 [SESSION] {stage} {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [SESSION] 전략 신호 없음")
 
@@ -418,17 +428,18 @@ class BinanceWebSocket:
             return
         
         result = self.bollinger_squeeze_strategy.evaluate()
-        self._features.update({"bollinger_squeeze_strategy": result})
+
         if result:
             action = result.get('action', 'UNKNOWN')
             entry = result.get('entry', 0)
             stop = result.get('stop', 0)
             targets = result.get('targets', [0, 0])
+            score = result.get('score', 0)
             confidence = result.get('confidence', 'LOW')
-            print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 신뢰도={confidence}")
+            self.signals.append({'name': 'BB_SQUEEZE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [BB Squeeze] 전략 신호 없음")
-
 
     def _execute_vpvr_golden_strategy(self):
         """VPVR 골든 포켓 전략 실행"""
@@ -439,7 +450,6 @@ class BinanceWebSocket:
         config = self.vpvr_golden_strategy.VPVRConfig()
         df_3m = self.data_manager.get_latest_data(count=config.lookback_bars + 5)
         sig = self.vpvr_golden_strategy.evaluate(df_3m)
-        self._features.update({"vpvr_golden_strategy": sig})
         
         # 전략 분석 결과 출력
         if sig:
@@ -447,8 +457,11 @@ class BinanceWebSocket:
             entry = sig.get('entry', 0)
             stop = sig.get('stop', 0)
             targets = sig.get('targets', [0, 0])
+            score = sig.get('score', 0)
+            confidence = sig.get('confidence', 'LOW')
+            self.signals.append({'name': 'VPVR', 'action': sig.get('action', 'UNKNOWN'), 'score': sig.get('score', 0), 'confidence': sig.get('confidence', 'LOW') ,'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
 
-            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
+            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [VPVR] 골든 포켓 전략 신호 없음")
 
@@ -542,6 +555,440 @@ class BinanceWebSocket:
         except Exception as e:
             print(f"3분봉 데이터 생성 오류: {e}")
             return None
+        
+    def print_decision_interpretation(self, decision: dict) -> None:
+        """
+        decision: decide_trade_realtime(...) 반환값
+        사람이 보기 쉽게 해석해서 출력합니다.
+        """
+        if not decision or not isinstance(decision, dict):
+            print("⚠️ decision이 비어있거나 형식이 잘못되었습니다.")
+            return
+
+        action = decision.get("action", "HOLD")
+        net_score = decision.get("net_score", 0.0)
+        reason = decision.get("reason", "")
+        raw = decision.get("raw", {})
+        sizing = decision.get("sizing", {})
+        recommended_scale = decision.get("recommended_trade_scale", 0.0)
+        oppositions = decision.get("oppositions", [])
+        agree_counts = decision.get("agree_counts", {"BUY": 0, "SELL": 0})
+        meta = decision.get("meta", {})
+
+        # compute per-strategy signed contributions (if possible)
+        contributions = []
+        for name, info in (raw.items() if isinstance(raw, dict) else []):
+            try:
+                act = (info.get("action") or "").upper()
+                score = float(info.get("score") or 0.0)
+                conf = float(info.get("conf_factor") or 0.6)
+                weight = float(info.get("weight") or 0.0)
+                sign = 0
+                if act == "BUY":
+                    sign = 1
+                elif act == "SELL":
+                    sign = -1
+                contrib = sign * score * conf * weight
+                contributions.append((name, contrib, act, score, conf, weight))
+            except Exception:
+                # best-effort fallback
+                contributions.append((name, 0.0, info.get("action"), info.get("score"), info.get("confidence"), info.get("weight")))
+
+        # sort by absolute contribution descending
+        contributions_sorted = sorted(contributions, key=lambda x: abs(x[1]), reverse=True)
+
+        # Header
+        print("────────────────────────────────────────────────────────")
+        print(f"🕒 Decision @ {meta.get('timestamp_utc', 'unknown')}")
+        print(f"▶ 추천 액션: {action}    |   net_score={net_score:.3f}    |   recommended_scale={recommended_scale:.3f}")
+        print(f"▶ 이유: {reason}")
+        print("────────────────────────────────────────────────────────")
+
+        # Top contributors
+        if contributions_sorted:
+            print("전략별 기여 (큰 순):")
+            for (name, contrib, act, score, conf, weight) in contributions_sorted:
+                # format contribution sign and percent-ish
+                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
+                print(f" - {name:12s} | action={str(act):5s} | score={score:.3f} conf={conf:.2f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+        else:
+            print("전략별 정보가 없습니다.")
+
+        # Conflicts and confirmations
+        print("────────────────────────────────────────────────────────")
+        print(f"확인수 (같은 방향, confirm threshold 이상): BUY={agree_counts.get('BUY',0)}  SELL={agree_counts.get('SELL',0)}")
+        if oppositions:
+            print("충돌(상반되는 강한 신호):")
+            for nm, act, sc in oppositions:
+                print(f" - {nm}: {act} (score={sc:.2f})")
+        else:
+            print("충돌 없음")
+
+        # sizing / execution hint
+        print("────────────────────────────────────────────────────────")
+        print("포지션 사이징 / 권장 진입 정보:")
+        qty = sizing.get("qty")
+        risk_usd = sizing.get("risk_usd")
+        entry = sizing.get("entry_used")
+        stop = sizing.get("stop_used")
+        print(f" - 권장 사이즈(스케일): {recommended_scale:.3f} (0..1 로 해석)")
+        if qty is not None:
+            print(f" - 권장 수량(qty): {qty:.4f}")
+        else:
+            print(f" - 권장 수량(qty): 계산 불가 (entry/stop 미확보)")
+        print(f" - 리스크(달러): ${risk_usd}")
+        if entry is not None and stop is not None:
+            dist = abs(entry - stop)
+            print(f" - entry={entry:.4f}  stop={stop:.4f}  (스탑거리={dist:.4f})")
+        else:
+            print(" - entry/stop 정보 부족 (신호 전략에서 제공되는 entry/stop 사용 권장)")
+
+        # human guidance
+        print("────────────────────────────────────────────────────────")
+        if action == "HOLD":
+            # if hold, explain top reasons why
+            reasons = []
+            # net too small
+            if abs(net_score) < 0.35:
+                reasons.append("net_score가 작음 (잡음일 가능성)")
+            if oppositions:
+                reasons.append("상반되는 강한 신호 존재")
+            if reasons:
+                print("권고: HOLD (보류). 이유들:")
+                for r in reasons:
+                    print(" -", r)
+            else:
+                print("권고: HOLD. 추가 확인 또는 더 강한 컨펌 대기.")
+        else:
+            # actionable suggestion
+            print(f"권고: {action} — 실행 전 체크리스트:")
+            # checklist items
+            checklist = []
+            # if any strong opposite exists -> warn
+            if oppositions:
+                checklist.append("상반되는 강한 신호 존재: 재확인 권장 (충돌 시 사이즈 축소)")
+            # if recommended_scale small -> warn
+            if recommended_scale < 0.35:
+                checklist.append(f"권장 스케일이 작음 ({recommended_scale:.2f}) — 소량/스캘프 권장")
+            # if confidence overall low (average conf factor small)
+            avg_conf = 0.0
+            if contributions_sorted:
+                avg_conf = sum([c[4] for c in contributions_sorted]) / max(1.0, len(contributions_sorted))
+            if avg_conf < 0.6:
+                checklist.append("전반적 신뢰도 낮음(중·저) — 보수적 사이징 권장")
+            # print checklist
+            if checklist:
+                for it in checklist:
+                    print(" -", it)
+            else:
+                print(" - 조건 양호: 설정한 사이즈로 진입 고려 가능")
+
+        print("────────────────────────────────────────────────────────")
+        print("")  # blank line for spacing
+
+    
+    def decide_trade_realtime(
+        self,
+        signals: List[Dict[str, Any]],
+        *,
+        account_balance: float = 10000.0,
+        base_risk_pct: float = 0.005,           # 기본 리스크: 계좌의 0.5%
+        leverage: float = 1.0,                  # 선물 레버리지(노미널에 반영하길 원하면 조정)
+        weights: Optional[Dict[str, float]] = None,
+        open_threshold: float = 0.5,
+        immediate_threshold: float = 0.75,
+        confirm_threshold: float = 0.45,
+        confirm_window_sec: int = 180,
+        session_priority: bool = True,
+        news_event: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Realtime decision helper to be run every 3 minutes.
+        signals: list of dicts, each dict should have:
+        - name: str (e.g. 'SESSION','VPVR','VWAP PINBALL','SQUEEZE','FADE')
+        - action: 'BUY' or 'SELL' (or None)
+        - score: float between 0..1 (or None)
+        - confidence: 'HIGH'/'MEDIUM'/'LOW' or None
+        - entry: optional float (recommended entry price)
+        - stop: optional float (recommended stop price)
+        - timestamp: optional datetime
+        Returns a dict with:
+        - action: 'LONG'/'SHORT'/'HOLD'
+        - net_score, reason, recommended_trade_scale (0..1),
+        - sizing: qty, risk_usd, entry_used, stop_used (qty may be None if unusable)
+        - raw: normalized component scores per-strategy
+        """
+        # default weights (can be tuned)
+        default_weights = { 
+                "SESSION": 0.28,
+                "VPVR": 0.22,
+                "VWAP": 0.18,
+                "SQUEEZE": 0.12,
+                "BB_SQUEEZE": 0.10,
+                "FADE": 0.10
+        }
+
+            
+        if weights is None:
+            weights = default_weights.copy()
+        else:
+            # ensure missing keys get defaults
+            for k, v in default_weights.items():
+                weights.setdefault(k, v)
+
+        # normalize name helper
+        def norm_name(n: str) -> str:
+            if n is None:
+                return ""
+            s = n.strip().upper()
+            # common aliases
+            if "VWAP" in s:
+                return "VWAP"
+            if "VPVR" in s or "VOLUME PROFILE" in s:
+                return "VPVR"
+            if "SESSION" in s or "OR" in s or "OPENING" in s:
+                return "SESSION"
+            if "SQUEEZE" in s or "BB" in s:
+                return "SQUEEZE"
+            if "FADE" in s or "LIQ" in s or "LIQUID" in s:
+                return "FADE"
+            if "BB_SQUEEZE" in s:
+                return "BB_SQUEEZE"
+            return s
+
+        now = self.time_manager.get_current_time()
+
+        # confidence numeric mapping
+        conf_map = {"HIGH": 1.0, "MEDIUM": 0.7, "LOW": 0.4, None: 0.6}
+
+        # collect per-strategy signed weighted scores
+        signed = {}
+        raw = {}
+        used_weight_sum = 0.0
+        for s in signals:
+            name = norm_name(s.get("name", ""))
+            action = (s.get("action") or "").upper()
+            score = float(s.get("score") or 0.0)
+            conf = (s.get("confidence") or None)
+            conf_factor = float(conf_map.get(conf, 0.6))
+            w = float(weights.get(name, 0.0))
+            # compute signed value
+            sign = 0
+            if action == "BUY":
+                sign = 1
+            elif action == "SELL":
+                sign = -1
+            val = sign * score * conf_factor * w
+            signed[name] = signed.get(name, 0.0) + val
+            raw[name] = {
+                "action": action if action else None,
+                "score": score,
+                "confidence": conf,
+                "conf_factor": conf_factor,
+                "weight": w,
+                "entry": s.get("entry"),
+                "stop": s.get("stop"),
+                "timestamp": s.get("timestamp")
+            }
+            if w > 0:
+                used_weight_sum += w
+
+        # if no weights used -> hold
+        if used_weight_sum <= 0:
+            return {
+                "action": "HOLD",
+                "net_score": 0.0,
+                "reason": "no recognized weighted strategies",
+                "recommended_trade_scale": 0.0,
+                "sizing": {"qty": None, "risk_usd": 0.0, "entry_used": None, "stop_used": None},
+                "raw": raw
+            }
+
+        net = sum(signed.values()) / max(1e-9, used_weight_sum)  # roughly in -1..1
+
+        # detect strong session override
+        session_rec = raw.get("SESSION")
+        session_override = False
+        session_action = None
+        if session_rec and session_priority:
+            sess_act = session_rec.get("action")
+            sess_score = float(session_rec.get("score") or 0.0)
+            sess_conf = session_rec.get("confidence")
+            if sess_act in ("BUY", "SELL") and sess_score >= immediate_threshold and sess_conf == "HIGH":
+                # check opposing strong signals
+                opp_strong = False
+                for nm, r in raw.items():
+                    if nm == "SESSION": continue
+                    if r.get("action") and r.get("action") != sess_act and float(r.get("score") or 0.0) >= 0.60:
+                        opp_strong = True
+                        break
+                if not opp_strong:
+                    session_override = True
+                    session_action = sess_act
+
+        # confirmations: count other strategies in same direction with score >= confirm_threshold within time window
+        agree_counts = {"BUY": 0, "SELL": 0}
+        for nm, r in raw.items():
+            act = r.get("action")
+            if act not in ("BUY", "SELL"):
+                continue
+            sc = float(r.get("score") or 0.0)
+            ts = r.get("timestamp")
+            # time-based confirmation: if timestamp provided, ensure recency
+            if ts is not None and isinstance(ts, datetime):
+                if abs((now - ts).total_seconds()) > confirm_window_sec:
+                    continue
+            if sc >= confirm_threshold:
+                agree_counts[act] += 1
+
+        # conflict detection: opposing significant strategies
+        oppositions = []
+        for nm, r in raw.items():
+            act = r.get("action")
+            sc = float(r.get("score") or 0.0)
+            if act in ("BUY", "SELL") and sc >= 0.5:
+                oppositions.append((nm, act, sc))
+
+        # compute recommended trade scale (0..1)
+        # base_scale ~ proportional to |net| (net 0.75 -> scale 1)
+        base_scale = min(1.0, max(0.0, abs(net) / 0.75))
+        # conflict penalty
+        if len(oppositions) >= 2:
+            conflict_penalty = 0.25
+        elif len(oppositions) == 1:
+            conflict_penalty = 0.6
+        else:
+            conflict_penalty = 1.0
+        # confidence multiplier: geometric mean of conf_factors among used strategies
+        conf_factors = [r.get("conf_factor", 0.6) for nm, r in raw.items() if r.get("weight", 0) > 0]
+        conf_mult = 0.6
+        if conf_factors:
+            prod = 1.0
+            for f in conf_factors:
+                prod *= f
+            conf_mult = prod ** (1.0 / max(1, len(conf_factors)))
+        recommended_scale = max(0.0, min(1.0, base_scale * conflict_penalty * conf_mult))
+
+        # Final decision
+        action = "HOLD"
+        reason = []
+        if session_override:
+            action = "LONG" if session_action == "BUY" else "SHORT"
+            reason.append(f"SESSION strong override (score={session_rec.get('score')}, conf={session_rec.get('confidence')})")
+        else:
+            if net >= open_threshold:
+                action = "LONG"
+                reason.append(f"net_score {net:.3f} >= open_threshold {open_threshold}")
+            elif net <= -open_threshold:
+                action = "SHORT"
+                reason.append(f"net_score {net:.3f} <= -open_threshold {-open_threshold}")
+            else:
+                # conditional opening if confirmation present and net magnitude moderate
+                if net > 0 and agree_counts["BUY"] >= 1 and net >= (open_threshold * 0.6):
+                    action = "LONG"
+                    reason.append(f"conditional LONG: net {net:.3f}, confirmations {agree_counts['BUY']}")
+                elif net < 0 and agree_counts["SELL"] >= 1 and abs(net) >= (open_threshold * 0.6):
+                    action = "SHORT"
+                    reason.append(f"conditional SHORT: net {net:.3f}, confirmations {agree_counts['SELL']}")
+                else:
+                    action = "HOLD"
+                    reason.append(f"net_score too small ({net:.3f}) or no confirmations")
+
+        # Determine sizing: use primary signal entry/stop if available
+        entry_used = None
+        stop_used = None
+        # priority for sizing: SESSION -> VPVR -> VWAP -> SQUEEZE -> FADE
+        priority_order = ["SESSION", "VPVR", "VWAP", "SQUEEZE", "FADE"]
+        selected_strategy = None
+        for pname in priority_order:
+            r = raw.get(pname)
+            if r and r.get("action") and r.get("action") in ("BUY", "SELL"):
+                # prefer strategy that matches final action
+                if action == "HOLD":
+                    # choose first available to provide sizing suggestion
+                    selected_strategy = pname
+                    break
+                if (action == "LONG" and r.get("action") == "BUY") or (action == "SHORT" and r.get("action") == "SELL"):
+                    selected_strategy = pname
+                    break
+        if selected_strategy:
+            r = raw.get(selected_strategy)
+            entry_used = r.get("entry")
+            stop_used = r.get("stop")
+
+        # fallback: if no entry/stop from signals, try to infer using ATR if available
+        if (entry_used is None or stop_used is None):
+            # try to call get_atr() if present in global scope
+            try:
+                atr_val = None
+                if 'get_atr' in globals():
+                    atr_val = globals()['get_atr']()
+                    if hasattr(atr_val, "__float__"):
+                        atr_val = float(atr_val)
+                # if we have an approximate last price from signals, use last provided entry-like price
+                any_price = None
+                for nm, r in raw.items():
+                    if r.get("entry") is not None:
+                        any_price = float(r.get("entry"))
+                        break
+                if any_price is None:
+                    # try to take entry from any signal
+                    for nm, r in raw.items():
+                        if r.get("score", 0) > 0:
+                            any_price = r.get("entry") or r.get("stop")
+                            if any_price is not None:
+                                any_price = float(any_price); break
+                if entry_used is None and any_price is not None:
+                    entry_used = any_price
+                if stop_used is None and any_price is not None:
+                    # place stop at entry +/- 1.5*ATR (direction-based)
+                    if atr_val is None or math.isnan(atr_val):
+                        atr_val = max(1.0, 0.5 * abs(entry_used) * 0.001)  # tiny fallback
+                    if action == "LONG":
+                        stop_used = entry_used - 1.5 * atr_val
+                    elif action == "SHORT":
+                        stop_used = entry_used + 1.5 * atr_val
+                    else:
+                        stop_used = None
+            except Exception:
+                pass
+
+        # compute qty given entry_used and stop_used
+        qty = None
+        risk_usd = account_balance * float(base_risk_pct)
+        if entry_used is not None and stop_used is not None and entry_used != stop_used and action in ("LONG", "SHORT"):
+            distance = abs(entry_used - stop_used)
+            if distance > 0:
+                # qty in base USD units (e.g. if contract is 1 USD price per unit)
+                # For futures, user should convert to contract units according to their product
+                qty = risk_usd / distance
+                # apply recommended_scale as multiplier to qty
+                qty = qty * recommended_scale * leverage
+        else:
+            qty = None
+
+        sizing = {
+            "qty": float(qty) if qty is not None else None,
+            "risk_usd": round(float(risk_usd), 4),
+            "entry_used": float(entry_used) if entry_used is not None else None,
+            "stop_used": float(stop_used) if stop_used is not None else None,
+            "recommended_scale": round(recommended_scale, 3)
+        }
+
+        # assemble readable reason
+        reason_text = "; ".join(reason)
+
+        return {
+            "action": action,
+            "net_score": round(net, 4),
+            "raw": raw,
+            "reason": reason_text,
+            "recommended_trade_scale": round(recommended_scale, 3),
+            "sizing": sizing,
+            "oppositions": oppositions,
+            "agree_counts": agree_counts,
+            "meta": {"timestamp_utc": now.isoformat(), "used_weight_sum": used_weight_sum}
+        }
     
     def _print_session_strategy(self, session_signal: Optional[Dict]):
         """세션 전략 신호 결과 출력"""
