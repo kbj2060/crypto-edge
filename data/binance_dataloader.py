@@ -110,7 +110,7 @@ class BinanceDataLoader:
         
         return self.fetch_data(interval=3, symbol=symbol, start_time=start_time, end_time=utc_now)
     
-    def _parse_klines_data(self, data: List) -> pd.DataFrame:
+    def _parse_klines_data(self, data: List, ) -> pd.DataFrame:
         """바이낸스 Kline 데이터를 DataFrame으로 파싱"""
         try:
             if not data:

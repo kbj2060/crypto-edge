@@ -1,34 +1,49 @@
-# bollinger_squeeze_strategy_relaxed.py
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import pandas as pd
+from datetime import datetime
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr
+from utils.time_manager import get_time_manager
+
+def _clamp(x, a=0.0, b=1.0):
+    try:
+        return max(a, min(b, float(x)))
+    except Exception:
+        return a
 
 @dataclass
 class BBSqueezeCfg:
-    # 더 예민하게 반응하도록 기본값 완화
-    ma_period: int = 5                # shorter MA -> 더 빠르게 반응
-    std_period: int = 5               # shorter STD
-    std_dev: float = 1.4              # tighter bands (민감)
-    squeeze_lookback: int = 10        # lookback 축소 (더 자주 체크)
-    squeeze_threshold: float = 1.5    # threshold 증가 -> 더 자주 '스퀴즈' 인식
-    breakout_lookback: int = 1        # 최근 1봉으로 빠르게 돌파 판단 (민감)
-    tp_R1: float = 0.8                # 목표를 조금 보수적으로(짧은 R)
-    tp_R2: float = 1.6
-    stop_atr_mult: float = 0.8        # 스탑을 더 타이트하게 (ATR 기반)
+    # Aggressive / high-leverage tuning (10x-20x). More sensitive => earlier entries, tighter stops.
+    ma_period: int = 5                # short MA for responsiveness
+    std_period: int = 5               # short STD
+    std_dev: float = 1.25              # slightly tighter bands
+    squeeze_lookback: int = 6         # lookback for bb width mean
+    squeeze_threshold: float = 0.05   # interpret as normalized strength threshold (lower => more sensitive)
+    breakout_lookback: int = 1        # recent bars for breakout highs/lows
+    tp_R1: float = 0.5                # more conservative first target (smaller R)
+    tp_R2: float = 1.0                # tighter second target
+    stop_atr_mult: float = 0.45        # tighter stop (smaller ATR multiplier)
     tick: float = 0.01
-    # breakout 완화 파라미터
-    min_body_ratio: float = 0.15      # 바디비율 기준을 낮춤 -> 작은 몸통도 허용
-    allow_wick_break: bool = True     # 윅(꼬리) 중심 돌파 허용
-    debug: bool = False               # 디버그 출력 옵션
+    min_body_ratio: float = 0.06      # allow smaller bodies
+    allow_wick_break: bool = True     # allow wick touch as breakout
+    debug: bool = False
+    # score composition weights (squeeze_strength, momentum, volume)
+    w_squeeze: float = 0.55
+    w_momentum: float = 0.3
+    w_volume: float = 0.15
+    # minimal passive contribution when squeezed but no full breakout
+    passive_score_mul: float = 0.30
+    # allow firing even if squeeze not long-lived but strength above tiny threshold
+    immediate_fire_min_strength: float = 0.03
 
 class BollingerSqueezeStrategy:
-
     def __init__(self, cfg: BBSqueezeCfg = BBSqueezeCfg()):
         self.cfg = cfg
         self.is_squeezed = False
+        self.last_squeeze_time = None
         self.last_signal_time = None
+        self.time_manager = get_time_manager()
 
     def evaluate(self) -> Optional[Dict[str, Any]]:
         data_manager = get_data_manager()
@@ -37,107 +52,210 @@ class BollingerSqueezeStrategy:
 
         if df is None or len(df) < max(self.cfg.ma_period, self.cfg.std_period, self.cfg.squeeze_lookback) + 2:
             if self.cfg.debug:
-                print(f"🔍 [BB Squeeze] 데이터 부족: 필요한 데이터 길이={req_len}, 실제={len(df) if df is not None else 'None'}")
+                print(f"🔍 [BB Squeeze Agg] 데이터 부족: 필요한 데이터 길이={req_len}, 실제={len(df) if df is not None else 'None'}")
             return None
 
         last = df.iloc[-1]
+        prev = df.iloc[-2]
 
         # Bollinger bands
-        ma = df['close'].rolling(self.cfg.ma_period).mean()
+        ma = df['close'].rolling(self.cfg.ma_period).mean().ffill()
         std = df['close'].rolling(self.cfg.std_period).std().fillna(0.0)
         upper_band = ma + (std * self.cfg.std_dev)
         lower_band = ma - (std * self.cfg.std_dev)
-        # relative width in percent
-        bb_width = (upper_band - lower_band) / ma * 100
 
-        # squeeze detection (더 관대하게)
-        bb_width_ma = bb_width.rolling(self.cfg.squeeze_lookback).mean().ffill()
-        # when squeeze_threshold > 1.0, 더 자주 스퀴즈로 판정됨
-        is_squeezed_now = bb_width.iloc[-1] < bb_width_ma.iloc[-1] * self.cfg.squeeze_threshold
+        eps = 1e-9
+        bb_width = ((upper_band - lower_band) / (ma.replace(0, eps))).fillna(0.0)
 
+        # squeeze strength (normalized): how much narrower current width is vs recent mean
+        bb_width_ma = bb_width.rolling(self.cfg.squeeze_lookback, min_periods=1).mean().ffill().fillna(0.0)
+        cur_w = float(bb_width.iloc[-1])
+        ma_w = float(bb_width_ma.iloc[-1]) if bb_width_ma.iloc[-1] is not None else 0.0
+        squeeze_strength = 0.0
+        if ma_w > 0:
+            squeeze_strength = max(0.0, (ma_w - cur_w) / (ma_w + eps))  # 0..1
+        else:
+            squeeze_strength = 0.0
+
+        # detect squeezed now
+        is_squeezed_now = squeeze_strength >= self.cfg.squeeze_threshold
+
+        # track last squeeze time for permissive immediate breakouts
+        now = self.time_manager.get_current_time()
         if is_squeezed_now:
-            # enter squeezed state
             self.is_squeezed = True
+            self.last_squeeze_time = now
 
-        # when squeeze releases (width expands above threshold) -> check breakout
-        if self.is_squeezed and not is_squeezed_now:
-            self.is_squeezed = False
+        recent_squeeze = False
+        # permissive recent squeeze: if we've seen squeeze in this run recently, treat as recent
+        if getattr(self, 'last_squeeze_time', None) is not None:
+            recent_squeeze = True
 
-            long_breakout = last['close'] > upper_band.iloc[-1] or (self.cfg.allow_wick_break and last['high'] >= upper_band.iloc[-1])
-            short_breakout = last['close'] < lower_band.iloc[-1] or (self.cfg.allow_wick_break and last['low'] <= lower_band.iloc[-1])
+        # breakout detection (allow wick touches)
+        last_close = float(last['close'])
+        last_high = float(last['high'])
+        last_low = float(last['low'])
 
-            # more permissive breakout strength check:
-            #  - allow wick touches as valid breakout if allow_wick_break True
-            #  - or require a minimum body ratio (smaller than before)
-            highs = df['high'].rolling(self.cfg.breakout_lookback).max()
-            lows = df['low'].rolling(self.cfg.breakout_lookback).min()
+        upper_now = float(upper_band.iloc[-1])
+        lower_now = float(lower_band.iloc[-1])
 
-            body = abs(last['close'] - last['open'])
-            rng = max(1e-9, float(last['high'] - last['low']))
-            body_ratio = (body / rng) if rng > 0 else 0.0
+        long_breakout = (last_close > upper_now) or (self.cfg.allow_wick_break and last_high >= upper_now)
+        short_breakout = (last_close < lower_now) or (self.cfg.allow_wick_break and last_low <= lower_now)
 
-            # permissive is_strong_breakout:
-            # - primary: close past band OR wick touches band
-            # - secondary: OR body_ratio >= min_body_ratio
-            bull_touch = (last['close'] > upper_band.iloc[-1]) or (last['high'] >= upper_band.iloc[-1])
-            bear_touch = (last['close'] < lower_band.iloc[-1]) or (last['low'] <= lower_band.iloc[-1])
+        # body ratio
+        body = abs(last['close'] - last['open'])
+        rng = max(1e-9, float(last['high'] - last['low']))
+        body_ratio = (body / rng) if rng > 0 else 0.0
 
-            is_strong_breakout = False
-            # bullish breakout conditions
-            if bull_touch:
-                # allow if wick break allowed OR body is decisive OR close above recent highs
-                if self.cfg.allow_wick_break:
-                    is_strong_breakout = True
-                elif body_ratio >= self.cfg.min_body_ratio:
-                    is_strong_breakout = True
-                elif last['close'] >= highs.iloc[-1]:
-                    is_strong_breakout = True
-            # bearish breakout conditions
-            if bear_touch and not is_strong_breakout:
-                if self.cfg.allow_wick_break:
-                    is_strong_breakout = True
-                elif body_ratio >= self.cfg.min_body_ratio:
-                    is_strong_breakout = True
-                elif last['close'] <= lows.iloc[-1]:
-                    is_strong_breakout = True
+        highs = df['high'].rolling(self.cfg.breakout_lookback, min_periods=1).max().ffill()
+        lows = df['low'].rolling(self.cfg.breakout_lookback, min_periods=1).min().ffill()
 
-            if self.cfg.debug:
-                print(f"[BB Squeeze DEBUG] bb_width={bb_width.iloc[-1]:.4f} bb_ma={bb_width_ma.iloc[-1]:.4f} "
-                      f"is_squeezed_now={is_squeezed_now} long_breakout={long_breakout} short_breakout={short_breakout} "
-                      f"body_ratio={body_ratio:.3f} is_strong_breakout={is_strong_breakout}")
+        bull_touch = (last_close > upper_now) or (last_high >= upper_now)
+        bear_touch = (last_close < lower_now) or (last_low <= lower_now)
 
-            # BUY signal
-            if long_breakout and is_strong_breakout:
-                atr = get_atr()
-                entry = last['close'] + self.cfg.tick
-                stop = last['close'] - float(atr) * self.cfg.stop_atr_mult
-                R = entry - stop
+        is_strong_breakout = False
+        if bull_touch:
+            if self.cfg.allow_wick_break:
+                is_strong_breakout = True
+            elif body_ratio >= self.cfg.min_body_ratio:
+                is_strong_breakout = True
+            elif last_close >= float(highs.iloc[-1]):
+                is_strong_breakout = True
+        if bear_touch and not is_strong_breakout:
+            if self.cfg.allow_wick_break:
+                is_strong_breakout = True
+            elif body_ratio >= self.cfg.min_body_ratio:
+                is_strong_breakout = True
+            elif last_close <= float(lows.iloc[-1]):
+                is_strong_breakout = True
+
+        # volume component (optional): compare last volume to recent MA (quote_volume preferred)
+        vol_comp = 0.0
+        try:
+            if 'quote_volume' in df.columns:
+                v_series = pd.to_numeric(df['quote_volume'].astype(float))
+            elif 'volume' in df.columns:
+                v_series = pd.to_numeric(df['volume'].astype(float) * df['close'].astype(float))
+            else:
+                v_series = None
+            if v_series is not None:
+                vol_ma = v_series.rolling(self.cfg.squeeze_lookback, min_periods=1).mean().iloc[-2]
+                last_vol = float(v_series.iloc[-1])
+                vol_ratio = last_vol / (vol_ma if vol_ma and vol_ma>0 else 1.0)
+                # map vol_ratio to 0..1 with soft cap at 3x
+                vol_comp = _clamp((vol_ratio - 1.0) / 2.0, 0.0, 1.0)
+            else:
+                vol_comp = 0.0
+        except Exception:
+            vol_comp = 0.0
+
+        # momentum component: recent close move normalized to 0..1 (0.5% -> 1.0)
+        prev_close = float(prev['close'])
+        momentum = 0.0
+        if prev_close != 0:
+            momentum = (last_close - prev_close) / prev_close
+        mom_norm = _clamp(abs(momentum) / 0.005, 0.0, 1.0)
+
+        # determine allowed_to_fire: aggressive rules (RELAXED)
+        allowed_to_fire = False
+        fire_reasons = []
+        # thresholds for non-squeeze breakouts (tunable)
+        
+        body_fire_thresh = max(self.cfg.min_body_ratio, 0.12)   # 몸통 기준: 0.12 (권장 범위 0.10~0.18)
+        mom_fire_thresh  = 0.12                                # 약 0.6% 움직임 기준 (0.10~0.18 범위)
+        vol_fire_thresh  = 0.06                                  # 약 1.16x 볼륨 기준 (0.06~0.14 범위)
+
+        if is_strong_breakout:
+            # prefer squeeze-based firing first
+            if self.is_squeezed or squeeze_strength >= self.cfg.immediate_fire_min_strength or recent_squeeze:
+                allowed_to_fire = True
+                fire_reasons.append('squeeze_ok')
+            # if not squeeze-validated, allow non-squeeze strong breakout based on body/momentum/volume
+            if not allowed_to_fire:
+                if body_ratio >= body_fire_thresh:
+                    allowed_to_fire = True
+                    fire_reasons.append(f'body_ratio:{body_ratio:.3f}')
+                elif mom_norm >= mom_fire_thresh:
+                    allowed_to_fire = True
+                    fire_reasons.append(f'momentum:{mom_norm:.3f}')
+                elif vol_comp >= vol_fire_thresh:
+                    allowed_to_fire = True
+                    fire_reasons.append(f'vol:{vol_comp:.3f}')
+        else:
+            # also allow small immediate 'touch and go' when squeeze very strong and wick break occurs
+            if bull_touch or bear_touch:
+                if squeeze_strength >= max(self.cfg.squeeze_threshold, 0.12):
+                    allowed_to_fire = True
+                    fire_reasons.append('touch_and_go')
+        # debug reasons if not allowed
+        if self.cfg.debug and not allowed_to_fire:
+            print(f"[BB Agg DEBUG] allowed_to_fire=False reasons_missing: squeeze={self.is_squeezed}, squeeze_strength={squeeze_strength:.3f}, "
+                f"body_ratio={body_ratio:.3f} (need>={body_fire_thresh}), mom_norm={mom_norm:.3f} (need>={mom_fire_thresh}), vol_comp={vol_comp:.3f} (need>={vol_fire_thresh})")
+        elif self.cfg.debug and allowed_to_fire:
+            print(f"[BB Agg DEBUG] allowed_to_fire=True fire_reasons={fire_reasons}")
+
+        # score composition: squeeze_strength(50%) + momentum(30%) + volume(20%)
+        score = 0.0
+        if allowed_to_fire:
+            score = _clamp(self.cfg.w_squeeze * squeeze_strength + self.cfg.w_momentum * mom_norm + self.cfg.w_volume * vol_comp, 0.0, 1.0)
+        else:
+            # passive hint when squeezed but no full breakout
+            if is_squeezed_now:
+                score = _clamp(self.cfg.passive_score_mul * (self.cfg.w_squeeze * squeeze_strength + self.cfg.w_momentum * mom_norm + self.cfg.w_volume * vol_comp), 0.0, 1.0)
+            else:
+                score = 0.0
+
+        # map to confidence
+        if score >= 0.85:
+            conf = 'HIGH'
+        elif score >= 0.5:
+            conf = 'MEDIUM'
+        elif score > 0.0:
+            conf = 'LOW'
+        else:
+            conf = 'LOW'
+
+        if self.cfg.debug:
+            print(f"[BB Agg DEBUG] cur_w={cur_w:.6f} ma_w={ma_w:.6f} squeeze_strength={squeeze_strength:.3f} "
+                f"is_squeezed_now={is_squeezed_now} long_breakout={long_breakout} short_breakout={short_breakout} "
+                f"body_ratio={body_ratio:.3f} is_strong_breakout={is_strong_breakout} allowed_to_fire={allowed_to_fire} "
+                f"mom={momentum:.4f} mom_norm={mom_norm:.3f} vol_comp={vol_comp:.3f} score={score:.3f} conf={conf}")
+
+        # generate entry if allowed and breakout direction exists
+        if allowed_to_fire and is_strong_breakout:
+            atr = get_atr()
+            if long_breakout:
+                entry = last_close + self.cfg.tick
+                stop = last_close - float(atr) * self.cfg.stop_atr_mult
+                R = entry - stop if entry > stop else float(atr) * self.cfg.stop_atr_mult
                 tp1, tp2 = entry + self.cfg.tp_R1 * R, entry + self.cfg.tp_R2 * R
+                self.last_signal_time = now
                 return {
                     "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
-                    "targets": [float(tp1), float(tp2)],
+                    "targets": [float(tp1), float(tp2)], "score": float(score), "confidence": conf,
                     "context": {
-                        "mode": "BB_SQUEEZE", "bb_width": float(bb_width.iloc[-1]), "atr": float(atr),
-                        "upper_band": float(upper_band.iloc[-1]), "lower_band": float(lower_band.iloc[-1]),
-                        "body_ratio": float(body_ratio), "allow_wick_break": bool(self.cfg.allow_wick_break)
+                        "mode": "BB_SQUEEZE_AGG", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
+                        "squeeze_strength": float(squeeze_strength), "atr": float(atr),
+                        "upper_band": float(upper_now), "lower_band": float(lower_now),
+                        "body_ratio": float(body_ratio), "vol_comp": float(vol_comp)
                     }
                 }
-
-            # SELL signal
-            if short_breakout and is_strong_breakout:
-                atr = get_atr(df)
-                entry = last['close'] - self.cfg.tick
-                stop = last['close'] + float(atr) * self.cfg.stop_atr_mult
-                R = stop - entry
+            if short_breakout:
+                atr = get_atr()
+                entry = last_close - self.cfg.tick
+                stop = last_close + float(atr) * self.cfg.stop_atr_mult
+                R = stop - entry if stop > entry else float(atr) * self.cfg.stop_atr_mult
                 tp1, tp2 = entry - self.cfg.tp_R1 * R, entry - self.cfg.tp_R2 * R
+                self.last_signal_time = now
                 return {
                     "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
-                    "targets": [float(tp1), float(tp2)],
+                    "targets": [float(tp1), float(tp2)], "score": float(score), "confidence": conf,
                     "context": {
-                        "mode": "BB_SQUEEZE", "bb_width": float(bb_width.iloc[-1]), "atr": float(atr),
-                        "upper_band": float(upper_band.iloc[-1]), "lower_band": float(lower_band.iloc[-1]),
-                        "body_ratio": float(body_ratio), "allow_wick_break": bool(self.cfg.allow_wick_break)
+                        "mode": "BB_SQUEEZE_AGG", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
+                        "squeeze_strength": float(squeeze_strength), "atr": float(atr),
+                        "upper_band": float(upper_now), "lower_band": float(lower_now),
+                        "body_ratio": float(body_ratio), "vol_comp": float(vol_comp)
                     }
                 }
-
+        
         return None

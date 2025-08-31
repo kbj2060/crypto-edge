@@ -68,6 +68,8 @@ class OpeningRange:
         try:
             current_time = self.time_manager.get_current_time()
             session_open_time = self.time_manager.get_current_session_info().open_time
+            if session_open_time is None:
+                session_open_time = self.time_manager.get_previous_session_close()
             return session_open_time
         
         except Exception as e:
@@ -132,7 +134,7 @@ class OpeningRange:
         try:
             df = self.get_data(start_time, end_time)
             print(start_time, end_time)
-            if df is not None and not df.empty:
+            if df is not None:
                 start_utc = self.time_manager.ensure_utc(start_time)
                 end_utc = self.time_manager.ensure_utc(end_time)
 

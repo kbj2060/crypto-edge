@@ -17,8 +17,11 @@ from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_global_indicator_manager
 from signals.bollinger_squeeze_strategy import BBSqueezeCfg, BollingerSqueezeStrategy
+from signals.ema_trend_15m import EMATrend15m
 from signals.liquidation_strategies_lite import SqueezeMomentumStrategy, MomentumConfig, FadeReentryStrategy
+from signals.orderflow_cvd import OrderflowCVD
 from signals.session_or_lite import SessionORLite, SessionORLiteCfg
+from signals.vol_spike_3m import VolSpike3m
 from signals.vpvr_golden_strategy import LVNGoldenPocket
 from signals.vwap_pinball_strategy import VWAPPinballStrategy, VWAPPinballCfg
 
@@ -52,6 +55,9 @@ class IntegratedSmartTrader:
         self._init_fade_reentry_strategy()
         self._init_bollinger_squeeze_strategy()
         self._init_vwap_pinball_strategy()
+        self._init_ema_trend_15m_strategy()
+        self._init_orderflow_cvd_strategy()
+        self._init_vol_spike_3m_strategy()
 
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
@@ -98,6 +104,39 @@ class IntegratedSmartTrader:
             print(f"❌ 글로벌 지표 시스템 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
+
+    def _init_orderflow_cvd_strategy(self):
+        """체결 불균형 근사 전략 초기화"""
+        try:
+            self._orderflow_cvd_strategy = OrderflowCVD()
+
+        except Exception as e:
+            print(f"❌ 체결 불균형 근사 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._orderflow_cvd_strategy = None
+
+    def _init_vol_spike_3m_strategy(self):
+        """볼륨 스파이크 전략 초기화"""
+        try:
+            self._vol_spike_3m_strategy = VolSpike3m()
+
+        except Exception as e:
+            print(f"❌ 볼륨 스파이크 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._vol_spike_3m_strategy = None
+
+    def _init_ema_trend_15m_strategy(self):
+        """EMA 트렌드 전략 초기화"""
+        try:
+            self._ema_trend_15m_strategy = EMATrend15m()
+
+        except Exception as e:
+            print(f"❌ EMA 트렌드 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._ema_trend_15m_strategy = None
 
     def _init_vwap_pinball_strategy(self):
         """VWAP 피니언 전략 초기화"""
@@ -188,7 +227,10 @@ class IntegratedSmartTrader:
                 'fade_reentry_strategy': self._fade_reentry_strategy,
                 'vpvr_golden_strategy': self._vpvr_golden_strategy,
                 'bollinger_squeeze_strategy': self._bollinger_squeeze_strategy,
-                'vwap_pinball_strategy': self._vwap_pinball_strategy
+                'vwap_pinball_strategy': self._vwap_pinball_strategy,
+                'ema_trend_15m_strategy': self._ema_trend_15m_strategy,
+                'orderflow_cvd_strategy': self._orderflow_cvd_strategy,
+                'vol_spike_3m_strategy': self._vol_spike_3m_strategy
             }
             
             # None이 아닌 전략만 필터링하여 전달

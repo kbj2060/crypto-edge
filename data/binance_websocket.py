@@ -1,5 +1,6 @@
 import json
 import asyncio
+import math
 import websockets
 import threading
 import time
@@ -49,6 +50,8 @@ class BinanceWebSocket:
         self.vpvr_golden_strategy = None
         self.bollinger_squeeze_strategy = None
         self.vwap_pinball_strategy = None
+        self.ema_trend_15m_strategy = None
+        self.orderflow_cvd_strategy = None
         
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
@@ -80,7 +83,10 @@ class BinanceWebSocket:
         fade_reentry_strategy=None,
         bollinger_squeeze_strategy=None,
         vpvr_golden_strategy=None,
-        vwap_pinball_strategy=None
+        vwap_pinball_strategy=None,
+        ema_trend_15m_strategy=None,
+        orderflow_cvd_strategy=None,
+        vol_spike_3m_strategy=None
     ):
         """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
         try:
@@ -109,6 +115,18 @@ class BinanceWebSocket:
                 self.vwap_pinball_strategy = vwap_pinball_strategy
                 print(f"✅ VWAP 피니언 전략 설정 완료: {type(vwap_pinball_strategy).__name__}")
                 
+            if ema_trend_15m_strategy is not None:
+                self.ema_trend_15m_strategy = ema_trend_15m_strategy
+                print(f"✅ EMA 트렌드 전략 설정 완료: {type(ema_trend_15m_strategy).__name__}")
+            
+            if orderflow_cvd_strategy is not None:
+                self.orderflow_cvd_strategy = orderflow_cvd_strategy
+                print(f"✅ ORDERFLOW CVD 전략 설정 완료: {type(orderflow_cvd_strategy).__name__}")
+            
+            if vol_spike_3m_strategy is not None:
+                self.vol_spike_3m_strategy = vol_spike_3m_strategy
+                print(f"✅ VOL SPIKE 3M 전략 설정 완료: {type(vol_spike_3m_strategy).__name__}")
+
         except Exception as e:
             print(f"❌ 전략 설정 오류: {e}")
             import traceback
@@ -208,6 +226,9 @@ class BinanceWebSocket:
         
         price_data = self._create_price_data(kline)
         self._store_1min_data(price_data)
+
+        # if self._is_15min_candle_close():
+            
         
         # 세션 전략 실행 (정확한 3분봉 마감 시간에)
         if self._is_3min_candle_close():
@@ -221,9 +242,14 @@ class BinanceWebSocket:
             self._execute_vpvr_golden_strategy()
             self._execute_bollinger_squeeze_strategy()
             self._execute_vwap_pinball_strategy()
+            self._execute_orderflow_cvd_strategy()
+            self._execute_vol_spike_3m_strategy()
+            self._execute_ema_trend_15m_strategy()
+
             decision = self.decide_trade_realtime(self.signals, leverage=20)
             self.print_decision_interpretation(decision)
             self.signals = []
+
 
         # SQUEEZE 모멘텀 전략 실행
         self._execute_fade_reentry_1m_strategy()
@@ -287,7 +313,19 @@ class BinanceWebSocket:
         except Exception as e:
             print(f"3분봉 마감 시간 체크 오류: {e}")
             return False
-    
+        
+    def _is_15min_candle_close(self) -> bool:
+        """현재 시간이 3분봉 마감 시간인지 체크 (51분, 54분, 57분, 00분...)"""
+        try:
+            # time.sleep(1)
+            current_time = self.time_manager.get_current_time()
+            current_minute = current_time.minute
+
+            return current_minute % 15 == 0
+        except Exception as e:
+            print(f"15분봉 마감 시간 체크 오류: {e}")
+            return False
+        
     def _store_1min_data(self, price_data: Dict):
         """1분봉 데이터를 임시 저장 (3분봉 생성용)"""
         try:
@@ -303,7 +341,63 @@ class BinanceWebSocket:
                 
         except Exception as e:
             print(f"1분봉 데이터 임시 저장 오류: {e}")
-    
+
+    def _execute_vol_spike_3m_strategy(self):
+        """볼륨 스파이크 전략 실행"""
+        if not self.vol_spike_3m_strategy:
+            return
+        
+        result = self.vol_spike_3m_strategy.on_kline_close_3m()
+
+        if result:
+            name = result.get('name', 'UNKNOWN')
+            action = result.get('action', 'UNKNOWN')
+            score = result.get('score', 0)
+            confidence = result.get('confidence', 'LOW')
+            timestamp = result.get('timestamp', self.time_manager.get_current_time())
+
+            self.signals.append({'name': 'VOL_SPIKE_3M', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp})
+            print(f"🎯 [VOL_SPIKE_3M] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
+        else:
+            print(f"📊 [VOL_SPIKE_3M] 전략 신호 없음")
+
+    def _execute_orderflow_cvd_strategy(self):
+        """체결 불균형 근사 전략 실행"""
+        if not self.orderflow_cvd_strategy:
+            return
+        
+        result = self.orderflow_cvd_strategy.on_kline_close_3m()
+        if result:
+            name = result.get('name', 'UNKNOWN')
+            action = result.get('action', 'UNKNOWN')
+            score = result.get('score', 0)
+            confidence = result.get('confidence', 'LOW')
+            timestamp = result.get('timestamp', self.time_manager.get_current_time())
+
+            self.signals.append({'name': 'ORDERFLOW_CVD', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp})
+            print(f"🎯 [ORDERFLOW_CVD] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
+        else:
+            print(f"📊 [ORDERFLOW_CVD] 전략 신호 없음")
+
+    def _execute_ema_trend_15m_strategy(self):
+        """EMA 트렌드 전략 실행 (15분봉)"""
+        if not self.ema_trend_15m_strategy:
+            return
+        
+        result = self.ema_trend_15m_strategy.on_kline_close_15m()
+        if result:
+            name = result.get('name', 'UNKNOWN')
+            action = result.get('action', 'UNKNOWN')
+            score = result.get('score', 0)
+            confidence = result.get('confidence', 'LOW')
+            timestamp = result.get('timestamp', self.time_manager.get_current_time())
+
+            self.signals.append({'name': 'EMA_TREND_15m', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp})
+            print(f"🎯 [EMA_TREND_15m] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
+        else:
+            print(f"📊 [EMA_TREND_15m] 전략 신호 없음")
+
+
     def _execute_vwap_pinball_strategy(self):
         """VWAP 피니언 전략 실행"""
         if not self.vwap_pinball_strategy:
@@ -375,29 +469,11 @@ class BinanceWebSocket:
                 score = result.get('score', 0)  # 점수
                 confidence = result.get('confidence', 'LOW')
                 print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-                self.signals.append({'name': 'SQUEEZE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+                self.signals.append({'name': 'LIQUIDATION_SQUEEZE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
             else:
                 print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
         except Exception as e:
             print(f"❌ [SQUEEZE] 1M 전략 실행 오류: {e}")
-
-    # def _execute_squeeze_momentum_3m_strategy(self):
-    #     """SQUEEZE 모멘텀 전략 실행 (3분봉)"""
-    #     if not self.squeeze_momentum_strategy:
-    #         return
-        
-    #     try:
-    #         result = self.squeeze_momentum_strategy.on_kline_close_3m()
-    #         if result:
-    #             action = result.get('action', 'UNKNOWN')
-    #             entry = result.get('entry', 0)
-    #             stop = result.get('stop', 0)
-    #             targets = result.get('targets', [0, 0])
-    #             print(f"🎯 [SQUEEZE] 3M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f}")
-            
-    #         self._features.update({"squeeze_momentum_3m": result})
-    #     except Exception as e:
-    #         print(f"❌ [SQUEEZE] 3M 전략 실행 오류: {e}")
 
     def _execute_session_strategy(self):
         """세션 전략 실행"""
@@ -693,7 +769,7 @@ class BinanceWebSocket:
         *,
         account_balance: float = 10000.0,
         base_risk_pct: float = 0.005,           # 기본 리스크: 계좌의 0.5%
-        leverage: float = 1.0,                  # 선물 레버리지(노미널에 반영하길 원하면 조정)
+        leverage: float = 20,                  # 선물 레버리지(노미널에 반영하길 원하면 조정)
         weights: Optional[Dict[str, float]] = None,
         open_threshold: float = 0.5,
         immediate_threshold: float = 0.75,
@@ -719,13 +795,16 @@ class BinanceWebSocket:
         - raw: normalized component scores per-strategy
         """
         # default weights (can be tuned)
-        default_weights = { 
-                "SESSION": 0.28,
-                "VPVR": 0.22,
-                "VWAP": 0.18,
-                "SQUEEZE": 0.12,
-                "BB_SQUEEZE": 0.10,
-                "FADE": 0.10
+        default_weights = {
+            "SESSION":             0.220,  # 세션 추세/오프닝
+            "VWAP":                0.200,  # 리버전/페이드 핵심
+            "FADE":                0.180,  # 청산 기반 스파이크
+            "LIQUIDATION_SQUEEZE": 0.120,  # 청산 스퀴즈
+            "VOL_SPIKE_3M":        0.090,  # 단기 변동성 급증
+            "VPVR":                0.080,  # 거래량 지지/저항
+            "ORDERFLOW_CVD":       0.060,  # 미세구조 확인
+            "BB_SQUEEZE":          0.030,  # 변동성 예고
+            "EMA_TREND_15M":       0.020   # 장기 추세 필터
         }
 
             
@@ -738,22 +817,26 @@ class BinanceWebSocket:
 
         # normalize name helper
         def norm_name(n: str) -> str:
-            if n is None:
-                return ""
             s = n.strip().upper()
             # common aliases
             if "VWAP" in s:
                 return "VWAP"
-            if "VPVR" in s or "VOLUME PROFILE" in s:
+            if "VPVR" in s:
                 return "VPVR"
-            if "SESSION" in s or "OR" in s or "OPENING" in s:
+            if "SESSION" in s:
                 return "SESSION"
-            if "SQUEEZE" in s or "BB" in s:
-                return "SQUEEZE"
-            if "FADE" in s or "LIQ" in s or "LIQUID" in s:
+            if "LIQUIDATION_SQUEEZE" in s:
+                return "LIQUIDATION_SQUEEZE"
+            if "FADE" in s:
                 return "FADE"
-            if "BB_SQUEEZE" in s:
+            if "BB_SQUEEZE" in s:  # Fixed comparison operator
                 return "BB_SQUEEZE"
+            if "ORDERFLOW_CVD" in s:  # Fixed comparison operator
+                return "ORDERFLOW_CVD"
+            if "EMA_TREND_15M" in s:  # Fixed comparison operator
+                return "EMA_TREND_15M"
+            if "VOL_SPIKE_3M" in s:  # Fixed comparison operator
+                return "VOL_SPIKE_3M"
             return s
 
         now = self.time_manager.get_current_time()
@@ -766,12 +849,12 @@ class BinanceWebSocket:
         raw = {}
         used_weight_sum = 0.0
         for s in signals:
-            name = norm_name(s.get("name", ""))
-            action = (s.get("action") or "").upper()
-            score = float(s.get("score") or 0.0)
-            conf = (s.get("confidence") or None)
-            conf_factor = float(conf_map.get(conf, 0.6))
-            w = float(weights.get(name, 0.0))
+            name = norm_name(s.get("name"))
+            action = (s.get("action")).upper()
+            score = float(s.get("score"))
+            conf = (s.get("confidence"))
+            conf_factor = float(conf_map.get(conf))
+            w = float(weights.get(name))
             # compute signed value
             sign = 0
             if action == "BUY":
@@ -779,7 +862,7 @@ class BinanceWebSocket:
             elif action == "SELL":
                 sign = -1
             val = sign * score * conf_factor * w
-            signed[name] = signed.get(name, 0.0) + val
+            signed[name] = val
             raw[name] = {
                 "action": action if action else None,
                 "score": score,
@@ -788,7 +871,7 @@ class BinanceWebSocket:
                 "weight": w,
                 "entry": s.get("entry"),
                 "stop": s.get("stop"),
-                "timestamp": s.get("timestamp")
+                "timestamp": self.time_manager.get_current_time()
             }
             if w > 0:
                 used_weight_sum += w
@@ -898,7 +981,17 @@ class BinanceWebSocket:
         entry_used = None
         stop_used = None
         # priority for sizing: SESSION -> VPVR -> VWAP -> SQUEEZE -> FADE
-        priority_order = ["SESSION", "VPVR", "VWAP", "SQUEEZE", "FADE"]
+        priority_order = [
+            "SESSION",
+            "VWAP",
+            "FADE",
+            "VOL_SPIKE_3M",
+            "VPVR",
+            "ORDERFLOW_CVD",
+            "BB_SQUEEZE",
+            "EMA_TREND_15M",
+            "LIQUIDATION_SQUEEZE"
+        ]       
         selected_strategy = None
         for pname in priority_order:
             r = raw.get(pname)
@@ -920,11 +1013,7 @@ class BinanceWebSocket:
         if (entry_used is None or stop_used is None):
             # try to call get_atr() if present in global scope
             try:
-                atr_val = None
-                if 'get_atr' in globals():
-                    atr_val = globals()['get_atr']()
-                    if hasattr(atr_val, "__float__"):
-                        atr_val = float(atr_val)
+                atr_val = float(get_atr())
                 # if we have an approximate last price from signals, use last provided entry-like price
                 any_price = None
                 for nm, r in raw.items():
