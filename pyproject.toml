@@ -16,6 +16,9 @@ dependencies = [
   "scikit-learn>=1.7.1",
   "ollama>=0.5.3",
   "ta>=0.11.0",
+  "playwright>=1.55.0",
+  "pytz>=2025.2",
+  "python-dateutil>=2.9.0.post0",
 ]
 
 [project.scripts]

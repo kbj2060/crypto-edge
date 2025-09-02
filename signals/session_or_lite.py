@@ -255,7 +255,7 @@ class SessionORLite:
             trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
             if low_conf:
                 self.debug["low_conf_signals"] += 1
-                reasons_short = []
+            reasons_short = []
             if comp_break_short: reasons_short.append("break_body")
             if comp_wick_short: reasons_short.append("wick_break")
             if comp_touched_short: reasons_short.append("retest")

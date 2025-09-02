@@ -57,7 +57,7 @@ class BinanceWebSocket:
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
         self._session_activated = self.time_manager.is_session_active()
-        self.signals = []
+        self.signals = {}  # 딕셔너리로 변경: 시그널 이름을 키로 사용
 
 
     def update_session_status(self, price_data: Dict):
@@ -237,25 +237,21 @@ class BinanceWebSocket:
             self.global_manager.update_all_indicators(series_3m)
 
             self._execute_session_strategy()
-            self._execute_fade_reentry_3m_strategy()
-            # self._execute_squeeze_momentum_3m_strategy()
             self._execute_vpvr_golden_strategy()
             self._execute_bollinger_squeeze_strategy()
             self._execute_vwap_pinball_strategy()
+            self._execute_ema_trend_15m_strategy()
+            self._execute_fade_reentry_3m_strategy()
             self._execute_orderflow_cvd_strategy()
             self._execute_vol_spike_3m_strategy()
-            self._execute_ema_trend_15m_strategy()
-
+            
             decision = self.decide_trade_realtime(self.signals, leverage=20)
             self.print_decision_interpretation(decision)
-            self.signals = []
+            self.signals = {}
 
-
-        # SQUEEZE 모멘텀 전략 실행
         self._execute_fade_reentry_1m_strategy()
         self._execute_squeeze_momentum_1m_strategy(price_data)
-        
-        # 1분봉 콜백 실행
+
         self._execute_kline_callbacks(price_data)
         # self.ask_ai_decision(price_data)
     
@@ -356,7 +352,7 @@ class BinanceWebSocket:
             confidence = result.get('confidence', 'LOW')
             timestamp = result.get('timestamp', self.time_manager.get_current_time())
 
-            self.signals.append({'name': 'VOL_SPIKE_3M', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp})
+            self.signals['VOL_SPIKE_3M'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp}
             print(f"🎯 [VOL_SPIKE_3M] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [VOL_SPIKE_3M] 전략 신호 없음")
@@ -374,7 +370,7 @@ class BinanceWebSocket:
             confidence = result.get('confidence', 'LOW')
             timestamp = result.get('timestamp', self.time_manager.get_current_time())
 
-            self.signals.append({'name': 'ORDERFLOW_CVD', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp})
+            self.signals['ORDERFLOW_CVD'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp}
             print(f"🎯 [ORDERFLOW_CVD] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [ORDERFLOW_CVD] 전략 신호 없음")
@@ -392,7 +388,7 @@ class BinanceWebSocket:
             confidence = result.get('confidence', 'LOW')
             timestamp = result.get('timestamp', self.time_manager.get_current_time())
 
-            self.signals.append({'name': 'EMA_TREND_15m', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp})
+            self.signals['EMA_TREND_15m'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp}
             print(f"🎯 [EMA_TREND_15m] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [EMA_TREND_15m] 전략 신호 없음")
@@ -414,7 +410,7 @@ class BinanceWebSocket:
             score = result.get('score', 0)
             confidence = result.get('confidence', 'LOW')
 
-            self.signals.append({'name': 'VWAP', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            self.signals['VWAP'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
             print(f"🎯 [VWAP PINBALL] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [VWAP PINBALL] 전략 신호 없음")
@@ -440,7 +436,7 @@ class BinanceWebSocket:
             targets = result.get('targets', [0, 0])
             score = result.get('score', 0)
             confidence = result.get('confidence', 'LOW')
-            self.signals.append({'name': 'FADE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            self.signals['FADE'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
             print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [FADE] 3M ENTRY 전략 신호 없음")
@@ -469,7 +465,7 @@ class BinanceWebSocket:
                 score = result.get('score', 0)  # 점수
                 confidence = result.get('confidence', 'LOW')
                 print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-                self.signals.append({'name': 'LIQUIDATION_SQUEEZE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+                self.signals['LIQUIDATION_SQUEEZE'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
             else:
                 print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
         except Exception as e:
@@ -493,7 +489,7 @@ class BinanceWebSocket:
             score = result.get('score', 0)
             confidence = result.get('confidence', 'LOW')
             
-            self.signals.append({'name': 'SESSION', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            self.signals['SESSION'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
             print(f"🎯 [SESSION] {stage} {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [SESSION] 전략 신호 없음")
@@ -512,7 +508,7 @@ class BinanceWebSocket:
             targets = result.get('targets', [0, 0])
             score = result.get('score', 0)
             confidence = result.get('confidence', 'LOW')
-            self.signals.append({'name': 'BB_SQUEEZE', 'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            self.signals['BB_SQUEEZE'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
             print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
             print(f"📊 [BB Squeeze] 전략 신호 없음")
@@ -535,7 +531,7 @@ class BinanceWebSocket:
             targets = sig.get('targets', [0, 0])
             score = sig.get('score', 0)
             confidence = sig.get('confidence', 'LOW')
-            self.signals.append({'name': 'VPVR', 'action': sig.get('action', 'UNKNOWN'), 'score': sig.get('score', 0), 'confidence': sig.get('confidence', 'LOW') ,'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()})
+            self.signals['VPVR'] = {'action': sig.get('action', 'UNKNOWN'), 'score': sig.get('score', 0), 'confidence': sig.get('confidence', 'LOW') ,'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
 
             print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
         else:
@@ -765,7 +761,7 @@ class BinanceWebSocket:
     
     def decide_trade_realtime(
         self,
-        signals: List[Dict[str, Any]],
+        signals: Dict[str, Dict[str, Any]],
         *,
         account_balance: float = 10000.0,
         base_risk_pct: float = 0.005,           # 기본 리스크: 계좌의 0.5%
@@ -780,7 +776,7 @@ class BinanceWebSocket:
     ) -> Dict[str, Any]:
         """
         Realtime decision helper to be run every 3 minutes.
-        signals: list of dicts, each dict should have:
+        signals: dict of signals, each signal dict should have:
         - name: str (e.g. 'SESSION','VPVR','VWAP PINBALL','SQUEEZE','FADE')
         - action: 'BUY' or 'SELL' (or None)
         - score: float between 0..1 (or None)
@@ -848,8 +844,8 @@ class BinanceWebSocket:
         signed = {}
         raw = {}
         used_weight_sum = 0.0
-        for s in signals:
-            name = norm_name(s.get("name"))
+        for name, s in signals.items():
+            name = norm_name(name)  # 시그널 이름을 키로 사용
             action = (s.get("action")).upper()
             score = float(s.get("score"))
             conf = (s.get("confidence"))
