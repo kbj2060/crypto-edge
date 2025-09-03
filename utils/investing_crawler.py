@@ -146,15 +146,15 @@ def parse_calendar_table(page, only_high: bool = True) -> list[dict]:
         if t_text and ":" in t_text:
             try:
                 hh, mm = t_text.split(":")
-                ny_tz = pytz.timezone("America/New_York")
+                utc_tz = pytz.timezone("UTC")
 
-                today = datetime.now(ny_tz).date()
-                dt_utc = datetime(today.year, today.month, today.day, int(hh), int(mm), tzinfo=ny_tz) + timedelta(hours=4)
+                today = datetime.now(utc_tz).date()
+                dt_utc = datetime(today.year, today.month, today.day, int(hh), int(mm), tzinfo=utc_tz) + timedelta(hours=4)
             except:
                 dt_utc = None
 
         if 'min' in t_text:
-            dt_utc = datetime.now(ny_tz) + timedelta(minutes=int(t_text.split(" ")[0])) + timedelta(hours=4)
+            dt_utc = datetime.now(utc_tz) + timedelta(minutes=int(t_text.split(" ")[0])) + timedelta(hours=4)
 
         # 5) 수치(Actual/Forecast/Previous)
         def safe_text(sel, timeout=200):
@@ -278,3 +278,6 @@ def fetch_us_high_events_today(headless: bool = True) -> list[dict]:
         events.sort(key=lambda x: x["time"])
         return events
 
+if __name__ == "__main__":
+    
+    print(events)

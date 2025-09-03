@@ -16,6 +16,7 @@ from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
 # Time Manager import
 from signals import vpvr_golden_strategy
+from utils.investing_crawler import fetch_us_high_events_today
 from utils.time_manager import get_time_manager
 # Binance Data Loader import
 from data.binance_dataloader import BinanceDataLoader
@@ -58,6 +59,7 @@ class BinanceWebSocket:
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
         self._session_activated = self.time_manager.is_session_active()
         self.signals = {}  # 딕셔너리로 변경: 시그널 이름을 키로 사용
+        self.events = []
 
 
     def update_session_status(self, price_data: Dict):
@@ -222,13 +224,17 @@ class BinanceWebSocket:
         # 웹소켓 59초에 마감
         time.sleep(2)
 
+        if self.time_manager.is_midnight_time():
+            print("00시 발생. 오늘의 뉴스 불러오기")
+            today = fetch_us_high_events_today(headless=False)
+            event_times = [event['time'] for event in today]
+            self.events.extend(event_times)
+
         print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
         
         price_data = self._create_price_data(kline)
         self._store_1min_data(price_data)
 
-        # if self._is_15min_candle_close():
-            
         
         # 세션 전략 실행 (정확한 3분봉 마감 시간에)
         if self._is_3min_candle_close():
@@ -236,6 +242,9 @@ class BinanceWebSocket:
             self.data_manager.update_with_candle(series_3m)
             self.global_manager.update_all_indicators(series_3m)
 
+            if self.important_event_occurred():
+                return
+            
             self._execute_session_strategy()
             self._execute_vpvr_golden_strategy()
             self._execute_bollinger_squeeze_strategy()
@@ -254,6 +263,10 @@ class BinanceWebSocket:
 
         self._execute_kline_callbacks(price_data)
         # self.ask_ai_decision(price_data)
+    
+    def important_event_occurred(self) -> bool:
+        """중요 이벤트 발생 여부 체크"""
+            
     
     def ask_ai_decision(self, price_data: Dict):
         atr = get_atr()

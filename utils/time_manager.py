@@ -625,6 +625,11 @@ class TimeManager:
         """현재 시간을 datetime으로 반환"""
         return self.get_current_time()
     
+    def is_midnight_time(self) -> bool:
+        """밤 12시인지 확인"""
+        current_time = self.get_current_time()
+        return current_time.hour == 0 and current_time.minute == 0
+    
     def extract_and_normalize_timestamp(self, candle_data: Any) -> datetime:
         """
         캔들 데이터에서 timestamp를 추출하여 정규화된 UTC datetime으로 반환
