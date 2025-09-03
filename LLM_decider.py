@@ -1,5 +1,5 @@
 # LLM_decider.py  (Ollama only, rules-in-init, streaming supported)
-import os, json, time
+import os, json, time, asyncio
 from typing import Any, Dict, Optional, List
 import requests
 
@@ -69,6 +69,17 @@ class LLMDecider:
         raw = self._call_ollama(self._system_prompt, user_prompt)
         return self._parse_response_safe(raw)
 
+    async def decide_async(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        """비동기 버전 decide - HTTP 호출을 asyncio.to_thread로 래핑"""
+        serializable_signal = self._make_serializable(signal)
+        user_prompt = (
+            "Signal JSON:\n" +
+            json.dumps(serializable_signal, ensure_ascii=False, separators=(',',':')) +
+            "\nRespond with ONLY one JSON object like: " + self._json_schema_hint
+        )
+        raw = await self._call_ollama_async(self._system_prompt, user_prompt)
+        return self._parse_response_safe(raw)
+
     def set_rules(self, rules_text: str):
         """운영 중 규칙 갱신이 필요할 때 호출."""
         rules_text = (rules_text or "").strip()
@@ -104,6 +115,9 @@ class LLMDecider:
                 last_err = e
                 time.sleep(0.5)
         return json.dumps({"decision":"HOLD","confidence":0.0,"reason":f"llm_error:{last_err}"})
+
+    async def _call_ollama_async(self, system: str, user: str) -> str:
+        return await asyncio.to_thread(self._call_ollama, system, user)
 
     def _ollama_stream(self, system: str, user: str) -> str:
         url = f"{self.api_base}/api/generate"
