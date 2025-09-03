@@ -3,7 +3,6 @@ import asyncio
 import math
 import websockets
 import threading
-import time
 import requests  # pip install requests 필요
 from typing import Any, Dict, List, Callable, Optional
 from datetime import datetime, timedelta, timezone
@@ -225,7 +224,7 @@ class BinanceWebSocket:
             return
         
         # 웹소켓 59초에 마감
-        time.sleep(2)
+        await asyncio.sleep(2)
 
         print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
         
