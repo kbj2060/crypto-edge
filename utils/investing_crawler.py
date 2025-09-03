@@ -5,7 +5,7 @@ import random, time
 
 import pytz
 
-from time_manager import get_time_manager
+from utils.time_manager import get_time_manager
 
 # 1) 팝업 닫기 함수 (필요할 때마다 호출)
 def close_popups(page, tries: int = 3, sleep_ms: int = 400):

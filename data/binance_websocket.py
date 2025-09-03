@@ -17,6 +17,7 @@ from indicators.global_indicators import get_atr, get_daily_levels, get_global_i
 # Time Manager import
 from signals import vpvr_golden_strategy
 from utils.investing_crawler import fetch_us_high_events_today
+from utils.telegram import send_telegram_message
 from utils.time_manager import get_time_manager
 # Binance Data Loader import
 from data.binance_dataloader import BinanceDataLoader
@@ -224,17 +225,13 @@ class BinanceWebSocket:
         # 웹소켓 59초에 마감
         time.sleep(2)
 
-        if self.time_manager.is_midnight_time():
-            print("00시 발생. 오늘의 뉴스 불러오기")
-            today = fetch_us_high_events_today(headless=False)
-            event_times = [event['time'] for event in today]
-            self.events.extend(event_times)
-
         print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
         
         price_data = self._create_price_data(kline)
         self._store_1min_data(price_data)
 
+        # 이벤트 차단 기간 체크
+        is_event_blocking = self.is_in_event_blocking_period()
         
         # 세션 전략 실행 (정확한 3분봉 마감 시간에)
         if self._is_3min_candle_close():
@@ -242,31 +239,66 @@ class BinanceWebSocket:
             self.data_manager.update_with_candle(series_3m)
             self.global_manager.update_all_indicators(series_3m)
 
-            if self.important_event_occurred():
-                return
-            
-            self._execute_session_strategy()
-            self._execute_vpvr_golden_strategy()
-            self._execute_bollinger_squeeze_strategy()
-            self._execute_vwap_pinball_strategy()
-            self._execute_ema_trend_15m_strategy()
-            self._execute_fade_reentry_3m_strategy()
-            self._execute_orderflow_cvd_strategy()
-            self._execute_vol_spike_3m_strategy()
-            
-            decision = self.decide_trade_realtime(self.signals, leverage=20)
-            self.print_decision_interpretation(decision)
-            self.signals = {}
+            # 이벤트 차단 기간이 아닐 때만 전략 신호 실행
+            if not is_event_blocking:
+                self._execute_session_strategy()
+                self._execute_vpvr_golden_strategy()
+                self._execute_bollinger_squeeze_strategy()
+                self._execute_vwap_pinball_strategy()
+                self._execute_ema_trend_15m_strategy()
+                self._execute_fade_reentry_3m_strategy()
+                self._execute_orderflow_cvd_strategy()
+                self._execute_vol_spike_3m_strategy()
+                
+                decision = self.decide_trade_realtime(self.signals, leverage=20)
+                self.print_decision_interpretation(decision)
+                if decision.get("action") != "HOLD":
+                    send_telegram_message(decision)
+                self.signals = {}
+            else:
+                print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
 
         self._execute_fade_reentry_1m_strategy()
         self._execute_squeeze_momentum_1m_strategy(price_data)
 
         self._execute_kline_callbacks(price_data)
+
+        if self.time_manager.is_midnight_time():
+            self._load_daily_events()
         # self.ask_ai_decision(price_data)
     
     def important_event_occurred(self) -> bool:
         """중요 이벤트 발생 여부 체크"""
+        return self.is_in_event_blocking_period()
+    
+    def _load_daily_events(self):
+        """일일 이벤트 데이터 로드"""
+        try:
+            print("00시 발생. 오늘의 뉴스 불러오기")
+            today = fetch_us_high_events_today(headless=False)
+            event_times = [event['time'] for event in today]
+            self.events.extend(event_times)
+            print(f"📅 오늘의 이벤트 {len(event_times)}개 로드 완료")
+        except Exception as e:
+            print(f"❌ 일일 이벤트 로드 오류: {e}")
+    
+    def is_in_event_blocking_period(self) -> bool:
+        """이벤트 발생 시간 ±30분 동안인지 체크"""
+        if not self.events:
+            return False
+        
+        current_time = self.time_manager.get_current_time()
+        
+        for event_time in self.events:
+            # 이벤트 시간 ±30분 범위 체크
+            event_start = event_time - timedelta(minutes=30)
+            event_end = event_time + timedelta(minutes=30)
             
+            if event_start <= current_time <= event_end:
+                print(f"🚫 이벤트 차단 기간: {event_time.strftime('%H:%M')} ±30분 (현재: {current_time.strftime('%H:%M')})")
+                return True
+        
+        return False
     
     def ask_ai_decision(self, price_data: Dict):
         atr = get_atr()
