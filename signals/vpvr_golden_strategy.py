@@ -30,10 +30,10 @@ class LVNGoldenPocket:
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 180
+        swing_lookback: int = 180  
         dryup_lookback: int = 20
         dryup_window: int = 5         # 4 -> 5
-        dryup_frac: float = 0.7      # 0.6 -> 0.75 (완화)
+        dryup_frac: float = 0.6      # 0.6 -> 0.75 (완화)
         dryup_k: int = 3              # 최근 N봉 중 최소 k개 만족
         tolerance_atr_mult: float = 0.6  # 0.3 -> 0.5 (완화)
         confirm_body_ratio: float = 0.3 # 0.3 -> 0.25 (조금 완화)

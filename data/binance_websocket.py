@@ -11,6 +11,7 @@ import pandas as pd
 import logging
 
 # Global Indicator Manager import
+from LLM_decider import LLMDecider
 from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
@@ -41,7 +42,8 @@ class BinanceWebSocket:
         self.global_manager = get_global_indicator_manager()
         self.data_manager = get_data_manager()
         self.data_loader = BinanceDataLoader()
-        
+        self.llm_decider = LLMDecider()
+
         # 데이터 저장소
         self.liquidation_bucket = []  # 청산 버킷 추가
         self.max_liquidations = 1000  # 최대 저장 청산 데이터 수
@@ -252,8 +254,10 @@ class BinanceWebSocket:
                 
                 decision = self.decide_trade_realtime(self.signals, leverage=20)
                 self.print_decision_interpretation(decision)
-                if decision.get("action") != "HOLD":
-                    send_telegram_message(decision)
+                judge = self.llm_decider.decide(decision)
+                print(decision, judge)
+                if judge.get("decision") != "HOLD":
+                    send_telegram_message(judge)
                 self.signals = {}
             else:
                 print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")

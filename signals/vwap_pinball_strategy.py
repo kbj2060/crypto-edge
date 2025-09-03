@@ -33,7 +33,7 @@ class VWAPPinballCfg:
     min_bounce_score: float = 0.00
     debug: bool = False
     # 추가된 파라미터
-    score_threshold: float = 0.30      # 이 값 미만이면 신호 무시 (기본 0.60)
+    score_threshold: float = 0.50      # 이 값 미만이면 신호 무시 (기본 0.60)
     momentum_weight: float = 0.20      # 모멘텀 가중치
     slope_weight: float = 0.20         # price-vs-vwap 가중치
 

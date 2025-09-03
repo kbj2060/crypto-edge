@@ -26,7 +26,7 @@ class SessionORLiteCfg:
     allow_either_touched_or_wick: bool = True
     low_conf_trade_scale: float = 0.3
     debug_print: bool = False
-    session_score_threshold: float = 0.50
+    session_score_threshold: float = 0.60
 class SessionORLite:
     def __init__(self, cfg: SessionORLiteCfg = SessionORLiteCfg()):
         self.cfg = cfg
