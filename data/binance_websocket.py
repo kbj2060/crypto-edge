@@ -3,7 +3,6 @@ import asyncio
 import math
 import websockets
 import threading
-import requests  # pip install requests 필요
 from typing import Any, Dict, List, Callable, Optional
 from datetime import datetime, timedelta, timezone
 import pandas as pd
@@ -253,7 +252,7 @@ class BinanceWebSocket:
                 
                 decision = self.decide_trade_realtime(self.signals, leverage=20)
                 self.print_decision_interpretation(decision)
-                judge = self.llm_decider.decide(decision)
+                judge = await self.llm_decider.decide_async(decision)
                 print(decision, judge)
                 if judge.get("decision") != "HOLD":
                     send_telegram_message(judge)
