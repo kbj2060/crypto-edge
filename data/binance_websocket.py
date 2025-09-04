@@ -15,6 +15,7 @@ from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
 # Time Manager import
 from signals import vpvr_golden_strategy
+from utils.display_utils import print_decision_interpretation, print_llm_judgment
 from utils.investing_crawler import fetch_us_high_events_today
 from utils.telegram import send_telegram_message
 from utils.time_manager import get_time_manager
@@ -61,6 +62,8 @@ class BinanceWebSocket:
         self._session_activated = self.time_manager.is_session_active()
         self.signals = {}  # 딕셔너리로 변경: 시그널 이름을 키로 사용
         self.events = []
+
+        self.queue = asyncio.Queue()  # 작업 큐 생성
 
 
     def update_session_status(self, price_data: Dict):
@@ -147,7 +150,8 @@ class BinanceWebSocket:
                     
                     try:
                         data = json.loads(message)
-                        await self.process_liquidation(data)
+                        await self.queue.put(("liquidation", data))
+                        # await self.process_liquidation(data)
                     except json.JSONDecodeError as e:
                         print(f"JSON 파싱 오류: {e}")
                     except Exception as e:
@@ -166,8 +170,19 @@ class BinanceWebSocket:
                     break
                 
                 data = json.loads(message)
-                await self.process_kline_1m(data)
+                await self.queue.put(("kline_1m", data))
+                # await self.process_kline_1m(data)
     
+    async def worker(self):
+        """큐에서 데이터를 소비하며 전략 실행"""
+        while self.running:
+            event_type, data = await self.queue.get()
+
+            if event_type == "kline_1m":
+                await self.process_kline_1m(data)
+            elif event_type == "liquidation":
+                await self.process_liquidation(data)
+
     async def process_liquidation(self, data: Dict):
         '''
         웹소켓 청산 데이터 처리
@@ -234,6 +249,7 @@ class BinanceWebSocket:
         is_event_blocking = self.is_in_event_blocking_period()
         
         # 세션 전략 실행 (정확한 3분봉 마감 시간에)
+        series_3m = None
         if self._is_3min_candle_close():
             series_3m = await self._create_3min_candle()
             self.data_manager.update_with_candle(series_3m)
@@ -251,11 +267,23 @@ class BinanceWebSocket:
                 self._execute_vol_spike_3m_strategy()
                 
                 decision = self.decide_trade_realtime(self.signals, leverage=20)
-                self.print_decision_interpretation(decision)
+                print_decision_interpretation(decision)
+
+                # series_3m이 있을 때만 candle_data 추가
+                if series_3m is not None:
+                    decision["candle_data"] = series_3m.to_dict()
+                
                 judge = await self.llm_decider.decide_async(decision)
-                print(decision, judge)
-                if judge.get("decision") != "HOLD":
-                    send_telegram_message(judge)
+                print_llm_judgment(judge)
+                
+                action = decision.get("action")
+                net_score = decision.get("net_score")
+                llm_decision = judge.get("decision")
+                confidence = judge.get("confidence")
+                
+                if llm_decision != "HOLD" or action != "HOLD":
+                    send_telegram_message(action, net_score, llm_decision, confidence)
+
                 self.signals = {}
             else:
                 print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
@@ -393,16 +421,13 @@ class BinanceWebSocket:
         result = self.vol_spike_3m_strategy.on_kline_close_3m()
 
         if result:
-            name = result.get('name', 'UNKNOWN')
-            action = result.get('action', 'UNKNOWN')
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
-            timestamp = result.get('timestamp', self.time_manager.get_current_time())
-
-            self.signals['VOL_SPIKE_3M'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp}
-            print(f"🎯 [VOL_SPIKE_3M] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [VOL_SPIKE_3M] 전략 신호 없음")
+            self.signals['VOL_SPIKE_3M'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0), 
+                'confidence': result.get('confidence', 'LOW'),
+                'timestamp': self.time_manager.get_current_time()
+            }
+            
 
     def _execute_orderflow_cvd_strategy(self):
         """체결 불균형 근사 전략 실행"""
@@ -411,16 +436,13 @@ class BinanceWebSocket:
         
         result = self.orderflow_cvd_strategy.on_kline_close_3m()
         if result:
-            name = result.get('name', 'UNKNOWN')
-            action = result.get('action', 'UNKNOWN')
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
-            timestamp = result.get('timestamp', self.time_manager.get_current_time())
-
-            self.signals['ORDERFLOW_CVD'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp}
-            print(f"🎯 [ORDERFLOW_CVD] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [ORDERFLOW_CVD] 전략 신호 없음")
+            self.signals['ORDERFLOW_CVD'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'timestamp': self.time_manager.get_current_time()
+            }
+            
 
     def _execute_ema_trend_15m_strategy(self):
         """EMA 트렌드 전략 실행 (15분봉)"""
@@ -429,16 +451,12 @@ class BinanceWebSocket:
         
         result = self.ema_trend_15m_strategy.on_kline_close_15m()
         if result:
-            name = result.get('name', 'UNKNOWN')
-            action = result.get('action', 'UNKNOWN')
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
-            timestamp = result.get('timestamp', self.time_manager.get_current_time())
-
-            self.signals['EMA_TREND_15m'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'timestamp': timestamp}
-            print(f"🎯 [EMA_TREND_15m] 신호: {action} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [EMA_TREND_15m] 전략 신호 없음")
+            self.signals['EMA_TREND_15m'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
 
     def _execute_vwap_pinball_strategy(self):
@@ -450,17 +468,15 @@ class BinanceWebSocket:
         result = self.vwap_pinball_strategy.on_kline_close_3m(df_3m)
 
         if result:
-            action = result.get('action', 'UNKNOWN')
-            entry = result.get('entry', 0)
-            stop = result.get('stop', 0)
-            targets = result.get('targets', [0, 0])
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
+            self.signals['VWAP'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'entry': result.get('entry', 0),
+                'stop': result.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
-            self.signals['VWAP'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
-            print(f"🎯 [VWAP PINBALL] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [VWAP PINBALL] 전략 신호 없음")
 
     def _execute_fade_reentry_1m_strategy(self):
         """빠른 패스 전략 실행"""
@@ -477,46 +493,40 @@ class BinanceWebSocket:
         result = self.fade_reentry_strategy.on_kline_close_3m()
 
         if result:
-            action = result.get('action', 'UNKNOWN')
-            entry = result.get('entry', 0)
-            stop = result.get('stop', 0)
-            targets = result.get('targets', [0, 0])
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
-            self.signals['FADE'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
-            print(f"🎯 [FADE] 3M ENTRY 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [FADE] 3M ENTRY 전략 신호 없음")
+            self.signals['FADE'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'entry': result.get('entry', 0),
+                'stop': result.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
+            
 
     def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
         """SQUEEZE 모멘텀 전략 실행 (1분봉)"""
         if not self.squeeze_momentum_strategy:
             return
         
-        try:
-            # 1분 버킷 처리
-            self.squeeze_momentum_strategy.on_bucket_close(self.liquidation_bucket)
-            
-            # 1분봉 Kline 처리
-            df_1m = pd.DataFrame([price_data])
-            df_1m.set_index('timestamp', inplace=True)
-            
-            result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
-            
+        # 1분 버킷 처리
+        self.squeeze_momentum_strategy.on_bucket_close(self.liquidation_bucket)
+        
+        # 1분봉 Kline 처리
+        df_1m = pd.DataFrame([price_data])
+        df_1m.set_index('timestamp', inplace=True)
+        
+        result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
+        
 
-            if result:
-                action = result.get('action', 'UNKNOWN')
-                entry = result.get('entry', 0)
-                stop = result.get('stop', 0)
-                targets = result.get('targets', [0, 0])
-                score = result.get('score', 0)  # 점수
-                confidence = result.get('confidence', 'LOW')
-                print(f"🎯 [SQUEEZE] 1M 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-                self.signals['LIQUIDATION_SQUEEZE'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
-            else:
-                print(f"📊 [SQUEEZE] 1M 전략 신호 없음")
-        except Exception as e:
-            print(f"❌ [SQUEEZE] 1M 전략 실행 오류: {e}")
+        if result:
+            self.signals['LIQUIDATION_SQUEEZE'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'entry': result.get('entry', 0),
+                'stop': result.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
     def _execute_session_strategy(self):
         """세션 전략 실행"""
@@ -528,18 +538,14 @@ class BinanceWebSocket:
         
         # 전략 분석 결과 출력
         if result:
-            stage = result.get('stage', 'UNKNOWN')
-            action = result.get('action', 'UNKNOWN')
-            entry = result.get('entry', 0)
-            stop = result.get('stop', 0)
-            targets = result.get('targets', [0, 0])
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
-            
-            self.signals['SESSION'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
-            print(f"🎯 [SESSION] {stage} {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [SESSION] 전략 신호 없음")
+            self.signals['SESSION'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'),
+                'entry': result.get('entry', 0),
+                'stop': result.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
+
 
     def _execute_bollinger_squeeze_strategy(self):
 
@@ -549,16 +555,15 @@ class BinanceWebSocket:
         result = self.bollinger_squeeze_strategy.evaluate()
 
         if result:
-            action = result.get('action', 'UNKNOWN')
-            entry = result.get('entry', 0)
-            stop = result.get('stop', 0)
-            targets = result.get('targets', [0, 0])
-            score = result.get('score', 0)
-            confidence = result.get('confidence', 'LOW')
-            self.signals['BB_SQUEEZE'] = {'action': result.get('action', 'UNKNOWN'), 'score': result.get('score', 0), 'confidence': result.get('confidence', 'LOW'), 'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
-            print(f"🎯 [BB Squeeze] 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [BB Squeeze] 전략 신호 없음")
+            self.signals['BB_SQUEEZE'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'entry': result.get('entry', 0),
+                'stop': result.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
+
 
     def _execute_vpvr_golden_strategy(self):
         """VPVR 골든 포켓 전략 실행"""
@@ -572,17 +577,14 @@ class BinanceWebSocket:
         
         # 전략 분석 결과 출력
         if sig:
-            action = sig.get('action', 'UNKNOWN')
-            entry = sig.get('entry', 0)
-            stop = sig.get('stop', 0)
-            targets = sig.get('targets', [0, 0])
-            score = sig.get('score', 0)
-            confidence = sig.get('confidence', 'LOW')
-            self.signals['VPVR'] = {'action': sig.get('action', 'UNKNOWN'), 'score': sig.get('score', 0), 'confidence': sig.get('confidence', 'LOW') ,'entry': entry, 'stop': stop, 'timestamp': self.time_manager.get_current_time()}
+            self.signals['VPVR'] = {
+                'action': sig.get('action', 'UNKNOWN'),
+                'score': sig.get('score', 0), 'confidence': sig.get('confidence', 'LOW') ,
+                'entry': sig.get('entry', 0),
+                'stop': sig.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
-            print(f"🎯 [VPVR] 골든 포켓 신호: {action} | 진입=${entry:.4f} | 손절=${stop:.4f} | 목표=${targets[0]:.4f}, ${targets[1]:.4f} | 점수={score:.2f} | 신뢰도={confidence}")
-        else:
-            print(f"📊 [VPVR] 골든 포켓 전략 신호 없음")
 
     async def _create_3min_candle(self) -> Optional[pd.Series]:
         """3분봉 데이터 생성 (첫 3분봉 마감 시 API 사용, 이후 웹소켓으로 수집)"""
@@ -675,135 +677,7 @@ class BinanceWebSocket:
             print(f"3분봉 데이터 생성 오류: {e}")
             return None
         
-    def print_decision_interpretation(self, decision: dict) -> None:
-        """
-        decision: decide_trade_realtime(...) 반환값
-        사람이 보기 쉽게 해석해서 출력합니다.
-        """
-        if not decision or not isinstance(decision, dict):
-            print("⚠️ decision이 비어있거나 형식이 잘못되었습니다.")
-            return
 
-        action = decision.get("action", "HOLD")
-        net_score = decision.get("net_score", 0.0)
-        reason = decision.get("reason", "")
-        raw = decision.get("raw", {})
-        sizing = decision.get("sizing", {})
-        recommended_scale = decision.get("recommended_trade_scale", 0.0)
-        oppositions = decision.get("oppositions", [])
-        agree_counts = decision.get("agree_counts", {"BUY": 0, "SELL": 0})
-        meta = decision.get("meta", {})
-
-        # compute per-strategy signed contributions (if possible)
-        contributions = []
-        for name, info in (raw.items() if isinstance(raw, dict) else []):
-            try:
-                act = (info.get("action") or "").upper()
-                score = float(info.get("score") or 0.0)
-                conf = float(info.get("conf_factor") or 0.6)
-                weight = float(info.get("weight") or 0.0)
-                sign = 0
-                if act == "BUY":
-                    sign = 1
-                elif act == "SELL":
-                    sign = -1
-                contrib = sign * score * conf * weight
-                contributions.append((name, contrib, act, score, conf, weight))
-            except Exception:
-                # best-effort fallback
-                contributions.append((name, 0.0, info.get("action"), info.get("score"), info.get("confidence"), info.get("weight")))
-
-        # sort by absolute contribution descending
-        contributions_sorted = sorted(contributions, key=lambda x: abs(x[1]), reverse=True)
-
-        # Header
-        print("────────────────────────────────────────────────────────")
-        print(f"🕒 Decision @ {meta.get('timestamp_utc', 'unknown')}")
-        print(f"▶ 추천 액션: {action}    |   net_score={net_score:.3f}    |   recommended_scale={recommended_scale:.3f}")
-        print(f"▶ 이유: {reason}")
-        print("────────────────────────────────────────────────────────")
-
-        # Top contributors
-        if contributions_sorted:
-            print("전략별 기여 (큰 순):")
-            for (name, contrib, act, score, conf, weight) in contributions_sorted:
-                # format contribution sign and percent-ish
-                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
-                print(f" - {name:12s} | action={str(act):5s} | score={score:.3f} conf={conf:.2f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
-        else:
-            print("전략별 정보가 없습니다.")
-
-        # Conflicts and confirmations
-        print("────────────────────────────────────────────────────────")
-        print(f"확인수 (같은 방향, confirm threshold 이상): BUY={agree_counts.get('BUY',0)}  SELL={agree_counts.get('SELL',0)}")
-        if oppositions:
-            print("충돌(상반되는 강한 신호):")
-            for nm, act, sc in oppositions:
-                print(f" - {nm}: {act} (score={sc:.2f})")
-        else:
-            print("충돌 없음")
-
-        # sizing / execution hint
-        print("────────────────────────────────────────────────────────")
-        print("포지션 사이징 / 권장 진입 정보:")
-        qty = sizing.get("qty")
-        risk_usd = sizing.get("risk_usd")
-        entry = sizing.get("entry_used")
-        stop = sizing.get("stop_used")
-        print(f" - 권장 사이즈(스케일): {recommended_scale:.3f} (0..1 로 해석)")
-        if qty is not None:
-            print(f" - 권장 수량(qty): {qty:.4f}")
-        else:
-            print(f" - 권장 수량(qty): 계산 불가 (entry/stop 미확보)")
-        print(f" - 리스크(달러): ${risk_usd}")
-        if entry is not None and stop is not None:
-            dist = abs(entry - stop)
-            print(f" - entry={entry:.4f}  stop={stop:.4f}  (스탑거리={dist:.4f})")
-        else:
-            print(" - entry/stop 정보 부족 (신호 전략에서 제공되는 entry/stop 사용 권장)")
-
-        # human guidance
-        print("────────────────────────────────────────────────────────")
-        if action == "HOLD":
-            # if hold, explain top reasons why
-            reasons = []
-            # net too small
-            if abs(net_score) < 0.35:
-                reasons.append("net_score가 작음 (잡음일 가능성)")
-            if oppositions:
-                reasons.append("상반되는 강한 신호 존재")
-            if reasons:
-                print("권고: HOLD (보류). 이유들:")
-                for r in reasons:
-                    print(" -", r)
-            else:
-                print("권고: HOLD. 추가 확인 또는 더 강한 컨펌 대기.")
-        else:
-            # actionable suggestion
-            print(f"권고: {action} — 실행 전 체크리스트:")
-            # checklist items
-            checklist = []
-            # if any strong opposite exists -> warn
-            if oppositions:
-                checklist.append("상반되는 강한 신호 존재: 재확인 권장 (충돌 시 사이즈 축소)")
-            # if recommended_scale small -> warn
-            if recommended_scale < 0.35:
-                checklist.append(f"권장 스케일이 작음 ({recommended_scale:.2f}) — 소량/스캘프 권장")
-            # if confidence overall low (average conf factor small)
-            avg_conf = 0.0
-            if contributions_sorted:
-                avg_conf = sum([c[4] for c in contributions_sorted]) / max(1.0, len(contributions_sorted))
-            if avg_conf < 0.6:
-                checklist.append("전반적 신뢰도 낮음(중·저) — 보수적 사이징 권장")
-            # print checklist
-            if checklist:
-                for it in checklist:
-                    print(" -", it)
-            else:
-                print(" - 조건 양호: 설정한 사이즈로 진입 고려 가능")
-
-        print("────────────────────────────────────────────────────────")
-        print("")  # blank line for spacing
 
     
     def decide_trade_realtime(
@@ -1156,7 +1030,8 @@ class BinanceWebSocket:
         # 여러 스트림을 동시에 실행
         tasks = [
             self.connect_liquidation_stream(),
-            self.connect_kline_1m_stream(),  # 1분봉 Kline 스트림 추가
+            self.connect_kline_1m_stream(),
+            self.worker()  # 1분봉 Kline 스트림 추가
         ]
         
         await asyncio.gather(*tasks)
