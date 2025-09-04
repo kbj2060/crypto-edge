@@ -6,6 +6,8 @@ from dataclasses import dataclass, asdict
 from collections import defaultdict, deque
 from datetime import datetime, timezone
 import requests
+import copy
+
 # =========================
 # Replay buffer & Calibrator
 # =========================
@@ -229,6 +231,149 @@ class LLMDecider:
         """동기 판단(내부적으로 async 실행). 자동 포지션 엔진/피드백 포함."""
         return asyncio.run(self.decide_async(signal))
 
+    def sanitize_signal_for_llm(self, signal: Dict[str, Any]) -> Dict[str, Any]:
+        s = copy.deepcopy(signal)
+
+        # remove top-level action to avoid biasing the LLM
+        s.pop("action", None)
+
+        raw = s.get("raw") or {}
+        # raw can be dict(strategy_name->info) or list; handle dict primarily
+        clean_strats: Dict[str, Dict[str, Any]] = {}
+        top_scores = []
+        agree_counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
+
+        for name, info in raw.items():
+            # skip non-dict entries
+            if not isinstance(info, dict):
+                continue
+            # normalize name
+            key_name = str(name).upper()
+
+            # infer votes if action present, but do NOT keep action in clean_strats
+            action = info.get("action")
+            if isinstance(action, str):
+                a = action.strip().upper()
+                if a in ("BUY", "LONG"):
+                    agree_counts["BUY"] += 1
+                elif a in ("SELL", "SHORT"):
+                    agree_counts["SELL"] += 1
+                else:
+                    agree_counts["HOLD"] += 1
+
+            # normalize numeric fields
+            score = info.get("score", 0.0)
+            try:
+                score = float(score)
+            except Exception:
+                score = 0.0
+
+            weight = info.get("weight", 0.0)
+            try:
+                weight = float(weight)
+            except Exception:
+                weight = 0.0
+
+            conf_factor = info.get("conf_factor", None)
+            try:
+                if conf_factor is not None:
+                    conf_factor = float(conf_factor)
+            except Exception:
+                conf_factor = None
+
+            # copy allowed fields except 'action'
+            info_copy = {}
+            for k, v in info.items():
+                if k == "action":
+                    continue
+                # convert timestamp -> iso
+                if isinstance(v, datetime):
+                    info_copy[k] = v.isoformat()
+                else:
+                    info_copy[k] = v
+
+            # enforce normalized numeric types into the copy
+            info_copy["score"] = score
+            info_copy["weight"] = weight
+            if conf_factor is not None:
+                info_copy["conf_factor"] = conf_factor
+
+            clean_strats[key_name] = info_copy
+            top_scores.append({"name": key_name, "score": score, "weight": weight})
+
+        # sort top_scores descending by score
+        top_scores.sort(key=lambda x: x["score"], reverse=True)
+
+        # candle-derived features
+        candle = s.get("candle_data") or {}
+        candle_features = {}
+        try:
+            o = float(candle.get("open"))
+            h = float(candle.get("high"))
+            l = float(candle.get("low"))
+            c = float(candle.get("close"))
+            rng = max(h - l, 1e-9)
+            body = c - o
+            body_pct = body / rng if rng else 0.0
+            upper_wick = h - max(o, c)
+            lower_wick = min(o, c) - l
+            wick_total = upper_wick + lower_wick
+            wick_ratio = wick_total / rng if rng else 0.0
+            close_pos = (c - l) / rng if rng else 0.0
+            candle_features = {
+                "open": o, "high": h, "low": l, "close": c,
+                "range": rng,
+                "body": body,
+                "body_pct_of_range": body_pct,
+                "upper_wick": upper_wick,
+                "lower_wick": lower_wick,
+                "wick_ratio": wick_ratio,
+                "close_pos": close_pos,
+            }
+            # simple momentum proxy
+            candle_features["momentum"] = body  # absolute; LLM can normalize if desired
+        except Exception:
+            # missing/invalid candle -> leave features empty or partial
+            pass
+
+        # sizing & meta preservation
+        sizing = s.get("sizing", {})
+        meta = s.get("meta", {})
+
+        # derived summary
+        summary = {
+            "net_score": float(s.get("net_score", 0.0) or 0.0),
+            "recommended_trade_scale": float(s.get("recommended_trade_scale", 0.0) or 0.0),
+            "agree_counts": agree_counts,
+            "top_scores": top_scores[:5],
+            "used_weight_sum": float(meta.get("used_weight_sum", 0.0) or 0.0),
+            "sizing": sizing,
+        }
+
+        # put everything under features for the LLM
+        features = {
+            "strategies": clean_strats,
+            "summary": summary,
+            "candle_features": candle_features,
+            "meta": meta,
+        }
+
+        # build sanitized output
+        sanitized = {
+            "features": features,
+            # keep some useful top-level fields that LLM may need directly
+            "net_score": summary["net_score"],
+            "recommended_trade_scale": summary["recommended_trade_scale"],
+            "candle_data": candle,  # include original numbers too
+            "original_meta": meta,
+        }
+
+        # also include a short human-friendly text reason (optional) but LLM should ignore it
+        if "reason" in s:
+            sanitized["prior_reason"] = s.get("reason")
+
+        return sanitized
+
     # --------------------
     # Public API (async)
     # --------------------
@@ -242,7 +387,8 @@ class LLMDecider:
             3) 결정 로그 기록
         반환: {"decision","confidence","reason","position_events":[(action,pnl)],"position_state":{...}}
         """
-        serializable_signal = self._make_serializable(signal)
+        sanitize_signal_for_llm = self.sanitize_signal_for_llm(signal)
+        serializable_signal = self._make_serializable(sanitize_signal_for_llm)
         self._update_learned_context()
         context_json = json.dumps(self._learned_context, ensure_ascii=False, separators=(',',':'))
 
