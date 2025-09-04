@@ -6,19 +6,18 @@ from datetime import datetime
 TELEGRAM_TOKEN = "8350844521:AAHpbD5_ScI1kp_m8UQXQGh42IpWsYQpFKk"
 CHAT_ID = "8056624519"
 
-def send_telegram_message(message: Dict):
+def send_telegram_message(action, net_score, decision, confidence):
     """
     텔레그램으로 메시지 전송
     """
-    action = message.get("action")
-    score = message.get("net_score")
-    scale = message.get("recommended_trade_scale")
-    ts = message.get("meta", {}).get("timestamp_utc")
+
     url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
     msg = (
-        f"🕒 {ts}\n"
+        f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         f"▶ Action: {action}\n"
-        f"▶ Score: {score:.3f}\n"
+        f"▶ Score: {net_score:.2f}\n"
+        f"▶ Judge Decision: {decision}\n"
+        f"▶ Confidence: {confidence:.2f}\n"
     )
     payload = {
         "chat_id": CHAT_ID,
