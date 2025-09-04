@@ -273,6 +273,7 @@ class BinanceWebSocket:
                 if series_3m is not None:
                     decision["candle_data"] = series_3m.to_dict()
                 
+                
                 judge = await self.llm_decider.decide_async(decision)
                 print_llm_judgment(judge)
                 
