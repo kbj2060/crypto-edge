@@ -6,7 +6,7 @@ from datetime import datetime
 TELEGRAM_TOKEN = "8350844521:AAHpbD5_ScI1kp_m8UQXQGh42IpWsYQpFKk"
 CHAT_ID = "8056624519"
 
-def send_telegram_message(action, net_score, decision, confidence):
+def send_telegram_message(action, net_score):
     """
     텔레그램으로 메시지 전송
     """
@@ -16,8 +16,6 @@ def send_telegram_message(action, net_score, decision, confidence):
         f"🕒 {datetime.now().strftime('%Y-%m-%d %H:%M')}\n"
         f"▶ Action: {action}\n"
         f"▶ Score: {net_score:.2f}\n"
-        f"▶ Judge Decision: {decision}\n"
-        f"▶ Confidence: {confidence:.2f}\n"
     )
     payload = {
         "chat_id": CHAT_ID,

@@ -7,7 +7,9 @@ import pandas as pd
 
 from data.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
-from indicators.global_indicators import get_atr, get_opening_range, get_vwap
+from indicators.global_indicators import get_opening_range
+from signals.session_or_analyzer import SessionORAnalyzer
+from signals.session_or_signal_generator import SessionORSignalGenerator
 
 @dataclass
 class SessionORLiteCfg:
@@ -35,257 +37,73 @@ class SessionORLite:
         self.or_low: Optional[float] = None
         self.time_manager = get_time_manager()
         self.data_manager = get_data_manager()
-        # counters for debugging / telemetry
-        self.debug = {
-            "break_long": 0, "break_short": 0,
-            "retest_long_miss": 0, "retest_short_miss": 0,
-            "vwap_long_block": 0, "vwap_short_block": 0,
-            "low_conf_signals": 0
-        }
+        
+        # 리팩토링된 컴포넌트들
+        self.analyzer = SessionORAnalyzer(cfg)
+        self.signal_generator = SessionORSignalGenerator(cfg)
     
     def on_kline_close_3m(self, df3: pd.DataFrame, session_activated: bool, vwap_prev: Optional[float] = None) -> Optional[Dict[str, Any]]:
+        """3분봉 마감 시 세션 오프닝 레인지 전략 실행"""
         now = self.time_manager.get_current_time()
         
         if session_activated:
             self.session_open = self.time_manager.get_current_session_info().open_time
 
-        if df3 is None or len(df3) < 2:
-            print("df3 is None or len(df3) < 2")
-            return None
-
-        # opening range + indicators
+        # 오프닝 레인지 레벨 가져오기
         self.or_high, self.or_low = get_opening_range()
-        vwap, vwap_std = get_vwap()
-        atr = get_atr()
         
-        last = df3.iloc[-1]; prev = df3.iloc[-2]
-        o = float(last["open"]); h = float(last["high"]); l = float(last["low"]); c = float(last["close"])
-        ph = float(prev["high"]); pl = float(prev["low"])
-
         if self.or_high is None or self.or_low is None or self.or_high <= self.or_low:
             print("self.or_high is None or self.or_low is None or self.or_high <= self.or_low")
             return None
 
-        rng = h - l
-        if rng < 0:
-            print("rng <= 0")
+        # 캔들 데이터 분석
+        candle_analysis = self.analyzer.analyze_candle_data(df3, self.or_high, self.or_low)
+        if not candle_analysis["valid"]:
+            print(f"Invalid candle data: {candle_analysis['reason']}")
             return None
             
-        body = abs(c - o)
-        body_ok = (body / rng) >= self.cfg.body_ratio_min
-        
-        # wick breaks (allow small tick tolerance)
-        wick_break_long  = (h >= self.or_high + self.cfg.tick)
-        wick_break_short = (l <= self.or_low  - self.cfg.tick)
+        ohlc = candle_analysis["ohlc"]
+        prev_ohlc = candle_analysis["prev_ohlc"]
+        range_val = candle_analysis["range"]
 
-        wick_body_ok_long  = (c > o) if self.cfg.wick_needs_body_sign else True
-        wick_body_ok_short = (c < o) if self.cfg.wick_needs_body_sign else True
+        # 각종 조건들 분석
+        body_conditions = self.analyzer.check_body_conditions(ohlc, range_val)
+        break_conditions = self.analyzer.check_break_conditions(ohlc, self.or_high, self.or_low)
+        retest_conditions = self.analyzer.check_retest_conditions(ohlc, prev_ohlc, self.or_high, self.or_low)
+        vwap_conditions = self.analyzer.check_vwap_conditions(ohlc["c"], vwap_prev)
+        volume_conditions = self.analyzer.check_volume_conditions(df3)
 
-        # improved break check: allow wick-only breaks (configurable)
-        break_long_ok = (body_ok and (c >= self.or_high + self.cfg.tick)) or (self.cfg.allow_wick_break and wick_break_long and wick_body_ok_long)
-        break_short_ok = (body_ok and (c <= self.or_low  - self.cfg.tick)) or (self.cfg.allow_wick_break and wick_break_short and wick_body_ok_short)
+        # 모든 조건을 하나의 딕셔너리로 통합
+        all_conditions = {
+            **body_conditions,
+            **break_conditions,
+            **retest_conditions,
+            **vwap_conditions,
+            **volume_conditions
+        }
 
-        if break_long_ok:
-            self.debug["break_long"] += 1
-        if break_short_ok:
-            self.debug["break_short"] += 1
+        # 점수 계산
+        scores = self.analyzer.calculate_scores(all_conditions)
 
-        # retest buffer (made more permissive)
-        buf_long  = self.cfg.retest_atr * float(atr) if atr else self.cfg.retest_atr
-        buf_short = self.cfg.retest_atr * self.cfg.retest_atr_mult_short * float(atr) if atr else self.cfg.retest_atr * self.cfg.retest_atr_mult_short
+        # 수락 조건 체크
+        acceptance = self.analyzer.check_acceptance_conditions(all_conditions, scores)
 
-        # allow either the current bar or the prior to be within buffer (more permissive)
-        min_low = min(l, pl)
-        max_high = max(h, ph)
-        
-        touched_long  = (min_low >= self.or_high - buf_long) and (min_low <= self.or_high + buf_long)
-        touched_short = (max_high <= self.or_low + buf_short) and (max_high >= self.or_low - buf_short)
+        # 최종 분석 결과
+        analysis_result = {
+            **all_conditions,
+            **scores,
+            **acceptance
+        }
 
-        if not touched_long:
-            self.debug["retest_long_miss"] += 1
-        if not touched_short:
-            self.debug["retest_short_miss"] += 1
+        # 신호 생성
+        signals = self.signal_generator.generate_signals(
+            analysis_result, ohlc, self.or_high, self.or_low, vwap_conditions
+        )
 
-        # VWAP-based gating (configurable modes)
-        vwap_ok_long = vwap_ok_short = True
-        mode = (self.cfg.vwap_filter_mode or "off").lower()
-        if mode == "location":
-            try:
-                vwap_ok_long  = c >= float(vwap)
-                vwap_ok_short = c <= float(vwap)
-            except Exception:
-                vwap_ok_long = vwap_ok_short = True
-        elif mode == "slope" and vwap_prev is not None:
-            try:
-                slope_up = float(vwap) >= float(vwap_prev)
-                vwap_ok_long, vwap_ok_short = slope_up, (not slope_up)
-            except Exception:
-                vwap_ok_long = vwap_ok_short = True
+        # 최적의 신호 선택
+        chosen_signal = self.signal_generator.select_best_signal(signals)
 
-        if not vwap_ok_long:
-            self.debug["vwap_long_block"] += 1
-        if not vwap_ok_short:
-            self.debug["vwap_short_block"] += 1
+        if not chosen_signal and self.cfg.debug_print:
+            print("[SESSION_OR] no signals generated")
 
-        sigs = []
-        # permissive acceptance rule:
-        # require break_ok AND (touched OR wick_break) AND vwap_ok
-        W = {"break": 0.30, "touched": 0.30, "wick": 0.20, "vwap": 0.10, "vol": 0.10}
-        SCORE_THRESHOLD = getattr(self.cfg, "session_score_threshold", 0.50)
-
-        vol_ok = True
-        vol_ratio = None
-        
-        # component booleans
-        comp_break_long = (body_ok and (c >= self.or_high + self.cfg.tick))
-        comp_break_short = (body_ok and (c <= self.or_low - self.cfg.tick))
-        comp_wick_long = wick_break_long and wick_body_ok_long
-        comp_wick_short = wick_break_short and wick_body_ok_short
-        comp_touched_long = touched_long
-        comp_touched_short = touched_short
-        comp_vwap_long = vwap_ok_long
-        comp_vwap_short = vwap_ok_short
-        comp_vol = vol_ok
-
-        # scores
-        score_long = (W['break']*float(comp_break_long)
-                    + W['touched']*float(comp_touched_long)
-                    + W['wick']*float(comp_wick_long)
-                    + W['vwap']*float(comp_vwap_long)
-                    + W['vol']*float(comp_vol))
-
-        score_short = (W['break']*float(comp_break_short)
-                    + W['touched']*float(comp_touched_short)
-                    + W['wick']*float(comp_wick_short)
-                    + W['vwap']*float(comp_vwap_short)
-                    + W['vol']*float(comp_vol))
-
-        # Final accept: score + at least one primary condition (avoid pure-volume triggers)
-        accept_long = (score_long >= SCORE_THRESHOLD) and (comp_break_long or comp_wick_long or comp_touched_long)
-        accept_short = (score_short >= SCORE_THRESHOLD) and (comp_break_short or comp_wick_short or comp_touched_short)
-
-        # detect low-confidence cases (wick-only with low body or missing retest)
-        low_conf_long = False
-        low_conf_short = False
-
-        # ---------------- safe volume check ----------------
-        vol_ok = True
-        vol_ratio = None
-        try:
-            if 'quote_volume' in df3.columns:
-                v_series = df3['quote_volume'].astype(float)
-            elif 'volume' in df3.columns and 'close' in df3.columns:
-                v_series = (df3['volume'].astype(float) * df3['close'].astype(float))
-            else:
-                v_series = None
-
-            if v_series is not None:
-                ma = v_series.rolling(20, min_periods=1).mean().iloc[-1]
-                last_v = float(v_series.iloc[-1])
-                vol_ratio = last_v / (ma if ma>0 else 1.0)
-                vol_threshold = getattr(self.cfg, 'vol_ok_threshold', 0.5)
-                vol_ok = vol_ratio >= vol_threshold
-            else:
-                vol_ok = True
-                vol_ratio = None
-        except Exception as e:
-            vol_ok = True
-            vol_ratio = None
-            if getattr(self.cfg, 'debug_print', False):
-                print('[SESSION_OR] volume calc error:', repr(e))
-        # ---------------------------------------------------
-        # long low-conf detection
-        if accept_long:
-            if (not body_ok) or (not touched_long and wick_break_long):
-                if not vol_ok:
-                    low_conf_long = True
-                elif not touched_long:
-                    low_conf_long = True
-
-        # short low-conf detection
-        if accept_short:
-            if (not body_ok) or (not touched_short and wick_break_short):
-                if not vol_ok:
-                    low_conf_short = True
-                elif not touched_short:
-                    low_conf_short = True
-
-        def _conf_bucket(s):
-            return "HIGH" if s>=0.75 else ("MEDIUM" if s>=0.5 else "LOW")
-        
-        # prepare signals (with low_confidence metadata)
-        if accept_long:
-            entry = h + self.cfg.tick
-            stop  = min(l, self.or_high - self.cfg.atr_stop_mult * float(atr)) - self.cfg.tick if atr else (min(l, self.or_high) - self.cfg.tick)
-            R = entry - stop
-            tp1, tp2 = entry + self.cfg.tp_R1 * R, entry + self.cfg.tp_R2 * R
-            low_conf = bool(low_conf_long)
-            trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
-            if low_conf:
-                self.debug["low_conf_signals"] += 1
-            reasons_long = []
-            if comp_break_long: reasons_long.append("break_body")
-            if comp_wick_long: reasons_long.append("wick_break")
-            if comp_touched_long: reasons_long.append("retest")
-            if comp_vwap_long: reasons_long.append("vwap_ok")
-            if vol_ratio is not None: reasons_long.append(f"vol_ratio={vol_ratio:.2f}")
-            
-            sigs.append({
-                "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
-                "targets": [float(tp1), float(tp2)],
-                "context": {
-                    "mode": "SESSION_OR_LITE", "or_high": float(self.or_high),
-                    "atr": float(atr), "vwap": float(vwap), "vwap_std": float(vwap_std if vwap_std is not None else 0.0),
-                    "touched_buf": float(buf_long), "body_ok": body_ok, "wick_break": wick_break_long,
-                    "vol_ratio": float(vol_ratio) if vol_ratio is not None else None
-                },
-                "low_confidence": low_conf,
-                "trade_size_scale": trade_scale,
-                "score": float(score_long),
-                "confidence": _conf_bucket(score_long),
-                "reasons": reasons_long
-            })
-
-        if accept_short:
-            entry = l - self.cfg.tick
-            stop  = max(h, self.or_low + self.cfg.atr_stop_mult * float(atr)) + self.cfg.tick if atr else (max(h, self.or_low) + self.cfg.tick)
-            R = stop - entry
-            tp1, tp2 = entry - self.cfg.tp_R1 * R, entry - self.cfg.tp_R2 * R
-            low_conf = bool(low_conf_short)
-            trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
-            if low_conf:
-                self.debug["low_conf_signals"] += 1
-            reasons_short = []
-            if comp_break_short: reasons_short.append("break_body")
-            if comp_wick_short: reasons_short.append("wick_break")
-            if comp_touched_short: reasons_short.append("retest")
-            if comp_vwap_short: reasons_short.append("vwap_ok")
-            if vol_ratio is not None: reasons_short.append(f"vol_ratio={vol_ratio:.2f}")
-            sigs.append({
-                "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
-                "targets": [float(tp1), float(tp2)],
-                "context": {
-                    "mode": "SESSION_OR_LITE", "or_low": float(self.or_low),
-                    "atr": float(atr), "vwap": float(vwap), "vwap_std": float(vwap_std if vwap_std is not None else 0.0),
-                    "touched_buf": float(buf_short), "body_ok": body_ok, "wick_break": wick_break_short,
-                    "vol_ratio": float(vol_ratio) if vol_ratio is not None else None
-                },
-                "low_confidence": low_conf,
-                "trade_size_scale": trade_scale,
-                "score": float(score_short),
-                "confidence": _conf_bucket(score_short),
-                "reasons": reasons_short
-            })
-
-        if not sigs:
-            if self.cfg.debug_print:
-                print("[SESSION_OR] no signals: break_long_ok=%s touched_long=%s wick_long=%s vwap_ok_long=%s | break_short_ok=%s touched_short=%s wick_short=%s vwap_ok_short=%s" %
-                        (break_long_ok, touched_long, wick_break_long, vwap_ok_long, break_short_ok, touched_short, wick_break_short, vwap_ok_short))
-            print("no signals")
-            return None
-
-        sigs_sorted = sorted(sigs, key=lambda s: (0 if not s.get("low_confidence", False) else 1, -abs((s["entry"] - s["stop"])) ))
-        chosen = sigs_sorted[0]
-        if self.cfg.debug_print:
-            print(f"[SESSION_OR] chosen {chosen['action']} entry={chosen['entry']} stop={chosen['stop']} low_conf={chosen.get('low_confidence')} trade_scale={chosen.get('trade_size_scale')}")
-        return chosen
+        return chosen_signal
