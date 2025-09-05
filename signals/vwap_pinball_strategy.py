@@ -121,6 +121,7 @@ class VWAPPinballStrategy:
         if vwap_val is None:
             print("vwap_val is None")
             return None
+        
         vwap_val = float(vwap_val)
         vwap_std = float(vwap_std) if vwap_std and vwap_std > 0 else max(0.01, float(np.std(df3['close'].values)) * 0.02)
 

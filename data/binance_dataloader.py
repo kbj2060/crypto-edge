@@ -23,6 +23,7 @@ class BinanceDataLoader:
         self,
         interval: str = "3m",
         symbol: str = "ETHUSDT",
+        limit: int = 1500,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
     ) -> Optional[pd.DataFrame]:
@@ -42,7 +43,7 @@ class BinanceDataLoader:
             params = {
                 'symbol': symbol.upper(),
                 'interval': interval,
-                'limit': 1500
+                'limit': limit
             }
             
             # 시간 범위 지정
@@ -110,7 +111,7 @@ class BinanceDataLoader:
         
         return self.fetch_data(interval="3m", symbol=symbol, start_time=start_time, end_time=utc_now)
     
-    def _parse_klines_data(self, data: List, ) -> pd.DataFrame:
+    def _parse_klines_data(self, data: List) -> pd.DataFrame:
         """바이낸스 Kline 데이터를 DataFrame으로 파싱"""
         try:
             if not data:

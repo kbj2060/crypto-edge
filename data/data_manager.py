@@ -56,8 +56,23 @@ class DataManager:
                 end_time=current_time
             )
             
+            df_15m = self.dataloader.fetch_data(
+                interval="15m",
+                symbol=symbol,
+                limit=300
+            )
+            
+            df_1h = self.dataloader.fetch_data(
+                interval="1h",
+                symbol=symbol,
+                limit=300
+            )
+            
+            
             if df_3m is not None and not df_3m.empty:
                 self.data = df_3m.copy()
+                self.data_15m = df_15m.copy()
+                self.data_1h = df_1h.copy()
                 
                 # 마지막 3분봉 타임스탬프 설정
                 if not self.data.empty:
