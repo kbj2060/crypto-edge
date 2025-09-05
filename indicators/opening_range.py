@@ -47,6 +47,7 @@ class OpeningRange:
     def _initialize_or(self):
         """OR 계산"""
         current_session_start = self._get_or_time()
+
         if current_session_start <= self.time_manager.get_current_time() <= current_session_start + timedelta(minutes=self.or_minutes):
             return False
 
@@ -68,6 +69,7 @@ class OpeningRange:
         try:
             current_time = self.time_manager.get_current_time()
             session_open_time = self.time_manager.get_current_session_info().open_time
+
             if session_open_time is None:
                 session_open_time = self.time_manager.get_previous_session_close()
             return session_open_time
@@ -133,7 +135,7 @@ class OpeningRange:
         """
         try:
             df = self.get_data(start_time, end_time)
-            print(start_time, end_time)
+
             if df is not None:
                 start_utc = self.time_manager.ensure_utc(start_time)
                 end_utc = self.time_manager.ensure_utc(end_time)

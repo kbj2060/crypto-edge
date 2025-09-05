@@ -30,27 +30,33 @@ class TradeDecisionEngine:
         
         # 기본 가중치 설정
         priority_order = [
-            "ORDERFLOW_CVD",
-            "VWAP_PINBALL",
-            "VPVR",
-            "VOL_SPIKE",
-            "BB_SQUEEZE",
-            "SESSION",
-            "EMA_TREND_15M",
-            "RSI_DIV",
-            "ICHIMOKU",
+            "ORDERFLOW_CVD",       # 마이크로구조 / 체결 흐름 — 핵심
+            "VWAP_PINBALL",        # 세션 기준 동적 지지/저항 & 리테스트 핀볼
+            "HTF_TREND_15M",       # 고타임프레임 추세 확인(15m/1h) — 컨텍스트 필터
+            "VPVR",                # 체결량 기반 레벨(지지/저항)
+            "VPVR_MICRO",       # VPVR 마이크로봇(POC 리테스트) — 레벨 전용 보조
+            "VOL_SPIKE",           # 적응형 볼륨 스파이크 (median + z-score)
+            "ZSCORE_MEAN_REVERSION",     # 통계적 평균회귀 (z-score) — 직교성 검증/리버전
+            "BB_SQUEEZE",          # 변동성 확장 트리거 (진입 보조)
+            "SESSION",             # 세션 모멘텀 / 오프닝 영향 (보조)
+            "EMA_TREND_15M",       # 방향성 필터 (진입 허가용, 보조)
+            "RSI_DIV",             # 다이버전스(보조 확인)
+            "ICHIMOKU",            # 장/중기 흐름(약한 보조)
         ]
 
         default_weights = {
-            "ORDERFLOW_CVD": 0.28,
-            "VWAP_PINBALL": 0.20,
-            "VPVR": 0.15,
-            "VOL_SPIKE": 0.10,
-            "BB_SQUEEZE": 0.11,
-            "SESSION": 0.08,
-            "EMA_TREND_15M": 0.05,
-            "RSI_DIV": 0.02,
-            "ICHIMOKU": 0.01,
+            "ORDERFLOW_CVD":   0.26,
+            "VWAP_PINBALL":    0.12,
+            "HTF_TREND_15M":   0.12,
+            "VPVR":            0.12,
+            "VPVR_MICRO":   0.05,
+            "VOL_SPIKE":       0.08,
+            "ZSCORE_MEAN_REVERSION": 0.03,
+            "BB_SQUEEZE":      0.08,
+            "SESSION":         0.05,
+            "EMA_TREND_15M":   0.04,
+            "RSI_DIV":         0.03,
+            "ICHIMOKU":        0.02,
         }
 
         if weights is None:
@@ -58,6 +64,14 @@ class TradeDecisionEngine:
         else:
             for k, v in default_weights.items():
                 weights.setdefault(k, v)
+
+        # after building raw (or before signed calc)
+        ovf_strategy = signals.get("ORDERFLOW_CVD")
+        vwap_strategy = signals.get("VWAP_PINBALL")
+        if ovf_strategy and vwap_strategy and ovf_strategy.get("action") in ("BUY","SELL") and vwap_strategy.get("action") in ("BUY","SELL"):
+            if ovf_strategy.get("action") != vwap_strategy.get("action"):
+                weights["VWAP_PINBALL"] = 0.0
+
 
         now = self.time_manager.get_current_time()
 

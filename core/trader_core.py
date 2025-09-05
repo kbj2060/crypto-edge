@@ -12,7 +12,7 @@ from config.integrated_config import IntegratedConfig
 class TraderCore:
     """트레이더 핵심 컴포넌트 관리"""
     
-    def __init__(self, config: IntegratedConfig):
+    def __init__(self, config: IntegratedConfig, strategy_executor=None):
         self.config = config
         
         # TimeManager 초기화
@@ -20,7 +20,7 @@ class TraderCore:
         self.time_manager = get_time_manager()
         
         # 핵심 컴포넌트 초기화
-        self.websocket = BinanceWebSocket(self.config.symbol)
+        self.websocket = BinanceWebSocket(self.config.symbol, strategy_executor)
     
     def start_websocket(self):
         """웹소켓 시작"""
