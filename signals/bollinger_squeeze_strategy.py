@@ -15,15 +15,15 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class BBSqueezeCfg:
     # Aggressive / high-leverage tuning (10x-20x). More sensitive => earlier entries, tighter stops.
-    ma_period: int = 5                # short MA for responsiveness
-    std_period: int = 5               # short STD
+    ma_period: int = 30                # short MA for responsiveness
+    std_period: int = 30               # short STD
     std_dev: float = 1.25              # slightly tighter bands
     squeeze_lookback: int = 6         # lookback for bb width mean
     squeeze_threshold: float = 0.05   # interpret as normalized strength threshold (lower => more sensitive)
     breakout_lookback: int = 1        # recent bars for breakout highs/lows
-    tp_R1: float = 0.5                # more conservative first target (smaller R)
-    tp_R2: float = 1.0                # tighter second target
-    stop_atr_mult: float = 0.45        # tighter stop (smaller ATR multiplier)
+    tp_R1: float = 1.5                # more conservative first target (smaller R)
+    tp_R2: float = 3.0                # tighter second target
+    stop_atr_mult: float = 1.0        # tighter stop (smaller ATR multiplier)
     tick: float = 0.01
     min_body_ratio: float = 0.06      # allow smaller bodies
     allow_wick_break: bool = True     # allow wick touch as breakout

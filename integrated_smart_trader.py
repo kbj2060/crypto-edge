@@ -5,25 +5,19 @@
 """
 
 import time
-import datetime
-import threading
-import requests
 import pandas as pd
-from typing import Dict, Any, Optional, List
 from core.trader_core import TraderCore
 
 from config.integrated_config import IntegratedConfig
 from data.bucket_aggregator import BucketAggregator
-from data.data_manager import get_data_manager
 from indicators.global_indicators import get_global_indicator_manager
 from signals.bollinger_squeeze_strategy import BBSqueezeCfg, BollingerSqueezeStrategy
 from signals.ema_trend_15m import EMATrend15m
-from signals.liquidation_strategies_lite import SqueezeMomentumStrategy, MomentumConfig, FadeReentryStrategy
 from signals.orderflow_cvd import OrderflowCVD
 from signals.session_or_lite import SessionORLite, SessionORLiteCfg
-from signals.vol_spike_3m import VolSpike3m
 from signals.vpvr_golden_strategy import LVNGoldenPocket
-from signals.vwap_pinball_strategy import VWAPPinballStrategy, VWAPPinballCfg
+from signals.rsi_divergence import RSIDivergence
+from signals.ichimoku import Ichimoku
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -40,24 +34,16 @@ class IntegratedSmartTrader:
         # 청산 버킷 관리 (60초 단위)
         self.liquidation_bucket = []
         
-        # 🚀 1단계: DataManager 우선 초기화 (데이터 준비)
         self._init_data_manager()
         self._init_global_indicators()
         self._init_bucket_aggregator()
-
-        # 🚀 3단계: 고급 청산 전략 초기화
-        # self._init_advanced_liquidation_strategy()
         
-        # 🚀 4단계: 세션 기반 전략 초기화
         self._init_vpvr_golden_strategy()
         self._init_session_strategy()
-        self._init_squeeze_momentum_strategy()
-        self._init_fade_reentry_strategy()
         self._init_bollinger_squeeze_strategy()
-        self._init_vwap_pinball_strategy()
         self._init_ema_trend_15m_strategy()
         self._init_orderflow_cvd_strategy()
-        self._init_vol_spike_3m_strategy()
+        self._init_htf_rsi_divergence_strategy()
 
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
@@ -105,6 +91,17 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
 
+    def _init_htf_rsi_divergence_strategy(self):
+        """HTF RSI Divergence 전략 초기화"""
+        try:
+            self._htf_rsi_divergence_strategy = RSIDivergence()
+
+        except Exception as e:
+            print(f"❌ HTF RSI Divergence 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._htf_rsi_divergence_strategy = None
+
     def _init_orderflow_cvd_strategy(self):
         """체결 불균형 근사 전략 초기화"""
         try:
@@ -116,17 +113,6 @@ class IntegratedSmartTrader:
             traceback.print_exc()
             self._orderflow_cvd_strategy = None
 
-    def _init_vol_spike_3m_strategy(self):
-        """볼륨 스파이크 전략 초기화"""
-        try:
-            self._vol_spike_3m_strategy = VolSpike3m()
-
-        except Exception as e:
-            print(f"❌ 볼륨 스파이크 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._vol_spike_3m_strategy = None
-
     def _init_ema_trend_15m_strategy(self):
         """EMA 트렌드 전략 초기화"""
         try:
@@ -137,18 +123,6 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
             self._ema_trend_15m_strategy = None
-
-    def _init_vwap_pinball_strategy(self):
-        """VWAP 피니언 전략 초기화"""
-        try:
-            config = VWAPPinballCfg()
-            self._vwap_pinball_strategy = VWAPPinballStrategy(config)
-
-        except Exception as e:
-            print(f"❌ VWAP 피니언 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._vwap_pinball_strategy = None
 
     def _init_bucket_aggregator(self):
         """버킷 집계기 초기화"""
@@ -177,31 +151,6 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
             self._vpvr_golden_strategy = None
-
-    def _init_squeeze_momentum_strategy(self):
-        """스퀴즈 모멘텀 전략 초기화"""
-        try:
-            squeeze_config = MomentumConfig()
-            self._squeeze_momentum_strategy = SqueezeMomentumStrategy(squeeze_config)
-            self._squeeze_momentum_strategy.warmup(self.liquidation_bucket)
-
-        except Exception as e:
-            print(f"❌ 스퀴즈 모멘텀 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._squeeze_momentum_strategy = None
-    
-    def _init_fade_reentry_strategy(self):
-        """페이드 리입 전략 초기화"""
-        try:
-            self._fade_reentry_strategy = FadeReentryStrategy()
-            self._fade_reentry_strategy.warmup(self.liquidation_bucket)
-
-        except Exception as e:
-            print(f"❌ 페이드 리입 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._fade_reentry_strategy = None
             
     def _init_session_strategy(self):
         """세션 기반 전략 초기화"""
@@ -223,14 +172,11 @@ class IntegratedSmartTrader:
             # 전략 실행기를 웹소켓에 설정 (None인 전략은 제외)
             strategies = {
                 'session_strategy': self._session_strategy,
-                'squeeze_momentum_strategy': self._squeeze_momentum_strategy,
-                'fade_reentry_strategy': self._fade_reentry_strategy,
                 'vpvr_golden_strategy': self._vpvr_golden_strategy,
                 'bollinger_squeeze_strategy': self._bollinger_squeeze_strategy,
-                'vwap_pinball_strategy': self._vwap_pinball_strategy,
                 'ema_trend_15m_strategy': self._ema_trend_15m_strategy,
                 'orderflow_cvd_strategy': self._orderflow_cvd_strategy,
-                'vol_spike_3m_strategy': self._vol_spike_3m_strategy
+                'htf_rsi_divergence_strategy': self._htf_rsi_divergence_strategy,
             }
             
             # None이 아닌 전략만 필터링하여 전달

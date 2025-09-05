@@ -3,18 +3,16 @@ import asyncio
 import math
 import websockets
 import threading
-from typing import Any, Dict, List, Callable, Optional
-from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Callable, Optional
+from datetime import datetime, timedelta
 import pandas as pd
-import logging
 
 # Global Indicator Manager import
-from LLM_decider import LLMDecider
+from llm.LLM_decider import LLMDecider
 from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
 # Time Manager import
-from signals import vpvr_golden_strategy
 from utils.display_utils import print_decision_interpretation, print_llm_judgment
 from utils.investing_crawler import fetch_us_high_events_today
 from utils.telegram import send_telegram_message
@@ -49,13 +47,12 @@ class BinanceWebSocket:
         
         # 전략 실행기 (외부에서 주입받음 - 실행 엔진 역할)
         self.session_strategy = None
-        self.advanced_liquidation_strategy = None
         self.vpvr_golden_strategy = None
         self.bollinger_squeeze_strategy = None
-        self.vwap_pinball_strategy = None
         self.ema_trend_15m_strategy = None
         self.orderflow_cvd_strategy = None
-        
+        self.htf_rsi_divergence_strategy = None
+
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
         self._first_3min_candle_closed = False  # 첫 3분봉 마감 여부 추적
@@ -85,14 +82,11 @@ class BinanceWebSocket:
     def set_strategies(
         self,
         session_strategy=None,
-        squeeze_momentum_strategy=None,
-        fade_reentry_strategy=None,
         bollinger_squeeze_strategy=None,
         vpvr_golden_strategy=None,
-        vwap_pinball_strategy=None,
         ema_trend_15m_strategy=None,
         orderflow_cvd_strategy=None,
-        vol_spike_3m_strategy=None
+        htf_rsi_divergence_strategy=None
     ):
         """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
         try:
@@ -105,21 +99,9 @@ class BinanceWebSocket:
                 self.bollinger_squeeze_strategy = bollinger_squeeze_strategy
                 print(f"✅ 볼린저 스퀴즈 전략 설정 완료: {type(bollinger_squeeze_strategy).__name__}")
             
-            if squeeze_momentum_strategy is not None:
-                self.squeeze_momentum_strategy = squeeze_momentum_strategy
-                print(f"✅ SQUEEZE 모멘텀 전략 설정 완료: {type(squeeze_momentum_strategy).__name__}")
-            
-            if fade_reentry_strategy is not None:
-                self.fade_reentry_strategy = fade_reentry_strategy
-                print(f"✅ 페이드 리입 전략 설정 완료: {type(fade_reentry_strategy).__name__}")
-                
             if vpvr_golden_strategy is not None:
                 self.vpvr_golden_strategy = vpvr_golden_strategy
                 print(f"✅ VPVR 골든 포켓 전략 설정 완료: {type(vpvr_golden_strategy).__name__}")
-                
-            if vwap_pinball_strategy is not None:
-                self.vwap_pinball_strategy = vwap_pinball_strategy
-                print(f"✅ VWAP 피니언 전략 설정 완료: {type(vwap_pinball_strategy).__name__}")
                 
             if ema_trend_15m_strategy is not None:
                 self.ema_trend_15m_strategy = ema_trend_15m_strategy
@@ -129,42 +111,26 @@ class BinanceWebSocket:
                 self.orderflow_cvd_strategy = orderflow_cvd_strategy
                 print(f"✅ ORDERFLOW CVD 전략 설정 완료: {type(orderflow_cvd_strategy).__name__}")
             
-            if vol_spike_3m_strategy is not None:
-                self.vol_spike_3m_strategy = vol_spike_3m_strategy
-                print(f"✅ VOL SPIKE 3M 전략 설정 완료: {type(vol_spike_3m_strategy).__name__}")
-
+            if htf_rsi_divergence_strategy is not None:
+                self.htf_rsi_divergence_strategy = htf_rsi_divergence_strategy
+                print(f"✅ HTF RSI Divergence 전략 설정 완료: {type(htf_rsi_divergence_strategy).__name__}")
+            
         except Exception as e:
             print(f"❌ 전략 설정 오류: {e}")
             import traceback
             traceback.print_exc()
-    
-    async def connect_liquidation_stream(self):
-        """청산 데이터 스트림 연결"""
-        uri = f"{self.ws_url}/{self.symbol}@forceOrder"
-        
-        try:
-            async with websockets.connect(uri) as websocket:
-                async for message in websocket:
-                    if not self.running:
-                        break
-                    
-                    try:
-                        data = json.loads(message)
-                        await self.queue.put(("liquidation", data))
-                        # await self.process_liquidation(data)
-                    except json.JSONDecodeError as e:
-                        print(f"JSON 파싱 오류: {e}")
-                    except Exception as e:
-                        print(f"청산 데이터 처리 오류: {e}")
-                        
-        except Exception as e:
-            print(f"청산 스트림 연결 오류: {e}")
     
     async def connect_kline_1m_stream(self):
         """1분봉 Kline 스트림 연결"""
         uri = f"{self.ws_url}/{self.symbol}@kline_1m"
         
         async with websockets.connect(uri) as websocket:
+            # 첫 시작 시 signals가 비어있으면 모든 지표 업데이트 및 전략 실행
+            
+            if not self.signals:
+                print("🚀 첫 시작 - 모든 지표 업데이트 및 전략 실행")
+                await self._initialize_all_strategies()
+
             async for message in websocket:
                 if not self.running:
                     break
@@ -173,6 +139,27 @@ class BinanceWebSocket:
                 await self.queue.put(("kline_1m", data))
                 # await self.process_kline_1m(data)
     
+    async def _initialize_all_strategies(self):
+        """첫 시작 시 모든 지표 업데이트 및 전략 실행"""
+        try:
+            # 모든 전략 실행
+            self._execute_session_strategy()
+            self._execute_vpvr_golden_strategy()
+            self._execute_bollinger_squeeze_strategy()
+            self._execute_ema_trend_15m_strategy()
+            self._execute_orderflow_cvd_strategy()
+            self._execute_htf_rsi_divergence_strategy()
+            print("✅ 모든 지표 및 전략 초기화 완료")
+
+            decision = self.decide_trade_realtime(self.signals, leverage=20)
+            print_decision_interpretation(decision)
+
+            judge = await self.llm_decider.decide_async(decision)
+            print_llm_judgment(judge)
+
+        except Exception as e:
+            print(f"❌ 초기화 오류: {e}")
+
     async def worker(self):
         """큐에서 데이터를 소비하며 전략 실행"""
         while self.running:
@@ -180,65 +167,14 @@ class BinanceWebSocket:
 
             if event_type == "kline_1m":
                 await self.process_kline_1m(data)
-            elif event_type == "liquidation":
-                await self.process_liquidation(data)
-
-    async def process_liquidation(self, data: Dict):
-        '''
-        웹소켓 청산 데이터 처리
-        {
-            "e": "forceOrder",  // 이벤트 유형
-            "E": 1713772800000, // 이벤트 시간
-            "o": {
-                "s": "BTCUSDT", // 심볼
-                "S": "SELL",    // 방향
-                "q": "0.001",   // 수량
-                "p": "10000",   // 가격
-                "T": 1713772800000 // 시간
-            }
-        }
-        '''
-        if 'o' in data:  # 청산 이벤트
-            # qty_usd 계산 (수량 × 가격)
-            qty_usd = float(data['o']['q']) * float(data['o']['p'])
-            
-            liquidation = {
-                'timestamp': self.time_manager.get_current_time(),
-                'symbol': data['o']['s'],
-                'side': data['o']['S'],  # BUY/SELL
-                'size': float(data['o']['q']),
-                'price': float(data['o']['p']),
-                'qty_usd': qty_usd,  # USD 기준 청산 금액
-                'time': data['o']['T']
-            }
-            
-            # 청산 버킷에 추가
-            self.liquidation_bucket.append(liquidation)
-            self.bucket_aggregator.add_liquidation_event(liquidation)
-            
-            # 최대 개수 제한
-            if len(self.liquidation_bucket) > self.max_liquidations:
-                self.liquidation_bucket.pop(0)
-            
-            # 콜백 실행
-            for callback in self.callbacks['liquidation']:
-                try:
-                    callback(liquidation)
-                except Exception as e:
-                    print(f"청산 콜백 실행 오류: {e}")
 
     async def process_kline_1m(self, data: Dict):
         """1분봉 Kline 데이터 처리 - 3분봉 포함"""
-        if 'k' not in data:  # Kline 이벤트가 아니면 종료
-            return
+        if 'k' not in data: return
         kline = data['k']
+        if not kline.get('x', True): return
         
-        # 1분봉 마감 체크 (k.x == true)
-        if not kline.get('x', True):  # 마감되지 않은 캔들이면 종료
-            return
-        
-        # 웹소켓 59초에 마감
-        await asyncio.sleep(2)
+        await asyncio.sleep(1)
 
         print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
         
@@ -247,10 +183,8 @@ class BinanceWebSocket:
 
         # 이벤트 차단 기간 체크
         is_event_blocking = self.is_in_event_blocking_period()
-        
-        # 세션 전략 실행 (정확한 3분봉 마감 시간에)
-        series_3m = None
-        if self._is_3min_candle_close():
+
+        if self._is_min_candle_close(minutes=3):
             series_3m = await self._create_3min_candle()
             self.data_manager.update_with_candle(series_3m)
             self.global_manager.update_all_indicators(series_3m)
@@ -260,23 +194,19 @@ class BinanceWebSocket:
                 self._execute_session_strategy()
                 self._execute_vpvr_golden_strategy()
                 self._execute_bollinger_squeeze_strategy()
-                self._execute_vwap_pinball_strategy()
                 self._execute_ema_trend_15m_strategy()
-                self._execute_fade_reentry_3m_strategy()
                 self._execute_orderflow_cvd_strategy()
-                self._execute_vol_spike_3m_strategy()
+                
                 
                 decision = self.decide_trade_realtime(self.signals, leverage=20)
                 print_decision_interpretation(decision)
 
                 # series_3m이 있을 때만 candle_data 추가
-                if series_3m is not None:
-                    decision["candle_data"] = series_3m.to_dict()
-                
+                decision["candle_data"] = series_3m.to_dict()
                 
                 judge = await self.llm_decider.decide_async(decision)
                 print_llm_judgment(judge)
-                
+
                 action = decision.get("action")
                 net_score = decision.get("net_score")
                 llm_decision = judge.get("decision")
@@ -289,13 +219,15 @@ class BinanceWebSocket:
             else:
                 print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
 
-        self._execute_fade_reentry_1m_strategy()
-        self._execute_squeeze_momentum_1m_strategy(price_data)
+        if self._is_hour_candle_close(hours=4):
+            if not is_event_blocking:
+                self._execute_htf_rsi_divergence_strategy()
 
         self._execute_kline_callbacks(price_data)
 
         if self.time_manager.is_midnight_time():
             self._load_daily_events()
+            print(self.events)
         # self.ask_ai_decision(price_data)
     
     def important_event_occurred(self) -> bool:
@@ -315,9 +247,6 @@ class BinanceWebSocket:
     
     def is_in_event_blocking_period(self) -> bool:
         """이벤트 발생 시간 ±30분 동안인지 체크"""
-        if not self.events:
-            return False
-        
         current_time = self.time_manager.get_current_time()
         
         for event_time in self.events:
@@ -374,28 +303,28 @@ class BinanceWebSocket:
             'timestamp': kline['t']           # 캔들 종료 시간
         }
     
-    def _is_3min_candle_close(self) -> bool:
+    def _is_min_candle_close(self, minutes: int) -> bool:
         """현재 시간이 3분봉 마감 시간인지 체크 (51분, 54분, 57분, 00분...)"""
         try:
             # time.sleep(1)
             current_time = self.time_manager.get_current_time()
             current_minute = current_time.minute
 
-            return current_minute % 3 == 0
+            return current_minute % minutes == 0
         except Exception as e:
             print(f"3분봉 마감 시간 체크 오류: {e}")
             return False
-        
-    def _is_15min_candle_close(self) -> bool:
-        """현재 시간이 3분봉 마감 시간인지 체크 (51분, 54분, 57분, 00분...)"""
+    
+    def _is_hour_candle_close(self, hours: int) -> bool:
+        """현재 시간이 4시간봉 마감 시간인지 체크 (00:00, 04:00, 08:00, 12:00, 16:00, 20:00)"""
         try:
-            # time.sleep(1)
             current_time = self.time_manager.get_current_time()
+            current_hour = current_time.hour
             current_minute = current_time.minute
 
-            return current_minute % 15 == 0
+            return current_hour % hours == 0 and current_minute == 0
         except Exception as e:
-            print(f"15분봉 마감 시간 체크 오류: {e}")
+            print(f"4시간봉 마감 시간 체크 오류: {e}")
             return False
         
     def _store_1min_data(self, price_data: Dict):
@@ -414,17 +343,17 @@ class BinanceWebSocket:
         except Exception as e:
             print(f"1분봉 데이터 임시 저장 오류: {e}")
 
-    def _execute_vol_spike_3m_strategy(self):
-        """볼륨 스파이크 전략 실행"""
-        if not self.vol_spike_3m_strategy:
+    def _execute_htf_rsi_divergence_strategy(self):
+        """HTF RSI Divergence 전략 실행"""
+        if not self.htf_rsi_divergence_strategy:
             return
         
-        result = self.vol_spike_3m_strategy.on_kline_close_3m()
-
+        result = self.htf_rsi_divergence_strategy.on_kline_close_htf()
+        print(result)
         if result:
-            self.signals['VOL_SPIKE_3M'] = {
+            self.signals['HTF_RSI_DIV'] = {
                 'action': result.get('action', 'UNKNOWN'),
-                'score': result.get('score', 0), 
+                'score': result.get('score', 0),
                 'confidence': result.get('confidence', 'LOW'),
                 'timestamp': self.time_manager.get_current_time()
             }
@@ -459,76 +388,6 @@ class BinanceWebSocket:
                 'timestamp': self.time_manager.get_current_time()
             }
 
-
-    def _execute_vwap_pinball_strategy(self):
-        """VWAP 피니언 전략 실행"""
-        if not self.vwap_pinball_strategy:
-            return
-        
-        df_3m = self.data_manager.get_latest_data(count=4)
-        result = self.vwap_pinball_strategy.on_kline_close_3m(df_3m)
-
-        if result:
-            self.signals['VWAP'] = {
-                'action': result.get('action', 'UNKNOWN'),
-                'score': result.get('score', 0),
-                'confidence': result.get('confidence', 'LOW'),
-                'entry': result.get('entry', 0),
-                'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
-            }
-
-
-    def _execute_fade_reentry_1m_strategy(self):
-        """빠른 패스 전략 실행"""
-        if not self.fade_reentry_strategy:
-            return
-        
-        self.fade_reentry_strategy.on_bucket_close(self.liquidation_bucket)
-
-    def _execute_fade_reentry_3m_strategy(self):
-        """페이드 리입 전략 실행 (3분봉)"""
-        if not self.fade_reentry_strategy:
-            return
-        
-        result = self.fade_reentry_strategy.on_kline_close_3m()
-
-        if result:
-            self.signals['FADE'] = {
-                'action': result.get('action', 'UNKNOWN'),
-                'score': result.get('score', 0),
-                'confidence': result.get('confidence', 'LOW'),
-                'entry': result.get('entry', 0),
-                'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
-            }
-            
-
-    def _execute_squeeze_momentum_1m_strategy(self, price_data: Dict):
-        """SQUEEZE 모멘텀 전략 실행 (1분봉)"""
-        if not self.squeeze_momentum_strategy:
-            return
-        
-        # 1분 버킷 처리
-        self.squeeze_momentum_strategy.on_bucket_close(self.liquidation_bucket)
-        
-        # 1분봉 Kline 처리
-        df_1m = pd.DataFrame([price_data])
-        df_1m.set_index('timestamp', inplace=True)
-        
-        result = self.squeeze_momentum_strategy.on_kline_close_1m(df_1m)
-        
-
-        if result:
-            self.signals['LIQUIDATION_SQUEEZE'] = {
-                'action': result.get('action', 'UNKNOWN'),
-                'score': result.get('score', 0),
-                'confidence': result.get('confidence', 'LOW'),
-                'entry': result.get('entry', 0),
-                'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
-            }
-
     def _execute_session_strategy(self):
         """세션 전략 실행"""
         if not self.session_strategy:
@@ -547,7 +406,6 @@ class BinanceWebSocket:
                 'timestamp': self.time_manager.get_current_time()
             }
 
-
     def _execute_bollinger_squeeze_strategy(self):
 
         if not self.bollinger_squeeze_strategy:
@@ -564,7 +422,6 @@ class BinanceWebSocket:
                 'stop': result.get('stop', 0),
                 'timestamp': self.time_manager.get_current_time()
             }
-
 
     def _execute_vpvr_golden_strategy(self):
         """VPVR 골든 포켓 전략 실행"""
@@ -586,101 +443,131 @@ class BinanceWebSocket:
                 'timestamp': self.time_manager.get_current_time()
             }
 
-
     async def _create_3min_candle(self) -> Optional[pd.Series]:
         """3분봉 데이터 생성 (첫 3분봉 마감 시 API 사용, 이후 웹소켓으로 수집)"""
         try:
-            # 1. 첫 3분봉 마감이면 바이낸스 API에서 데이터 가져오기
+            # 첫 3분봉 마감이면 바이낸스 API에서 데이터 가져오기
             if not self._first_3min_candle_closed:
-                # 현재 시간 기준으로 마지막 완성된 3분봉 데이터 가져오기
-                current_time = self.time_manager.get_current_time()
-                
-                # 현재 진행 중인 3분봉의 시작 시간 계산 (수정됨)
-                current_minute = current_time.minute
-                
-                current_candle_start = current_time.replace(
-                    minute=(current_minute // 3) * 3,
-                    second=0, 
-                    microsecond=0
-                )
-                
-                # 마지막 완성된 3분봉은 현재 진행 중인 3분봉의 이전 3분봉
-                # 예: 19:29분이면 19:24:00 ~ 19:26:59 UTC 3분봉을 가져와야 함
-                last_completed_start = current_candle_start - timedelta(minutes=3)
-                last_completed_end = current_candle_start - timedelta(seconds=1)  # 19:26:59
-                # 바이낸스 API에서 마지막 완성된 3분봉 데이터 가져오기
-                df_3m = self.data_loader.fetch_data(
-                    interval=3,  # 3분봉 직접 요청
-                    symbol=self.symbol.upper(),
-                    start_time=last_completed_start,
-                    end_time=last_completed_end
-                )
-                
-                if df_3m is not None and not df_3m.empty:
-                    # 가장 최근 3분봉 사용
-                    latest_3m = pd.Series(df_3m.iloc[-1])
-                    
-                    # 3분봉 데이터를 Series로 변환
-                    result_series = pd.Series({
-                        'open': float(latest_3m['open']),
-                        'high': float(latest_3m['high']),
-                        'low': float(latest_3m['low']),
-                        'close': float(latest_3m['close']),
-                        'volume': float(latest_3m['volume']),
-                        'quote_volume': float(latest_3m['quote_volume'])
-                    }, name=latest_3m.name)  # timestamp를 name으로 설정
-                
-                    # 첫 3분봉 마감 완료 표시
-                    self._first_3min_candle_closed = True
-                    
-                    self._recent_1min_data = []
-
-                    return result_series
-                else:
-                    print("❌ 첫 3분봉 API 데이터 로드 실패")
-                    return None
+                return await self._create_first_3min_candle_from_api()
             
             # 웹소켓 데이터로 3분봉 생성
-            if len(self._recent_1min_data) >= 3:
-                recent_3_candles = self._recent_1min_data[-3:]
-                
-                # 3분봉 데이터 계산
-                open_price = recent_3_candles[0]['open']
-                high_price = max(candle['high'] for candle in recent_3_candles)
-                low_price = min(candle['low'] for candle in recent_3_candles)
-                close_price = recent_3_candles[-1]['close']
-                total_volume = sum(candle['volume'] for candle in recent_3_candles)
-                total_quote_volume = sum(candle['quote_volume'] for candle in recent_3_candles)
-                
-                # 🔧 수정: 사용된 1분봉 데이터의 마지막 시간을 기준으로 3분봉 마감 시간 계산
-                last_1min_timestamp = self.time_manager.get_timestamp_datetime(recent_3_candles[-1]['timestamp'])
-                
-                # 3분봉 마감 시간 = 마지막 1분봉 시간 (이미 3분봉 구간의 마지막)
-                # API 데이터와 동일한 형식으로 통일: XX:XX:00
-                accurate_timestamp = last_1min_timestamp.replace(
-                    second=0,
-                    microsecond=0
-                )
-                
-                # 3분봉 데이터를 Series로 생성
-                result_series = pd.Series({
-                    'open': open_price,
-                    'high': high_price,
-                    'low': low_price,
-                    'close': close_price,
-                    'volume': total_volume,
-                    'quote_volume': total_quote_volume
-                }, name=accurate_timestamp)
-                
-                return result_series
+            return self._create_3min_candle_from_websocket()
             
         except Exception as e:
             print(f"3분봉 데이터 생성 오류: {e}")
             return None
+
+    async def _create_first_3min_candle_from_api(self) -> Optional[pd.Series]:
+        """첫 3분봉을 API에서 가져와서 생성"""
+        # 현재 시간 기준으로 마지막 완성된 3분봉 데이터 가져오기
+        current_time = self.time_manager.get_current_time()
         
+        # 현재 진행 중인 3분봉의 시작 시간 계산
+        current_candle_start = self._calculate_current_3min_candle_start(current_time)
+        
+        # 마지막 완성된 3분봉 시간 범위 계산
+        last_completed_start, last_completed_end = self._calculate_last_completed_3min_range(current_candle_start)
+        
+        # 바이낸스 API에서 마지막 완성된 3분봉 데이터 가져오기
+        df_3m = self.data_loader.fetch_data(
+            interval="3m",  # 3분봉 직접 요청
+            symbol=self.symbol.upper(),
+            start_time=last_completed_start,
+            end_time=last_completed_end
+        )
+        
+        if df_3m is not None and not df_3m.empty:
+            # API 데이터를 Series로 변환
+            result_series = self._convert_api_data_to_series(df_3m)
+            
+            # 첫 3분봉 마감 완료 표시 및 초기화
+            self._mark_first_3min_candle_completed()
+            
+            return result_series
+        else:
+            print("❌ 첫 3분봉 API 데이터 로드 실패")
+            return None
 
+    def _create_3min_candle_from_websocket(self) -> Optional[pd.Series]:
+        """웹소켓 데이터로 3분봉 생성"""
+        if len(self._recent_1min_data) < 3:
+            return None
+            
+        recent_3_candles = self._recent_1min_data[-3:]
+        
+        # 3분봉 OHLCV 데이터 계산
+        ohlcv_data = self._calculate_3min_ohlcv(recent_3_candles)
+        
+        # 3분봉 마감 시간 계산
+        accurate_timestamp = self._calculate_3min_timestamp(recent_3_candles)
+        
+        # 3분봉 데이터를 Series로 생성
+        result_series = pd.Series(ohlcv_data, name=accurate_timestamp)
+        
+        return result_series
 
-    
+    def _calculate_current_3min_candle_start(self, current_time) -> datetime:
+        """현재 진행 중인 3분봉의 시작 시간 계산"""
+        current_minute = current_time.minute
+        
+        return current_time.replace(
+            minute=(current_minute // 3) * 3,
+            second=0, 
+            microsecond=0
+        )
+
+    def _calculate_last_completed_3min_range(self, current_candle_start) -> tuple[datetime, datetime]:
+        """마지막 완성된 3분봉의 시간 범위 계산"""
+        # 마지막 완성된 3분봉은 현재 진행 중인 3분봉의 이전 3분봉
+        # 예: 19:29분이면 19:24:00 ~ 19:26:59 UTC 3분봉을 가져와야 함
+        last_completed_start = current_candle_start - timedelta(minutes=3)
+        last_completed_end = current_candle_start - timedelta(seconds=1)  # 19:26:59
+        
+        return last_completed_start, last_completed_end
+
+    def _convert_api_data_to_series(self, df_3m: pd.DataFrame) -> pd.Series:
+        """API 데이터를 Series로 변환"""
+        # 가장 최근 3분봉 사용
+        latest_3m = pd.Series(df_3m.iloc[-1])
+        
+        # 3분봉 데이터를 Series로 변환
+        return pd.Series({
+            'open': float(latest_3m['open']),
+            'high': float(latest_3m['high']),
+            'low': float(latest_3m['low']),
+            'close': float(latest_3m['close']),
+            'volume': float(latest_3m['volume']),
+            'quote_volume': float(latest_3m['quote_volume'])
+        }, name=latest_3m.name)  # timestamp를 name으로 설정
+
+    def _mark_first_3min_candle_completed(self):
+        """첫 3분봉 마감 완료 표시 및 초기화"""
+        self._first_3min_candle_closed = True
+        self._recent_1min_data = []
+
+    def _calculate_3min_ohlcv(self, recent_3_candles: list) -> dict:
+        """3분봉 OHLCV 데이터 계산"""
+        return {
+            'open': recent_3_candles[0]['open'],
+            'high': max(candle['high'] for candle in recent_3_candles),
+            'low': min(candle['low'] for candle in recent_3_candles),
+            'close': recent_3_candles[-1]['close'],
+            'volume': sum(candle['volume'] for candle in recent_3_candles),
+            'quote_volume': sum(candle['quote_volume'] for candle in recent_3_candles)
+        }
+
+    def _calculate_3min_timestamp(self, recent_3_candles: list) -> datetime:
+        """3분봉 마감 시간 계산"""
+        # 사용된 1분봉 데이터의 마지막 시간을 기준으로 3분봉 마감 시간 계산
+        last_1min_timestamp = self.time_manager.get_timestamp_datetime(recent_3_candles[-1]['timestamp'])
+        
+        # 3분봉 마감 시간 = 마지막 1분봉 시간 (이미 3분봉 구간의 마지막)
+        # API 데이터와 동일한 형식으로 통일: XX:XX:00
+        return last_1min_timestamp.replace(
+            second=0,
+            microsecond=0
+        )
+
     def decide_trade_realtime(
         self,
         signals: Dict[str, Dict[str, Any]],
@@ -696,33 +583,14 @@ class BinanceWebSocket:
         session_priority: bool = True,
         news_event: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Realtime decision helper to be run every 3 minutes.
-        signals: dict of signals, each signal dict should have:
-        - name: str (e.g. 'SESSION','VPVR','VWAP PINBALL','SQUEEZE','FADE')
-        - action: 'BUY' or 'SELL' (or None)
-        - score: float between 0..1 (or None)
-        - confidence: 'HIGH'/'MEDIUM'/'LOW' or None
-        - entry: optional float (recommended entry price)
-        - stop: optional float (recommended stop price)
-        - timestamp: optional datetime
-        Returns a dict with:
-        - action: 'LONG'/'SHORT'/'HOLD'
-        - net_score, reason, recommended_trade_scale (0..1),
-        - sizing: qty, risk_usd, entry_used, stop_used (qty may be None if unusable)
-        - raw: normalized component scores per-strategy
-        """
         # default weights (can be tuned)
         default_weights = {
-            "SESSION":             0.220,  # 세션 추세/오프닝
-            "VWAP":                0.200,  # 리버전/페이드 핵심
-            "FADE":                0.180,  # 청산 기반 스파이크
-            "LIQUIDATION_SQUEEZE": 0.120,  # 청산 스퀴즈
-            "VOL_SPIKE_3M":        0.090,  # 단기 변동성 급증
-            "VPVR":                0.080,  # 거래량 지지/저항
-            "ORDERFLOW_CVD":       0.060,  # 미세구조 확인
-            "BB_SQUEEZE":          0.030,  # 변동성 예고
-            "EMA_TREND_15M":       0.020   # 장기 추세 필터
+            "SESSION":        0.300,  # 세션 돌파/추세 주도 (핵심 전략)
+            "VPVR":           0.250,  # 거래량 지지/저항 필터 (레버리지 대응 강화)
+            "ORDERFLOW_CVD":  0.150,  # 매수/매도 힘 보조
+            "BB_SQUEEZE":     0.100,  # 변동성 수축/확대 신호 (진입 트리거 보조)
+            "EMA_TREND_15M":  0.150,   # 장기 추세 필터 (방향성 체크)
+            "HTF_RSI_DIV":    0.050   # 고급 RSI 다이버전스 필터 (핵심 전략)
         }
 
             
@@ -737,25 +605,28 @@ class BinanceWebSocket:
         def norm_name(n: str) -> str:
             s = n.strip().upper()
             # common aliases
-            if "VWAP" in s:
-                return "VWAP"
             if "VPVR" in s:
                 return "VPVR"
             if "SESSION" in s:
                 return "SESSION"
-            if "LIQUIDATION_SQUEEZE" in s:
-                return "LIQUIDATION_SQUEEZE"
-            if "FADE" in s:
-                return "FADE"
             if "BB_SQUEEZE" in s:  # Fixed comparison operator
                 return "BB_SQUEEZE"
             if "ORDERFLOW_CVD" in s:  # Fixed comparison operator
                 return "ORDERFLOW_CVD"
             if "EMA_TREND_15M" in s:  # Fixed comparison operator
                 return "EMA_TREND_15M"
-            if "VOL_SPIKE_3M" in s:  # Fixed comparison operator
-                return "VOL_SPIKE_3M"
+            if "HTF_RSI_DIV" in s:
+                return "HTF_RSI_DIV"
             return s
+        
+        priority_order = [
+            "SESSION",
+            "VPVR",
+            "ORDERFLOW_CVD",
+            "BB_SQUEEZE",
+            "EMA_TREND_15M",
+            "HTF_RSI_DIV",
+        ]  
 
         now = self.time_manager.get_current_time()
 
@@ -898,19 +769,8 @@ class BinanceWebSocket:
         # Determine sizing: use primary signal entry/stop if available
         entry_used = None
         stop_used = None
-        # priority for sizing: SESSION -> VPVR -> VWAP -> SQUEEZE -> FADE
-        priority_order = [
-            "SESSION",
-            "VWAP",
-            "FADE",
-            "VOL_SPIKE_3M",
-            "VPVR",
-            "ORDERFLOW_CVD",
-            "BB_SQUEEZE",
-            "EMA_TREND_15M",
-            "LIQUIDATION_SQUEEZE"
-        ]       
         selected_strategy = None
+
         for pname in priority_order:
             r = raw.get(pname)
             if r and r.get("action") and r.get("action") in ("BUY", "SELL"):
@@ -997,26 +857,6 @@ class BinanceWebSocket:
             "meta": {"timestamp_utc": now.isoformat(), "used_weight_sum": used_weight_sum}
         }
     
-    def _print_session_strategy(self, session_signal: Optional[Dict]):
-        """세션 전략 신호 결과 출력"""
-        if not session_signal:
-            print(f"📊 세션 전략 신호 없음")
-            return
-        
-        print(f"🎯 세션 전략 신호: {session_signal.get('playbook', 'UNKNOWN')} {session_signal.get('side', 'UNKNOWN')} | {session_signal.get('stage', 'UNKNOWN')} | {session_signal.get('confidence', 0):.0%}")
-        
-        # Entry 신호인 경우 핵심 정보만
-        if session_signal.get('stage') == 'ENTRY':
-            entry_price = session_signal.get('entry_price')
-            stop_loss = session_signal.get('stop_loss')
-            take_profit = session_signal.get('take_profit1')
-            
-            if entry_price and stop_loss and take_profit:
-                risk = abs(entry_price - stop_loss)
-                reward = abs(take_profit - entry_price)
-                rr_ratio = reward / risk if risk > 0 else 0
-                print(f"💰 진입: ${entry_price:.2f} | 손절: ${stop_loss:.2f} | 목표: ${take_profit:.2f} | R/R: {rr_ratio:.2f}")
-    
     def _execute_kline_callbacks(self, price_data: Dict):
         """1분봉 Kline 콜백 실행"""
         for callback in self.callbacks['kline_1m']:
@@ -1030,7 +870,7 @@ class BinanceWebSocket:
         self.running = True
         # 여러 스트림을 동시에 실행
         tasks = [
-            self.connect_liquidation_stream(),
+            # self.connect_liquidation_stream(),
             self.connect_kline_1m_stream(),
             self.worker()  # 1분봉 Kline 스트림 추가
         ]
