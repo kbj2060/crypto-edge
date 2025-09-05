@@ -15,9 +15,11 @@ from signals.bollinger_squeeze_strategy import BBSqueezeCfg, BollingerSqueezeStr
 from signals.ema_trend_15m import EMATrend15m
 from signals.orderflow_cvd import OrderflowCVD
 from signals.session_or_lite import SessionORLite, SessionORLiteCfg
+from signals.vol_spike_3m import VolSpike
 from signals.vpvr_golden_strategy import LVNGoldenPocket
 from signals.rsi_divergence import RSIDivergence
 from signals.ichimoku import Ichimoku
+from signals.vwap_pinball_strategy import VWAPPinballStrategy
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -45,6 +47,8 @@ class IntegratedSmartTrader:
         self._init_orderflow_cvd_strategy()
         self._init_rsi_divergence_strategy()
         self._init_ichimoku_strategy()
+        self._init_vwap_pinball_strategy()
+        self._init_vol_spike_strategy()
 
 
     def _init_data_manager(self):
@@ -92,6 +96,28 @@ class IntegratedSmartTrader:
             print(f"❌ 글로벌 지표 시스템 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
+            
+    def _init_vol_spike_strategy(self):
+        """Vol Spike 전략 초기화"""
+        try:
+            self._vol_spike_strategy = VolSpike()
+
+        except Exception as e:
+            print(f"❌ Vol Spike 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._vol_spike_strategy = None
+
+    def _init_vwap_pinball_strategy(self):
+        """VWAP Pinball 전략 초기화"""
+        try:
+            self._vwap_pinball_strategy = VWAPPinballStrategy()
+
+        except Exception as e:
+            print(f"❌ VWAP Pinball 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._vwap_pinball_strategy = None
 
     def _init_ichimoku_strategy(self):
         """Ichimoku 전략 초기화"""
@@ -191,6 +217,8 @@ class IntegratedSmartTrader:
                 'orderflow_cvd_strategy': self._orderflow_cvd_strategy,
                 'rsi_divergence_strategy': self._rsi_divergence_strategy,
                 'ichimoku_strategy': self._ichimoku_strategy,
+                'vwap_pinball_strategy': self._vwap_pinball_strategy,
+                'vol_spike_strategy': self._vol_spike_strategy,
             }
             
             # None이 아닌 전략만 필터링하여 전달

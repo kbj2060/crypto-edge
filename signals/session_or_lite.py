@@ -45,7 +45,7 @@ class SessionORLite:
     
     def on_kline_close_3m(self, df3: pd.DataFrame, session_activated: bool, vwap_prev: Optional[float] = None) -> Optional[Dict[str, Any]]:
         now = self.time_manager.get_current_time()
-
+        
         if session_activated:
             self.session_open = self.time_manager.get_current_session_info().open_time
 
@@ -57,7 +57,7 @@ class SessionORLite:
         self.or_high, self.or_low = get_opening_range()
         vwap, vwap_std = get_vwap()
         atr = get_atr()
-
+        
         last = df3.iloc[-1]; prev = df3.iloc[-2]
         o = float(last["open"]); h = float(last["high"]); l = float(last["low"]); c = float(last["close"])
         ph = float(prev["high"]); pl = float(prev["low"])
@@ -70,10 +70,10 @@ class SessionORLite:
         if rng < 0:
             print("rng <= 0")
             return None
-
+            
         body = abs(c - o)
         body_ok = (body / rng) >= self.cfg.body_ratio_min
-
+        
         # wick breaks (allow small tick tolerance)
         wick_break_long  = (h >= self.or_high + self.cfg.tick)
         wick_break_short = (l <= self.or_low  - self.cfg.tick)
@@ -97,7 +97,7 @@ class SessionORLite:
         # allow either the current bar or the prior to be within buffer (more permissive)
         min_low = min(l, pl)
         max_high = max(h, ph)
-
+        
         touched_long  = (min_low >= self.or_high - buf_long) and (min_low <= self.or_high + buf_long)
         touched_short = (max_high <= self.or_low + buf_short) and (max_high >= self.or_low - buf_short)
 
