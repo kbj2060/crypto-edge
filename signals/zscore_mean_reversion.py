@@ -68,6 +68,7 @@ class ZScoreMeanReversion:
         """
         df = self.ensure_index(df)
         if len(df) < max(self.config.min_history, self.config.window + 5):
+            print('insufficient_history')
             return {
                 'name': 'ZSCORE_MEAN_REVERSION', 
                 'action': 'HOLD', 
@@ -76,8 +77,9 @@ class ZScoreMeanReversion:
                 'context': {'reason': 'insufficient_history', 'n': len(df)}
             }
 
-        last_vol = float(df['volume'].iloc[-1]) if 'volume' in df.columns else 0.0
+        last_vol = float(df['quote_volume'].iloc[-1]) if 'quote_volume' in df.columns else 0.0
         if self.config.min_volume and last_vol < self.config.min_volume:
+            print('low_volume')
             return {
                 'name': 'ZSCORE_MEAN_REVERSION', 
                 'action': 'HOLD', 
