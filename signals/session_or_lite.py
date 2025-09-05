@@ -15,9 +15,9 @@ class SessionORLiteCfg:
     body_ratio_min: float = 0.03    # more permissive: smaller body accepted
     retest_atr: float = 0.25        # larger retest buffer (more permissive)
     retest_atr_mult_short: float = 1.2
-    atr_stop_mult: float = 1.0
-    tp_R1: float = 1.0
-    tp_R2: float = 1.6
+    atr_stop_mult: float = 1.5
+    tp_R1: float = 2.0
+    tp_R2: float = 3.0
     tick: float = 0.01
     vwap_filter_mode: str = "off"   # default off
     allow_wick_break: bool = True
@@ -26,7 +26,7 @@ class SessionORLiteCfg:
     allow_either_touched_or_wick: bool = True
     low_conf_trade_scale: float = 0.3
     debug_print: bool = False
-    session_score_threshold: float = 0.60
+    session_score_threshold: float = 0.65
 class SessionORLite:
     def __init__(self, cfg: SessionORLiteCfg = SessionORLiteCfg()):
         self.cfg = cfg

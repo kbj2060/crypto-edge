@@ -21,7 +21,7 @@ class BinanceDataLoader:
     
     def fetch_data(
         self,
-        interval: int = 3,
+        interval: str = "3m",
         symbol: str = "ETHUSDT",
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -41,7 +41,7 @@ class BinanceDataLoader:
             # 파라미터 구성
             params = {
                 'symbol': symbol.upper(),
-                'interval': f'{interval}m',
+                'interval': interval,
                 'limit': 1500
             }
             
@@ -108,7 +108,7 @@ class BinanceDataLoader:
         # 3분봉 개수 계산 (1시간 = 20개)
         candle_count = hours * 20
         
-        return self.fetch_data(interval=3, symbol=symbol, start_time=start_time, end_time=utc_now)
+        return self.fetch_data(interval="3m", symbol=symbol, start_time=start_time, end_time=utc_now)
     
     def _parse_klines_data(self, data: List, ) -> pd.DataFrame:
         """바이낸스 Kline 데이터를 DataFrame으로 파싱"""

@@ -108,7 +108,7 @@ class Calibrator:
 
             win = 1.0 if pnl > 0 else 0.0
 
-            for name in strats.items():
+            for name, info in strats.items():
                 key = (str(name) if name is not None else "UNKNOWN").upper()
                 prev = stats[key]["ema"]
                 stats[key]["ema"] = (1 - self.ema_alpha) * prev + self.ema_alpha * win
@@ -138,12 +138,14 @@ class LLMDecider:
     - ReplayBuffer + Calibrator 로 'learned context' 자동 주입
     - feedback()으로 손익 기록 → 다음 호출부터 자동 보정
     - **심볼별 포지션 엔진**: LONG/SHORT/HOLD, signal.candle_data.close를 체결가로 사용해
-      반대 신호 시 자동 청산 & 손익 기록 → 반대 포지션으로 전환
+        반대 신호 시 자동 청산 & 손익 기록 → 반대 포지션으로 전환
     """
 
     def __init__(
         self,
         model: str = "deepseek-r1:14b",
+        aggressive_mode: bool = True,
+        warmup_trades: int = 10,
         rules_text: str = "",
         api_base: str = "http://localhost:11434",
         temperature: float = 0.0,
@@ -157,6 +159,11 @@ class LLMDecider:
         self.temperature = float(temperature)
         self.max_retries = int(max_retries)
         self.use_json_format = bool(use_json_format)
+
+        # --- Aggressive warmup mode ---
+        self.aggressive_mode = aggressive_mode
+        self.warmup_trades = warmup_trades
+        self._decisions_made = 0
 
         # --- System prompt (Rules-in-init)
         self._json_schema_hint = (
@@ -215,6 +222,21 @@ class LLMDecider:
             "(minutes to hours). Follow these rules strictly:\n" + rules_text +
             "\nReturn ONLY one JSON object exactly like: " + self._json_schema_hint
         )
+
+
+        # --- ensure AutoCalibrator is attached automatically on instantiation ---
+        try:
+            import sys as _sys
+            try:
+                from . import auto_calibrator as _ac
+            except Exception:
+                import auto_calibrator as _ac
+            try:
+                _ac._attach_calibrator_and_methods(_sys.modules[__name__])
+            except Exception:
+                pass
+        except Exception:
+            pass
 
         # --- Learning utilities
         self._replay = ReplayBuffer(path=os.getenv("DECISIONS_LOG", decisions_log_path))
@@ -401,6 +423,20 @@ class LLMDecider:
 
         raw = await self._call_ollama_async(self._system_prompt, user_prompt)
         out = self._parse_response_safe(raw)
+
+        # ---- Aggressive warmup override ----
+        self._decisions_made += 1
+        if self.aggressive_mode and self._decisions_made <= self.warmup_trades:
+            if out.get("decision") == "HOLD":
+                net = serializable_signal.get("net_score", 0)
+                if net >= 0:
+                    out["decision"] = "LONG"
+                    out["reason"] = "warmup_override_long"
+                else:
+                    out["decision"] = "SHORT"
+                    out["reason"] = "warmup_override_short"
+                out["confidence"] = max(0.6, float(out.get("confidence", 0.0)))
+
 
         # ---- Log decision immediately (without outcome)
         symbol = str(signal.get("symbol",""))

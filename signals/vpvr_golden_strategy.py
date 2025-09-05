@@ -30,12 +30,12 @@ class LVNGoldenPocket:
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 180  
+        swing_lookback: int = 400 
         dryup_lookback: int = 20
         dryup_window: int = 5         # 4 -> 5
         dryup_frac: float = 0.6      # 0.6 -> 0.75 (완화)
         dryup_k: int = 3              # 최근 N봉 중 최소 k개 만족
-        tolerance_atr_mult: float = 0.6  # 0.3 -> 0.5 (완화)
+        tolerance_atr_mult: float = 1.0  # 0.3 -> 0.5 (완화)
         confirm_body_ratio: float = 0.3 # 0.3 -> 0.25 (조금 완화)
         atr_len: int = 14
         tick: float = 0.1
@@ -46,8 +46,8 @@ class LVNGoldenPocket:
     @dataclass
     class TargetsStopsCfg:
         stop_atr_mult: float = 0.8
-        tp_R1: float = 1.2
-        tp_R2: float = 2.0
+        tp_R1: float = 2.5
+        tp_R2: float = 4.0
 
     def __init__(
         self,

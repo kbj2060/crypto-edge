@@ -50,7 +50,7 @@ class DataManager:
 
             # 3분봉 데이터 직접 가져오기 (긴 기간은 자동으로 여러 번에 나누어 요청)
             df_3m = self.dataloader.fetch_data(
-                interval=3,
+                interval="3m",
                 symbol=symbol,
                 start_time=yesterday_start,
                 end_time=current_time

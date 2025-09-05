@@ -14,9 +14,9 @@ def _clamp(x, a=0.0, b=1.0):
     
 @dataclass
 class EMATrendConfig:
-    ema_short: int = 20
-    ema_long: int = 50
-    score_scale: float = 0.005   # 0.5% diff -> score ~=1
+    ema_short: int = 50
+    ema_long: int = 200
+    score_scale: float = 0.002   # 0.5% diff -> score ~=1
     min_bars: int = 60
     age_limit_min: int = 60
 
@@ -52,7 +52,7 @@ class EMATrend15m:
         # 데이터 시작 시간을 15분 경계 기준으로 설정
         start_time = last_15min_boundary - timedelta(minutes=15*self.cfg.min_bars)
         
-        df = self.data_loader.fetch_data(interval=15, symbol='ETHUSDT', start_time=start_time, end_time=last_15min_boundary)
+        df = self.data_loader.fetch_data(interval="15m", symbol='ETHUSDT', start_time=start_time, end_time=last_15min_boundary)
 
         if df is None or len(df) < self.cfg.ema_long + 2:
             return None
