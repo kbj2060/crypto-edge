@@ -90,7 +90,7 @@ class RSIDivergence:
             return None
 
         return {
-            "name": f"HTF_RSI_DIV",
+            "name": f"RSI_DIV",
             "action": action,
             "score": float(score),
             "confidence": conf,

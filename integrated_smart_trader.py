@@ -43,7 +43,9 @@ class IntegratedSmartTrader:
         self._init_bollinger_squeeze_strategy()
         self._init_ema_trend_15m_strategy()
         self._init_orderflow_cvd_strategy()
-        self._init_htf_rsi_divergence_strategy()
+        self._init_rsi_divergence_strategy()
+        self._init_ichimoku_strategy()
+
 
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
@@ -91,16 +93,27 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
 
-    def _init_htf_rsi_divergence_strategy(self):
+    def _init_ichimoku_strategy(self):
+        """Ichimoku 전략 초기화"""
+        try:
+            self._ichimoku_strategy = Ichimoku()
+
+        except Exception as e:
+            print(f"❌ Ichimoku 전략 초기화 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            self._ichimoku_strategy = None
+
+    def _init_rsi_divergence_strategy(self):
         """HTF RSI Divergence 전략 초기화"""
         try:
-            self._htf_rsi_divergence_strategy = RSIDivergence()
+            self._rsi_divergence_strategy = RSIDivergence()
 
         except Exception as e:
             print(f"❌ HTF RSI Divergence 전략 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
-            self._htf_rsi_divergence_strategy = None
+            self._rsi_divergence_strategy = None
 
     def _init_orderflow_cvd_strategy(self):
         """체결 불균형 근사 전략 초기화"""
@@ -176,7 +189,8 @@ class IntegratedSmartTrader:
                 'bollinger_squeeze_strategy': self._bollinger_squeeze_strategy,
                 'ema_trend_15m_strategy': self._ema_trend_15m_strategy,
                 'orderflow_cvd_strategy': self._orderflow_cvd_strategy,
-                'htf_rsi_divergence_strategy': self._htf_rsi_divergence_strategy,
+                'rsi_divergence_strategy': self._rsi_divergence_strategy,
+                'ichimoku_strategy': self._ichimoku_strategy,
             }
             
             # None이 아닌 전략만 필터링하여 전달

@@ -198,14 +198,19 @@ class Ichimoku:
             "senkou_b": sb,
             "chikou": chikou
         }
-    def _is_hour_candle_close(self, hours: int) -> bool:
+
+    def _is_hour_candle_close(self, hours: str) -> bool:
         """현재 시간이 시간봉 마감 시간인지 체크 (00:00, 04:00, 08:00, 12:00, 16:00, 20:00)"""
         try:
+            if not hours.endswith('h'):
+                raise Exception(f"시간봉 마감 시간 체크 오류: {hours}는 맞지 않는 형식입니다..")
+            
+            hours_int = int(hours[:-1])
             current_time = self.tm.get_current_time()
             current_hour = current_time.hour
             current_minute = current_time.minute
 
-            return current_hour % hours == 0 and current_minute == 0
+            return current_hour % hours_int == 0 and current_minute == 0
         except Exception as e:
             print(f"시간봉 마감 시간 체크 오류: {e}")
             return False
