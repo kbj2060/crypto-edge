@@ -38,7 +38,7 @@ class VPVRMicro:
             poc_price: Point of Control 가격
         """
         prices = df['close'].astype(float).values
-        vols = df['volume'].astype(float).values
+        vols = df['quote_volume'].astype(float).values
         if len(prices) == 0:
             return None, None, None
         p_min, p_max = float(np.min(prices)), float(np.max(prices))
@@ -68,6 +68,7 @@ class VPVRMicro:
         """
         df_3m = self.ensure_index(df_3m)
         if len(df_3m) < max(self.config.lookback_bars, 10):
+            print('insufficient_bars')
             return {
                 'name': 'VPVR_MICRO', 
                 'action': 'HOLD', 
@@ -79,6 +80,7 @@ class VPVRMicro:
         profile_df = df_3m.iloc[-self.config.lookback_bars:]
         bins, vol_hist, poc = self.compute_vpvr(profile_df, n_bins=self.config.n_bins)
         if bins is None:
+            print('vpvr_fail')
             return {
                 'name': 'VPVR_MICRO', 
                 'action': 'HOLD', 

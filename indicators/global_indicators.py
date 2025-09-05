@@ -248,3 +248,8 @@ def get_vpvr() -> Optional[int]:
         vpvr_indicator.get_status().get('hvn'), 
         vpvr_indicator.get_status().get('lvn')
         )
+def get_vpvr_status() -> Optional[Dict[str, Any]]:
+    """VPVR 상태 바로 가져오기"""
+    manager = get_global_indicator_manager()
+    vpvr_indicator = manager.get_indicator('vpvr')
+    return vpvr_indicator.get_status()
