@@ -298,6 +298,7 @@ class VWAPPinballStrategy:
         ]
 
         result = {
+            "name": "VWAP_PINBALL",
             "stage": "ENTRY",
             "action": best["direction"],
             "entry": float(best["entry"]),

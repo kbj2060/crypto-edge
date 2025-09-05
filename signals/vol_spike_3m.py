@@ -1,11 +1,16 @@
+
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any
 import pandas as pd
+import numpy as np
 
-from data.binance_dataloader import BinanceDataLoader
-from data.data_manager import get_data_manager
-from indicators.global_indicators import get_opening_range
+from utils.time_manager import get_time_manager
+
+try:
+    from data.data_manager import get_data_manager  # type: ignore
+except Exception:
+    get_data_manager = None
 
 def _clamp(x, a=0.0, b=1.0):
     try:
@@ -13,98 +18,198 @@ def _clamp(x, a=0.0, b=1.0):
     except Exception:
         return a
 
-
 @dataclass
 class VolSpikeConfig:
+    # legacy params kept for backward compatibility
     lookback: int = 20
-    vol_threshold: float = 1.6   # last_vol / vol_ma >= threshold
-    vol_ratio_min: float = 1.2
-    use_quote_volume: bool = True
-    price_break_margin: float = 0.0  # optional margin above OR high/low
+    vol_threshold: float = 1.6   # legacy: last_vol / vol_ma >= threshold
+    # dynamic params
+    window: int = 30             # rolling window for dynamic statistics (excludes last bar)
+    mult: float = 3.0            # median multiplier for spike detection (dynamic)
+    z_thresh: float = 2.0        # z-score threshold for dynamic detection
+    min_volume: float = 1.0      # minimum absolute volume to consider
 
-class VolSpike3m:
-    """3분봉에서 볼륨 스파이크 + 가격 돌파를 확인해 브레이크아웃 신호를 낸다."""
-
+class VolSpike:
+    """VOL_SPIKE detector - dynamic mode (median + z-score) while keeping legacy outputs.
+    Preserves existing class name and output keys for compatibility.
+    """
     def __init__(self, cfg: VolSpikeConfig = VolSpikeConfig()):
         self.cfg = cfg
+        self.tm = get_time_manager()
 
-    def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
-        dm = get_data_manager()
-        if dm is None:
-            return None
+    def on_kline_close_3m(self, df: pd.DataFrame) -> Dict[str, Any]:
+        # Validate input
+        if df is None or len(df) < max(5, self.cfg.window + 1):
+            return _no_signal_result(reason="insufficient_data")
 
-        df = dm.get_latest_data(count=self.cfg.lookback + 2)
-        
+        # Require necessary columns
+        for col in ('open', 'high', 'low', 'close', 'volume'):
+            if col not in df.columns:
+                return _no_signal_result(reason=f"missing_column_{col}")
 
-        if df is None or len(df) < self.cfg.lookback + 2:
-            return None
-
-        # compute volume series
-        v_series = pd.to_numeric(df['quote_volume'].astype(float))
-        
-
-        vol_ma = v_series.rolling(self.cfg.lookback, min_periods=1).mean().iloc[-2]
+        df = df.sort_index()
+        v_series = df['volume'].astype(float)
         last_vol = float(v_series.iloc[-1])
-        vol_ratio = (last_vol / (vol_ma if vol_ma > 0 else 1.0))
+        if last_vol < self.cfg.min_volume:
+            return _no_signal_result(reason="low_absolute_volume", last_vol=last_vol)
 
-        # price breakout check - try to use opening range if available
-        price_break_up = False
-        price_break_down = False
+        # Compute legacy vol_ma (rolling mean) excluding last bar for compatibility
         try:
-            or_high, or_low = get_opening_range()
-            last_close = float(df['close'].iloc[-1])
-            if or_high is not None:
-                price_break_up = last_close >= (or_high + self.cfg.price_break_margin)
-                price_break_down = last_close <= (or_low - self.cfg.price_break_margin)
+            vol_ma = float(v_series.rolling(self.cfg.lookback, min_periods=1).mean().iloc[-2])
         except Exception:
-            recent_high = pd.to_numeric(df['high'].astype(float)).iloc[-2:-1].max()
-            recent_low = pd.to_numeric(df['low'].astype(float)).iloc[-2:-1].min()
-            last_close = float(df['close'].iloc[-1])
-            price_break_up = last_close > recent_high
-            price_break_down = last_close < recent_low
+            vol_ma = float(np.mean(v_series[:-1])) if len(v_series) > 1 else float(v_series.iloc[-1])
 
-        score = 0.0
-        action = None
-        conf = 'LOW'
-
-        if vol_ratio >= self.cfg.vol_threshold:
-            base = _clamp((vol_ratio - 1.0) / (self.cfg.vol_threshold - 1.0), 0.0, 1.0)
-            if price_break_up:
-                action = 'BUY'
-                score = _clamp(base, 0.0, 1.0)
-            elif price_break_down:
-                action = 'SELL'
-                score = _clamp(base, 0.0, 1.0)
-            else:
-                action = None
-                score = _clamp(base * 0.5, 0.0, 1.0)
+        # Prepare historical window for dynamic stats excluding last bar
+        if len(v_series) > (self.cfg.window + 1):
+            hist = v_series.iloc[-(self.cfg.window+1):-1].astype(float).values
         else:
-            if vol_ratio >= self.cfg.vol_ratio_min and (price_break_up or price_break_down):
-                base = _clamp((vol_ratio - 1.0) / (self.cfg.vol_threshold - 1.0), 0.0, 1.0)
-                action = 'BUY' if price_break_up else 'SELL'
-                score = _clamp(base * 0.6, 0.0, 1.0)
+            hist = v_series.iloc[:-1].astype(float).values
 
-        if score >= 0.8:
+        if len(hist) < 3:
+            # fallback to all but last
+            hist = v_series.iloc[:-1].astype(float).values
+
+        vol_median = float(np.median(hist)) if len(hist) > 0 else float(vol_ma if vol_ma is not None else 0.0)
+        vol_mean = float(np.mean(hist)) if len(hist) > 0 else vol_median
+        vol_std = float(np.std(hist, ddof=0)) if len(hist) > 1 else 0.0
+
+        # Ratios and z-score
+        vol_ratio = (last_vol / (vol_median if vol_median > 0 else 1.0))
+        legacy_ratio = (last_vol / (vol_ma if vol_ma > 0 else 1.0))
+        vol_z = (last_vol - vol_mean) / vol_std if vol_std > 0 else float('inf')
+
+        # Price breakout detection (conservative)
+        closes = df['close'].astype(float).values
+        highs = df['high'].astype(float).values
+        lows = df['low'].astype(float).values
+        last_close = float(closes[-1])
+        prev_close = float(closes[-2]) if len(closes) > 1 else last_close
+        recent_high = float(np.max(highs[-(self.cfg.window+1):-1])) if len(highs) > 1 else float(highs[-1])
+        recent_low = float(np.min(lows[-(self.cfg.window+1):-1])) if len(lows) > 1 else float(lows[-1])
+
+        price_break_up = last_close > recent_high and last_close > prev_close
+        price_break_down = last_close < recent_low and last_close < prev_close
+
+        # Dynamic detection criteria
+        is_spike_dynamic = (vol_ratio >= self.cfg.mult) or (vol_z >= self.cfg.z_thresh)
+        # Legacy detection (kept for compatibility)
+        is_spike_legacy = (legacy_ratio >= self.cfg.vol_threshold)
+
+        is_spike = bool(is_spike_dynamic or is_spike_legacy)
+
+        # Score composition: give more weight to dynamic signals but include legacy
+        try:
+            score_vol = _clamp(np.log1p(max(0.0, vol_ratio - 1.0)) / np.log1p(self.cfg.mult * 5.0))
+        except Exception:
+            score_vol = 0.0
+        score_z = _clamp(min(1.0, vol_z / (self.cfg.z_thresh * 2.0))) if vol_std > 0 else 0.0
+        score_legacy = _clamp((legacy_ratio - 1.0) / max(1e-6, (self.cfg.vol_threshold - 1.0))) if self.cfg.vol_threshold > 1.0 else 0.0
+
+        score_price = 0.0
+        if price_break_up or price_break_down:
+            score_price = 0.2
+
+        # Weighted aggregation: dynamic-focused
+        raw_score = score_vol * 0.5 + score_z * 0.25 + score_legacy * 0.15 + score_price * 0.10
+        score = _clamp(raw_score, 0.0, 1.0)
+
+        # Confidence: boost when multiple criteria align
+        conf = 0.0
+        cnt = 0
+        if is_spike_dynamic:
+            conf += 0.5; cnt += 1
+        if is_spike_legacy:
+            conf += 0.3; cnt += 1
+        if price_break_up or price_break_down:
+            conf += 0.25; cnt += 1
+        if cnt > 0:
+            conf = _clamp(conf / (1.0 + 0.2 * (cnt - 1)))
+        else:
+            conf = 0.0
+
+        # Decide action
+        action = "HOLD"
+        if is_spike:
+            if price_break_up:
+                action = "BUY"
+            elif price_break_down:
+                action = "SELL"
+            else:
+                action = "BUY" if last_close > prev_close else "SELL"
+
+        if conf >= 0.8:
             conf = 'HIGH'
-        elif score >= 0.5:
+        elif conf >= 0.5:
             conf = 'MEDIUM'
+        elif conf > 0.0:
+            conf = 'LOW'
         else:
             conf = 'LOW'
-        
-        if action is None:
-            return None
 
         return {
-            'name': 'VOL_SPIKE_3m',
+            'name': 'VOL_SPIKE',
             'action': action,
             'score': float(score),
             'confidence': conf,
-            'timestamp': datetime.utcnow(),
+            'timestamp': self.tm.get_current_time(),
             'context': {
                 'vol_ratio': float(vol_ratio),
+                'legacy_ratio': float(legacy_ratio),
+                'vol_median': float(vol_median),
+                'vol_mean': float(vol_mean),
+                'vol_std': float(vol_std),
                 'vol_ma': float(vol_ma) if vol_ma is not None else None,
                 'last_vol': float(last_vol),
+                'is_spike_dynamic': bool(is_spike_dynamic),
+                'is_spike_legacy': bool(is_spike_legacy),
                 'price_break_up': bool(price_break_up),
-                'price_break_down': bool(price_break_down)
+                'price_break_down': bool(price_break_down),
             }
         }
+
+def _no_signal_result(**kwargs):
+    return {
+        'name': 'VOL_SPIKE',
+        'action': 'HOLD',
+        'score': 0.0,
+        'confidence': 0.0,
+        'timestamp': datetime.utcnow(),
+        'context': kwargs
+    }
+
+def generate_signal(df: Optional[pd.DataFrame] = None, symbol: Optional[str] = None,
+                    lookback: int = 20, vol_threshold: float = 1.6,
+                    window: int = 30, mult: float = 3.0, z_thresh: float = 2.0,
+                    min_volume: float = 1.0) -> Dict[str, Any]:
+    cfg = VolSpikeConfig(lookback=lookback, vol_threshold=vol_threshold,
+                         window=window, mult=mult, z_thresh=z_thresh, min_volume=min_volume)
+    detector = VolSpike3m(cfg=cfg)
+    if df is None:
+        if get_data_manager is None or symbol is None:
+            return _no_signal_result(reason="no_data_provided")
+        try:
+            dm = get_data_manager()
+            df = dm.fetch_candles(symbol=symbol, timeframe='3m', limit=max(200, cfg.window + 10))
+        except Exception as e:
+            return _no_signal_result(reason="data_fetch_error", error=str(e))
+
+    # Ensure datetime index & sorted
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index)
+        except Exception:
+            pass
+    df = df.sort_index()
+    return detector.detect(df)
+
+if __name__ == "__main__":
+    # quick self-test with synthetic data
+    import pandas as pd, numpy as np
+    rng = pd.date_range(end=pd.Timestamp.utcnow(), periods=120, freq='3T')
+    vols = np.random.poisson(lam=100, size=len(rng)).astype(float)
+    # insert a big spike
+    vols[-1] = vols[-1] * 8
+    closes = np.cumsum(np.random.randn(len(rng)) * 0.5) + 100
+    df = pd.DataFrame({'open': closes, 'high': closes + 0.2, 'low': closes - 0.2,
+                       'close': closes, 'volume': vols}, index=rng)
+    print(generate_signal(df=df))

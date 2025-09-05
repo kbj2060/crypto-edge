@@ -13,6 +13,7 @@ from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
 # Time Manager import
+from signals.vol_spike_3m import VolSpikeConfig
 from utils.display_utils import print_decision_interpretation, print_llm_judgment
 from utils.investing_crawler import fetch_us_high_events_today
 from utils.telegram import send_telegram_message
@@ -34,7 +35,7 @@ class BinanceWebSocket:
             'liquidation': [],
             'kline_1m': [self.update_session_status]  # 1분봉 Kline 콜백만 사용
         }
-        self.bucket_aggregator = BucketAggregator()
+        # self.bucket_aggregator = BucketAggregator()
         self.time_manager = get_time_manager()
         self.global_manager = get_global_indicator_manager()
         self.data_manager = get_data_manager()
@@ -53,6 +54,8 @@ class BinanceWebSocket:
         self.orderflow_cvd_strategy = None
         self.rsi_divergence_strategy = None
         self.ichimoku_strategy = None
+        self.vwap_pinball_strategy = None
+        self.vol_spike_strategy = None
 
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
@@ -88,7 +91,9 @@ class BinanceWebSocket:
         ema_trend_15m_strategy=None,
         orderflow_cvd_strategy=None,
         rsi_divergence_strategy=None,
-        ichimoku_strategy=None
+        ichimoku_strategy=None,
+        vwap_pinball_strategy=None,
+        vol_spike_strategy=None,
     ):
         """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
         try:
@@ -121,6 +126,14 @@ class BinanceWebSocket:
                 self.ichimoku_strategy = ichimoku_strategy
                 print(f"✅ Ichimoku 전략 설정 완료: {type(ichimoku_strategy).__name__}")
             
+            if vwap_pinball_strategy is not None:
+                self.vwap_pinball_strategy = vwap_pinball_strategy
+                print(f"✅ VWAP Pinball 전략 설정 완료: {type(vwap_pinball_strategy).__name__}")
+            
+            if vol_spike_strategy is not None:
+                self.vol_spike_strategy = vol_spike_strategy
+                print(f"✅ Vol Spike 전략 설정 완료: {type(vol_spike_strategy).__name__}")
+            
         except Exception as e:
             print(f"❌ 전략 설정 오류: {e}")
             import traceback
@@ -147,99 +160,123 @@ class BinanceWebSocket:
     
     async def _initialize_all_strategies(self):
         """첫 시작 시 모든 지표 업데이트 및 전략 실행"""
-        try:
-            # 모든 전략 실행
-            self._execute_session_strategy()
-            self._execute_vpvr_golden_strategy()
-            self._execute_bollinger_squeeze_strategy()
-            self._execute_ema_trend_15m_strategy()
-            self._execute_orderflow_cvd_strategy()
-            self._execute_rsi_divergence_strategy()
-            self._execute_ichimoku_strategy()
+        # 모든 전략 실행
+        self._execute_session_strategy()
+        self._execute_vpvr_golden_strategy()
+        self._execute_bollinger_squeeze_strategy()
+        self._execute_ema_trend_15m_strategy()
+        self._execute_orderflow_cvd_strategy()
+        self._execute_rsi_divergence_strategy()
+        self._execute_ichimoku_strategy()
+        self._execute_vwap_pinball_strategy()
+        self._execute_vol_spike_strategy()
+        print("✅ 모든 지표 및 전략 초기화 완료")
 
-            print("✅ 모든 지표 및 전략 초기화 완료")
+        decision = self.decide_trade_realtime(self.signals, leverage=20)
+        print_decision_interpretation(decision)
 
-            decision = self.decide_trade_realtime(self.signals, leverage=20)
-            print_decision_interpretation(decision)
+        # judge = await self.llm_decider.decide_async(decision)
+        # print_llm_judgment(judge)
 
-            judge = await self.llm_decider.decide_async(decision)
-            print_llm_judgment(judge)
-
-        except Exception as e:
-            print(f"❌ 초기화 오류: {e}")
 
     async def worker(self):
-        """큐에서 데이터를 소비하며 전략 실행"""
+        """큐에서 데이터를 소비하며 전략 실행 (오류 처리 포함)"""
         while self.running:
-            event_type, data = await self.queue.get()
+            try:
+                event_type, data = await self.queue.get()
 
-            if event_type == "kline_1m":
-                await self.process_kline_1m(data)
+                if event_type == "kline_1m":
+                    await self.process_kline_1m(data)
+                    
+            except Exception as e:
+                print(f"❌ [Worker] 데이터 처리 오류: {e}")
+                import traceback
+                traceback.print_exc()
+                # 오류 발생 시에도 계속 실행
+                continue
 
     async def process_kline_1m(self, data: Dict):
-        """1분봉 Kline 데이터 처리 - 3분봉 포함"""
-        if 'k' not in data: return
-        kline = data['k']
-        if not kline.get('x', True): return
-        
-        await asyncio.sleep(1)
+        """1분봉 Kline 데이터 처리 - 3분봉 포함 (오류 처리 강화)"""
+        try:
+            if 'k' not in data: 
+                return
+            kline = data['k']
 
-        print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
-        
-        price_data = self._create_price_data(kline)
-        self._store_1min_data(price_data)
+            if not kline.get('x', True): 
+                return
+            
+            await asyncio.sleep(1)
 
-        # 이벤트 차단 기간 체크
-        is_event_blocking = self.is_in_event_blocking_period()
+            print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
+            
+            price_data = self._create_price_data(kline)
+            self._store_1min_data(price_data)
+            
+        except Exception as e:
+            print(f"❌ [ProcessKline] 1분봉 데이터 처리 오류: {e}")
+            import traceback
+            traceback.print_exc()
+            return
 
-        if self._is_min_candle_close(minutes=3):
-            series_3m = await self._create_3min_candle()
-            self.data_manager.update_with_candle(series_3m)
-            self.global_manager.update_all_indicators(series_3m)
+        try:
+            # 이벤트 차단 기간 체크
+            is_event_blocking = self.is_in_event_blocking_period()
 
-            # 이벤트 차단 기간이 아닐 때만 전략 신호 실행
-            if not is_event_blocking:
-                self._execute_session_strategy()
-                self._execute_vpvr_golden_strategy()
-                self._execute_bollinger_squeeze_strategy()
-                self._execute_ema_trend_15m_strategy()
-                self._execute_orderflow_cvd_strategy()
-                
-                
-                decision = self.decide_trade_realtime(self.signals, leverage=20)
-                print_decision_interpretation(decision)
+            if self._is_min_candle_close(minutes=3):
+                series_3m = await self._create_3min_candle()
+                if series_3m is not None:
+                    self.data_manager.update_with_candle(series_3m)
+                    self.global_manager.update_all_indicators(series_3m)
 
-                # series_3m이 있을 때만 candle_data 추가
-                decision["candle_data"] = series_3m.to_dict()
-                
-                judge = await self.llm_decider.decide_async(decision)
-                print_llm_judgment(judge)
+                    # 이벤트 차단 기간이 아닐 때만 전략 신호 실행
+                    if not is_event_blocking:
+                        self._execute_session_strategy()
+                        self._execute_vpvr_golden_strategy()
+                        self._execute_bollinger_squeeze_strategy()
+                        self._execute_ema_trend_15m_strategy()
+                        self._execute_orderflow_cvd_strategy()
+                        self._execute_vwap_pinball_strategy()
+                        self._execute_vol_spike_strategy()
 
-                action = decision.get("action")
-                net_score = decision.get("net_score")
-                llm_decision = judge.get("decision")
-                confidence = judge.get("confidence")
-                
-                if llm_decision != "HOLD" or action != "HOLD":
-                    send_telegram_message(action, net_score, llm_decision, confidence)
+                        decision = self.decide_trade_realtime(self.signals, leverage=20)
+                        print_decision_interpretation(decision)
 
-                self.signals = {}
-            else:
-                print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
+                        # series_3m이 있을 때만 candle_data 추가
+                        decision["candle_data"] = series_3m.to_dict()
+                        
+                        #judge = await self.llm_decider.decide_async(decision)
+                        #print_llm_judgment(judge)
 
-        if self._is_hour_candle_close(hours=1):
-            self._execute_ichimoku_strategy()
+                        action = decision.get("action")
+                        net_score = decision.get("net_score")
+                        #llm_decision = judge.get("decision")
+                        #confidence = judge.get("confidence")
+                        
+                        #if llm_decision != "HOLD" or action != "HOLD":
+                        #    send_telegram_message(action, net_score, llm_decision, confidence)
 
-        if self._is_hour_candle_close(hours=4):
-            if not is_event_blocking:
-                self._execute_rsi_divergence_strategy()
+                        self.signals = {}
+                    else:
+                        print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
 
-        self._execute_kline_callbacks(price_data)
+            if self._is_hour_candle_close(hours=1):
+                self._execute_ichimoku_strategy()
 
-        if self.time_manager.is_midnight_time():
-            self._load_daily_events()
-            print(self.events)
-        # self.ask_ai_decision(price_data)
+            if self._is_hour_candle_close(hours=4):
+                if not is_event_blocking:
+                    self._execute_rsi_divergence_strategy()
+
+            self._execute_kline_callbacks(price_data)
+
+            if self.time_manager.is_midnight_time():
+                self._load_daily_events()
+                print(self.events)
+            # self.ask_ai_decision(price_data)
+            
+        except Exception as e:
+            print(f"❌ [ProcessKline] 전략 실행 오류: {e}")
+            import traceback
+            traceback.print_exc()
     
     def important_event_occurred(self) -> bool:
         """중요 이벤트 발생 여부 체크"""
@@ -353,6 +390,43 @@ class BinanceWebSocket:
                 
         except Exception as e:
             print(f"1분봉 데이터 임시 저장 오류: {e}")
+
+    def _execute_vol_spike_strategy(self):
+        """Vol Spike 전략 실행"""
+        if not self.vol_spike_strategy:
+            return
+        
+        config = VolSpikeConfig()
+        _count = max(5, config.window + 1)
+
+        df_3m = self.data_manager.get_latest_data(count=_count)
+        result = self.vol_spike_strategy.on_kline_close_3m(df_3m)
+        
+        if result:
+            self.signals['VOL_SPIKE'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'timestamp': self.time_manager.get_current_time()
+            }
+
+    def _execute_vwap_pinball_strategy(self):
+        """VWAP 피니언 전략 실행"""
+        if not self.vwap_pinball_strategy:
+            return
+        
+        df_3m = self.data_manager.get_latest_data(count=4)
+        result = self.vwap_pinball_strategy.on_kline_close_3m(df_3m)
+
+        if result:
+            self.signals['VWAP_PINBALL'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'entry': result.get('entry', 0),
+                'stop': result.get('stop', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
     def _execute_ichimoku_strategy(self):
         """Ichimoku 전략 실행"""
@@ -609,53 +683,36 @@ class BinanceWebSocket:
         news_event: bool = False,
     ) -> Dict[str, Any]:
         # default weights (can be tuned)
+        priority_order = [
+            "ORDERFLOW_CVD",     # 마이크로구조 / 체결 흐름 — 단타 핵심
+            "VWAP_PINBALL",              # 세션 기준 동적 지지/저항 & 리테스트 핀볼 — 메인급
+            "VPVR",              # 체결량 기반 레벨(지지/저항) — 스탑/진입 설정
+            "VOL_SPIKE", # 적응형 볼륨 스파이크 (median + z-score) — 보조(컨펌)
+            "BB_SQUEEZE",        # 변동성 확장 트리거 (진입 보조)
+            "SESSION",           # 세션 모멘텀 / 오프닝 영향 (보조)
+            "EMA_TREND_15M",     # 방향성 필터 (진입 허가용, 보조)
+            "RSI_DIV",           # 다이버전스(보조 확인)
+            "ICHIMOKU",          # 장/중기 흐름(약한 보조)
+        ]
+
         default_weights = {
-            "SESSION":        0.300,  # 세션 돌파/추세 주도 (핵심 전략)
-            "VPVR":           0.200,  # 거래량 지지/저항 필터 (레버리지 대응 강화)
-            "ORDERFLOW_CVD":  0.150,  # 매수/매도 힘 보조
-            "BB_SQUEEZE":     0.100,  # 변동성 수축/확대 신호 (진입 트리거 보조)
-            "EMA_TREND_15M":  0.150,   # 장기 추세 필터 (방향성 체크)
-            "RSI_DIV":    0.050,   # 고급 RSI 다이버전스 필터 (핵심 전략)
-            "ICHIMOKU":    0.050   # 일목 파라미터 추가
+            "ORDERFLOW_CVD":      0.28,
+            "VWAP_PINBALL":       0.20,
+            "VPVR":               0.15,
+            "VOL_SPIKE":          0.10,
+            "BB_SQUEEZE":         0.11,
+            "SESSION":            0.08,
+            "EMA_TREND_15M":      0.05,
+            "RSI_DIV":            0.02,
+            "ICHIMOKU":           0.01,
         }
 
-            
         if weights is None:
             weights = default_weights.copy()
         else:
             # ensure missing keys get defaults
             for k, v in default_weights.items():
                 weights.setdefault(k, v)
-
-        # normalize name helper
-        def norm_name(n: str) -> str:
-            s = n.strip().upper()
-            # common aliases
-            if "VPVR" in s:
-                return "VPVR"
-            if "SESSION" in s:
-                return "SESSION"
-            if "BB_SQUEEZE" in s:  # Fixed comparison operator
-                return "BB_SQUEEZE"
-            if "ORDERFLOW_CVD" in s:  # Fixed comparison operator
-                return "ORDERFLOW_CVD"
-            if "EMA_TREND_15M" in s:  # Fixed comparison operator
-                return "EMA_TREND_15M"
-            if "RSI_DIV" in s:
-                return "RSI_DIV"
-            if "ICHIMOKU" in s:
-                return "ICHIMOKU"
-            return s
-        
-        priority_order = [
-            "SESSION",
-            "VPVR",
-            "ORDERFLOW_CVD",
-            "BB_SQUEEZE",
-            "EMA_TREND_15M",
-            "RSI_DIV",
-            "ICHIMOKU",
-        ]  
 
         now = self.time_manager.get_current_time()
 
@@ -667,7 +724,7 @@ class BinanceWebSocket:
         raw = {}
         used_weight_sum = 0.0
         for name, s in signals.items():
-            name = norm_name(name)  # 시그널 이름을 키로 사용
+            name = name.upper()  # 시그널 이름을 키로 사용
             action = (s.get("action")).upper()
             score = float(s.get("score"))
             conf = (s.get("confidence"))
