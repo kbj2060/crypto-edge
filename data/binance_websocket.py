@@ -51,7 +51,8 @@ class BinanceWebSocket:
         self.bollinger_squeeze_strategy = None
         self.ema_trend_15m_strategy = None
         self.orderflow_cvd_strategy = None
-        self.htf_rsi_divergence_strategy = None
+        self.rsi_divergence_strategy = None
+        self.ichimoku_strategy = None
 
         # 진행 중인 3분봉 데이터 관리
         self._recent_1min_data = []  # 최근 1분봉 데이터 (웹소켓으로 수집)
@@ -86,7 +87,8 @@ class BinanceWebSocket:
         vpvr_golden_strategy=None,
         ema_trend_15m_strategy=None,
         orderflow_cvd_strategy=None,
-        htf_rsi_divergence_strategy=None
+        rsi_divergence_strategy=None,
+        ichimoku_strategy=None
     ):
         """전략 실행기 설정 - 실행 엔진에서 외부 전략 인스턴스 수신"""
         try:
@@ -111,9 +113,13 @@ class BinanceWebSocket:
                 self.orderflow_cvd_strategy = orderflow_cvd_strategy
                 print(f"✅ ORDERFLOW CVD 전략 설정 완료: {type(orderflow_cvd_strategy).__name__}")
             
-            if htf_rsi_divergence_strategy is not None:
-                self.htf_rsi_divergence_strategy = htf_rsi_divergence_strategy
-                print(f"✅ HTF RSI Divergence 전략 설정 완료: {type(htf_rsi_divergence_strategy).__name__}")
+            if rsi_divergence_strategy is not None:
+                self.rsi_divergence_strategy = rsi_divergence_strategy
+                print(f"✅ HTF RSI Divergence 전략 설정 완료: {type(rsi_divergence_strategy).__name__}")
+            
+            if ichimoku_strategy is not None:
+                self.ichimoku_strategy = ichimoku_strategy
+                print(f"✅ Ichimoku 전략 설정 완료: {type(ichimoku_strategy).__name__}")
             
         except Exception as e:
             print(f"❌ 전략 설정 오류: {e}")
@@ -148,7 +154,9 @@ class BinanceWebSocket:
             self._execute_bollinger_squeeze_strategy()
             self._execute_ema_trend_15m_strategy()
             self._execute_orderflow_cvd_strategy()
-            self._execute_htf_rsi_divergence_strategy()
+            self._execute_rsi_divergence_strategy()
+            self._execute_ichimoku_strategy()
+
             print("✅ 모든 지표 및 전략 초기화 완료")
 
             decision = self.decide_trade_realtime(self.signals, leverage=20)
@@ -219,9 +227,12 @@ class BinanceWebSocket:
             else:
                 print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
 
+        if self._is_hour_candle_close(hours=1):
+            self._execute_ichimoku_strategy()
+
         if self._is_hour_candle_close(hours=4):
             if not is_event_blocking:
-                self._execute_htf_rsi_divergence_strategy()
+                self._execute_rsi_divergence_strategy()
 
         self._execute_kline_callbacks(price_data)
 
@@ -343,15 +354,29 @@ class BinanceWebSocket:
         except Exception as e:
             print(f"1분봉 데이터 임시 저장 오류: {e}")
 
-    def _execute_htf_rsi_divergence_strategy(self):
-        """HTF RSI Divergence 전략 실행"""
-        if not self.htf_rsi_divergence_strategy:
+    def _execute_ichimoku_strategy(self):
+        """Ichimoku 전략 실행"""
+        if not self.ichimoku_strategy:
             return
         
-        result = self.htf_rsi_divergence_strategy.on_kline_close_htf()
+        result = self.ichimoku_strategy.on_kline_close_htf()
+        if result:
+            self.signals['ICHIMOKU'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'confidence': result.get('confidence', 'LOW'),
+                'timestamp': self.time_manager.get_current_time()
+            }
+
+    def _execute_rsi_divergence_strategy(self):
+        """HTF RSI Divergence 전략 실행"""
+        if not self.rsi_divergence_strategy:
+            return
+        
+        result = self.rsi_divergence_strategy.on_kline_close_htf()
         print(result)
         if result:
-            self.signals['HTF_RSI_DIV'] = {
+            self.signals['RSI_DIV'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
                 'confidence': result.get('confidence', 'LOW'),
@@ -586,11 +611,12 @@ class BinanceWebSocket:
         # default weights (can be tuned)
         default_weights = {
             "SESSION":        0.300,  # 세션 돌파/추세 주도 (핵심 전략)
-            "VPVR":           0.250,  # 거래량 지지/저항 필터 (레버리지 대응 강화)
+            "VPVR":           0.200,  # 거래량 지지/저항 필터 (레버리지 대응 강화)
             "ORDERFLOW_CVD":  0.150,  # 매수/매도 힘 보조
             "BB_SQUEEZE":     0.100,  # 변동성 수축/확대 신호 (진입 트리거 보조)
             "EMA_TREND_15M":  0.150,   # 장기 추세 필터 (방향성 체크)
-            "HTF_RSI_DIV":    0.050   # 고급 RSI 다이버전스 필터 (핵심 전략)
+            "RSI_DIV":    0.050,   # 고급 RSI 다이버전스 필터 (핵심 전략)
+            "ICHIMOKU":    0.050   # 일목 파라미터 추가
         }
 
             
@@ -615,8 +641,10 @@ class BinanceWebSocket:
                 return "ORDERFLOW_CVD"
             if "EMA_TREND_15M" in s:  # Fixed comparison operator
                 return "EMA_TREND_15M"
-            if "HTF_RSI_DIV" in s:
-                return "HTF_RSI_DIV"
+            if "RSI_DIV" in s:
+                return "RSI_DIV"
+            if "ICHIMOKU" in s:
+                return "ICHIMOKU"
             return s
         
         priority_order = [
@@ -625,7 +653,8 @@ class BinanceWebSocket:
             "ORDERFLOW_CVD",
             "BB_SQUEEZE",
             "EMA_TREND_15M",
-            "HTF_RSI_DIV",
+            "RSI_DIV",
+            "ICHIMOKU",
         ]  
 
         now = self.time_manager.get_current_time()
