@@ -11,15 +11,6 @@ from core.trader_core import TraderCore
 from config.integrated_config import IntegratedConfig
 from data.bucket_aggregator import BucketAggregator
 from indicators.global_indicators import get_global_indicator_manager
-from signals.bollinger_squeeze_strategy import BBSqueezeCfg, BollingerSqueezeStrategy
-from signals.ema_trend_15m import EMATrend15m
-from signals.orderflow_cvd import OrderflowCVD
-from signals.session_or_lite import SessionORLite, SessionORLiteCfg
-from signals.vol_spike_3m import VolSpike
-from signals.vpvr_golden_strategy import LVNGoldenPocket
-from signals.rsi_divergence import RSIDivergence
-from signals.ichimoku import Ichimoku
-from signals.vwap_pinball_strategy import VWAPPinballStrategy
 
 class IntegratedSmartTrader:
     """통합 스마트 자동 트레이더 (리팩토링 버전)"""
@@ -29,7 +20,6 @@ class IntegratedSmartTrader:
         self.running = False
         
         # 핵심 컴포넌트 초기화
-        self.core = TraderCore(config)
         self.global_manager = get_global_indicator_manager()
         self.bucket_aggregator = None
         
@@ -40,15 +30,8 @@ class IntegratedSmartTrader:
         self._init_global_indicators()
         self._init_bucket_aggregator()
         
-        self._init_vpvr_golden_strategy()
-        self._init_session_strategy()
-        self._init_bollinger_squeeze_strategy()
-        self._init_ema_trend_15m_strategy()
-        self._init_orderflow_cvd_strategy()
-        self._init_rsi_divergence_strategy()
-        self._init_ichimoku_strategy()
-        self._init_vwap_pinball_strategy()
-        self._init_vol_spike_strategy()
+        # 전략 실행기 초기화 (내부에서 모든 전략 자동 초기화)
+        self._init_strategy_executor()
 
 
     def _init_data_manager(self):
@@ -97,155 +80,35 @@ class IntegratedSmartTrader:
             import traceback
             traceback.print_exc()
             
-    def _init_vol_spike_strategy(self):
-        """Vol Spike 전략 초기화"""
-        try:
-            self._vol_spike_strategy = VolSpike()
-
-        except Exception as e:
-            print(f"❌ Vol Spike 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._vol_spike_strategy = None
-
-    def _init_vwap_pinball_strategy(self):
-        """VWAP Pinball 전략 초기화"""
-        try:
-            self._vwap_pinball_strategy = VWAPPinballStrategy()
-
-        except Exception as e:
-            print(f"❌ VWAP Pinball 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._vwap_pinball_strategy = None
-
-    def _init_ichimoku_strategy(self):
-        """Ichimoku 전략 초기화"""
-        try:
-            self._ichimoku_strategy = Ichimoku()
-
-        except Exception as e:
-            print(f"❌ Ichimoku 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._ichimoku_strategy = None
-
-    def _init_rsi_divergence_strategy(self):
-        """HTF RSI Divergence 전략 초기화"""
-        try:
-            self._rsi_divergence_strategy = RSIDivergence()
-
-        except Exception as e:
-            print(f"❌ HTF RSI Divergence 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._rsi_divergence_strategy = None
-
-    def _init_orderflow_cvd_strategy(self):
-        """체결 불균형 근사 전략 초기화"""
-        try:
-            self._orderflow_cvd_strategy = OrderflowCVD()
-
-        except Exception as e:
-            print(f"❌ 체결 불균형 근사 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._orderflow_cvd_strategy = None
-
-    def _init_ema_trend_15m_strategy(self):
-        """EMA 트렌드 전략 초기화"""
-        try:
-            self._ema_trend_15m_strategy = EMATrend15m()
-
-        except Exception as e:
-            print(f"❌ EMA 트렌드 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._ema_trend_15m_strategy = None
-
     def _init_bucket_aggregator(self):
         """버킷 집계기 초기화"""
         self.bucket_aggregator = BucketAggregator()
         self.liquidation_bucket = self.bucket_aggregator.load_external_data()
 
-    def _init_bollinger_squeeze_strategy(self):
-        """볼린저 전략 초기화"""
+    def _init_strategy_executor(self):
+        """전략 실행기 초기화"""
         try:
-            config = BBSqueezeCfg()
-            self._bollinger_squeeze_strategy = BollingerSqueezeStrategy(config)
-
-        except Exception as e:
-            print(f"❌ 볼린저 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._bollinger_squeeze_strategy = None
-
-    def _init_vpvr_golden_strategy(self):
-        """VPVR 골든 포켓 전략 초기화"""
-        try:
-            self._vpvr_golden_strategy = LVNGoldenPocket()
-
-        except Exception as e:
-            print(f"❌ VPVR 골든 포켓 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._vpvr_golden_strategy = None
+            from data.strategy_executor import StrategyExecutor
+            from core.trader_core import TraderCore
             
-    def _init_session_strategy(self):
-        """세션 기반 전략 초기화"""
-        try:
-            session_config = SessionORLiteCfg()
-            self._session_strategy = SessionORLite(session_config)
-
-        except Exception as e:
-            print(f"❌ 세션 기반 전략 초기화 오류: {e}")
-            import traceback
-            traceback.print_exc()
-            self._session_strategy = None
-
-    def _setup_websocket_strategies(self):
-        """웹소켓 전략 설정 - 메인 컨트롤러에서 전략 인스턴스 전달"""
-        try:
-            websocket = self.core.get_websocket()
+            # 전략 실행기 인스턴스 생성 (내부에서 모든 전략 자동 초기화)
+            self.strategy_executor = StrategyExecutor()
             
-            # 전략 실행기를 웹소켓에 설정 (None인 전략은 제외)
-            strategies = {
-                'session_strategy': self._session_strategy,
-                'vpvr_golden_strategy': self._vpvr_golden_strategy,
-                'bollinger_squeeze_strategy': self._bollinger_squeeze_strategy,
-                'ema_trend_15m_strategy': self._ema_trend_15m_strategy,
-                'orderflow_cvd_strategy': self._orderflow_cvd_strategy,
-                'rsi_divergence_strategy': self._rsi_divergence_strategy,
-                'ichimoku_strategy': self._ichimoku_strategy,
-                'vwap_pinball_strategy': self._vwap_pinball_strategy,
-                'vol_spike_strategy': self._vol_spike_strategy,
-            }
-            
-            # None이 아닌 전략만 필터링하여 전달
-            active_strategies = {k: v for k, v in strategies.items() if v is not None}
-            
-            if active_strategies:
-                websocket.set_strategies(**active_strategies)
-                print(f"🎯 웹소켓에 {len(active_strategies)}개 전략 설정 완료: {list(active_strategies.keys())}")
-            else:
-                print("⚠️ 활성화된 전략이 없습니다")
+            # TraderCore 초기화 (strategy_executor와 함께)
+            self.core = TraderCore(self.config, self.strategy_executor)
             
         except Exception as e:
-            print(f"❌ 웹소켓 전략 설정 오류: {e}")
+            print(f"❌ 전략 실행기 초기화 오류: {e}")
             import traceback
             traceback.print_exc()
         
 
     def start(self):
         """트레이더 시작"""
-        # 웹소켓 전략 설정 (전략 초기화 완료 후)
-        self._setup_websocket_strategies()
-        
         self.running = True
         
         # 웹소켓 백그라운드 시작
         self.core.start_websocket()
-        # self.core.get_websocket().add_callback('kline_1m', self.process_kline_1m)
         
         # 메인 루프
         self._run_main_loop()
@@ -261,6 +124,10 @@ class IntegratedSmartTrader:
             print("\n⏹️ 사용자에 의해 중지됨")
         finally:
             self.stop()
+    
+    def get_strategy_executor(self):
+        """전략 실행기 반환"""
+        return self.strategy_executor
     
     def stop(self):
         """트레이더 중지"""

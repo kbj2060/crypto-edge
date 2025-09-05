@@ -42,9 +42,10 @@ class SessionORLite:
         self.analyzer = SessionORAnalyzer(cfg)
         self.signal_generator = SessionORSignalGenerator(cfg)
     
-    def on_kline_close_3m(self, df3: pd.DataFrame, session_activated: bool, vwap_prev: Optional[float] = None) -> Optional[Dict[str, Any]]:
+    def on_kline_close_3m(self, df3: pd.DataFrame, vwap_prev: Optional[float] = None) -> Optional[Dict[str, Any]]:
         """3분봉 마감 시 세션 오프닝 레인지 전략 실행"""
         now = self.time_manager.get_current_time()
+        session_activated = self.time_manager.is_session_active()
         
         if session_activated:
             self.session_open = self.time_manager.get_current_session_info().open_time

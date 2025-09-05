@@ -110,10 +110,7 @@ class DataManager:
                 'quote_volume': quote_volume
             }], index=[candle_data.name])
             
-            # 기존 데이터에 추가 (인덱스 중복 방지)
             self.data = pd.concat([self.data, new_row], ignore_index=False)
-            
-            # 중복된 인덱스 제거 (최신 데이터 유지)
             self.data = self.data[~self.data.index.duplicated(keep='last')]
             
             # 최대 1000개 캔들 유지
@@ -124,6 +121,29 @@ class DataManager:
         except Exception as e:
             pass
 
+    def update_with_candle_15m(self, symbol: str = 'ETHUSDT') -> None:
+        # 웹소켓으로 받은 데이터가 아닌 api 로 1개만 받아 추가
+        new = self.dataloader.fetch_data(interval="15m", symbol=symbol, limit=1)
+
+        self.data_15m = pd.concat([self.data_15m, new], ignore_index=False)
+        self.data_15m = self.data_15m[~self.data_15m.index.duplicated(keep='last')]
+        self.data_15m = self.data_15m.drop_duplicates()
+
+        if len(self.data_15m) > 300:
+            self.data_15m = self.data_15m.tail(300)
+
+        print(f"✅ 15분봉 데이터 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+
+    def update_with_candle_1h(self, symbol: str = 'ETHUSDT') -> None:
+        new = self.dataloader.fetch_data(interval="1h", symbol=symbol, limit=1)
+        self.data_1h = pd.concat([self.data_1h, new], ignore_index=False)
+        self.data_1h = self.data_1h[~self.data_1h.index.duplicated(keep='last')]
+        self.data_1h = self.data_1h.drop_duplicates()
+
+        if len(self.data_1h) > 300:
+            self.data_1h = self.data_1h.tail(300)
+
+        print(f"✅ 1시간봉 데이터 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
     
     def get_dataframe(self) -> pd.DataFrame:
         """전체 3분봉 데이터를 DataFrame으로 반환"""
@@ -179,6 +199,25 @@ class DataManager:
         self.data = pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
         self._data_loaded = False
 
+    def get_15m_data(self, count: int = 1) -> pd.DataFrame:
+        """최신 15분봉 데이터를 DataFrame으로 반환"""
+        try:
+            if self.data_15m.empty:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
+            latest_df = self.data_15m.tail(count).copy()
+            return latest_df
+        except Exception as e:
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
+
+    def get_1h_data(self, count: int = 1) -> pd.DataFrame:
+        """최신 1시간봉 데이터를 DataFrame으로 반환"""
+        try:
+            if self.data_1h.empty:
+                return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
+            latest_df = self.data_1h.tail(count).copy()
+            return latest_df
+        except Exception as e:
+            return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
 
 # 전역 DataManager 인스턴스 생성 함수
 def get_data_manager() -> DataManager:

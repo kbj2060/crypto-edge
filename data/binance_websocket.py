@@ -25,7 +25,7 @@ from data.binance_dataloader import BinanceDataLoader
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
     
-    def __init__(self, symbol: str = "ETHUSDT"):
+    def __init__(self, symbol: str = "ETHUSDT", strategy_executor: Optional[StrategyExecutor] = None):
         """웹소켓 초기화"""
         self.symbol = symbol.lower()
         self.ws_url = "wss://fstream.binance.com/ws"
@@ -38,7 +38,7 @@ class BinanceWebSocket:
         }
         
         # 리팩토링된 컴포넌트들
-        self.strategy_executor = StrategyExecutor()
+        self.strategy_executor = strategy_executor or StrategyExecutor()
         self.candle_creator = CandleCreator(symbol)
         self.decision_engine = TradeDecisionEngine()
         self.event_manager = EventManager()
@@ -58,6 +58,8 @@ class BinanceWebSocket:
         self._session_activated = self.time_manager.is_session_active()
         self.queue = asyncio.Queue()
 
+        # 카운트다운 태스크
+        self.countdown_task = None
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
@@ -75,40 +77,18 @@ class BinanceWebSocket:
             if callback in self.callbacks[event_type]:
                 self.callbacks[event_type].remove(callback)
     
-    def set_strategies(
-        self,
-        session_strategy=None,
-        bollinger_squeeze_strategy=None,
-        vpvr_golden_strategy=None,
-        ema_trend_15m_strategy=None,
-        orderflow_cvd_strategy=None,
-        rsi_divergence_strategy=None,
-        ichimoku_strategy=None,
-        vwap_pinball_strategy=None,
-        vol_spike_strategy=None,
-    ):
-        """전략 실행기 설정"""
-        self.strategy_executor.set_strategies(
-            session_strategy=session_strategy,
-            bollinger_squeeze_strategy=bollinger_squeeze_strategy,
-            vpvr_golden_strategy=vpvr_golden_strategy,
-            ema_trend_15m_strategy=ema_trend_15m_strategy,
-            orderflow_cvd_strategy=orderflow_cvd_strategy,
-            rsi_divergence_strategy=rsi_divergence_strategy,
-            ichimoku_strategy=ichimoku_strategy,
-            vwap_pinball_strategy=vwap_pinball_strategy,
-            vol_spike_strategy=vol_spike_strategy,
-        )
     
     async def connect_kline_3m_stream(self):
-        """1분봉 Kline 스트림 연결"""
+        """3분봉 Kline 스트림 연결"""
         uri = f"{self.ws_url}/{self.symbol}@kline_3m"
         
         async with websockets.connect(uri) as websocket:
             # 첫 시작 시 signals가 비어있으면 모든 지표 업데이트 및 전략 실행
-            
             print("🚀 첫 시작 - 모든 지표 업데이트 및 전략 실행")
             await self._initialize_all_strategies()
+
+            # 3분봉 카운트다운 시작
+            self.countdown_task = asyncio.create_task(self._countdown_to_next_3min_candle())
 
             async for message in websocket:
                 if not self.running:
@@ -116,18 +96,45 @@ class BinanceWebSocket:
                 
                 data = json.loads(message)
                 await self.queue.put(("kline_3m", data))
-                # await self.process_kline_3m(data)
+    
+    async def _countdown_to_next_3min_candle(self):
+        """다음 3분봉까지 남은 시간 카운트다운"""
+        try:
+            while self.running:
+                current_time = self.time_manager.get_current_time()
+                current_minute = current_time.minute
+                
+                # 다음 3분봉까지 남은 초 계산
+                next_3min_minute = ((current_minute // 3) + 1) * 3
+                if next_3min_minute >= 60:
+                    next_3min_minute = 0
+                    next_3min_time = current_time.replace(hour=current_time.hour + 1, minute=0, second=0, microsecond=0)
+                else:
+                    next_3min_time = current_time.replace(minute=next_3min_minute, second=0, microsecond=0)
+                
+                remaining_seconds = int((next_3min_time - current_time).total_seconds())
+                
+                if remaining_seconds > 0:
+                    print(f"\r⏳ 다음 3분봉까지 {remaining_seconds:3d}초 남음...", end="", flush=True)
+                    await asyncio.sleep(1)
+                else:
+                    break
+                    
+        except asyncio.CancelledError:
+            # 카운트다운이 취소되면 정상적으로 종료
+            pass
+        except Exception as e:
+            print(f"\n❌ 카운트다운 오류: {e}")
     
     async def _initialize_all_strategies(self):
         """첫 시작 시 모든 지표 업데이트 및 전략 실행"""
-        # 모든 전략 실행
-        self.strategy_executor.execute_all_strategies(self._session_activated)
+            # 모든 전략 실행
+        self.strategy_executor.execute_all_strategies()
         print("✅ 모든 지표 및 전략 초기화 완료")
 
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals, leverage=30)
         print_decision_interpretation(decision)
-
 
     async def worker(self):
         """큐에서 데이터를 소비하며 전략 실행 (오류 처리 포함)"""
@@ -137,7 +144,7 @@ class BinanceWebSocket:
 
                 if event_type == "kline_3m":
                     await self.process_kline_3m(data)
-                    
+                        
             except Exception as e:
                 print(f"❌ [Worker] 데이터 처리 오류: {e}")
                 import traceback
@@ -146,58 +153,56 @@ class BinanceWebSocket:
                 continue
 
     async def process_kline_3m(self, data: Dict):
-        """1분봉 Kline 데이터 처리 - 3분봉 포함 (오류 처리 강화)"""
+        """3분봉 Kline 데이터 처리 (오류 처리 강화)"""
         try:
-            if 'k' not in data: 
+            if not data.get('k', {}).get('x', True):
                 return
             kline = data['k']
-
-            if not kline.get('x', True): 
-                return
             
             await asyncio.sleep(1)
 
             print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
             
+            # 3분봉이 완성되었으므로 카운트다운 재시작
+            if self.countdown_task and not self.countdown_task.done():
+                self.countdown_task.cancel()
+                
+            self.countdown_task = asyncio.create_task(self._countdown_to_next_3min_candle())
+            
             price_data = self.candle_creator.create_price_data(kline)
-            # self.candle_creator.store_1min_data(price_data)
             
         except Exception as e:
-            print(f"❌ [ProcessKline] 1분봉 데이터 처리 오류: {e}")
+            print(f"❌ [ProcessKline] 3분봉 데이터 처리 오류: {e}")
             import traceback
             traceback.print_exc()
             return
 
         try:
-            # 이벤트 차단 기간 체크
+        # 이벤트 차단 기간 체크
             is_event_blocking = self.event_manager.is_in_event_blocking_period()
 
-            series_3m = await self.candle_creator.create_3min_candle()
-            if series_3m is not None:
-                self.data_manager.update_with_candle(series_3m)
-                self.global_manager.update_all_indicators(series_3m)
+            # 웹소켓에서 받은 3분봉 데이터를 Series로 변환
+            series_3m = self.candle_creator.create_3min_series(price_data)
+            self.data_manager.update_with_candle(series_3m)
 
-                # 이벤트 차단 기간이 아닐 때만 전략 신호 실행
-                if not is_event_blocking:
-                    self.strategy_executor.execute_all_strategies(self._session_activated)
-                    
-                    signals = self.strategy_executor.get_signals()
-                    decision = self.decision_engine.decide_trade_realtime(signals, leverage=20)
-                    print_decision_interpretation(decision)
+            if self.candle_creator.is_candle_close("15m"):
+                self.data_manager.update_with_candle_15m()
+            
+            if self.candle_creator.is_candle_close("1h"):
+                self.data_manager.update_with_candle_1h()
 
-                    # series_3m이 있을 때만 candle_data 추가
-                    decision["candle_data"] = series_3m.to_dict()
-                    
-                    #judge = await self.llm_decider.decide_async(decision)
-                    #print_llm_judgment(judge)
+            self.global_manager.update_all_indicators(series_3m)
 
-                    action = decision.get("action")
-                    net_score = decision.get("net_score")
-                    
-                    if action != "HOLD":
-                        send_telegram_message(action, net_score)
-                else:
-                    print("📊 이벤트 차단 기간: 데이터 업데이트만 수행, 전략 신호 차단")
+            # 이벤트 차단 기간이 아닐 때만 전략 신호 실행
+            if not is_event_blocking:
+                self.strategy_executor.execute_all_strategies()
+                
+                signals = self.strategy_executor.get_signals()
+                decision = self.decision_engine.decide_trade_realtime(signals, leverage=20)
+                print_decision_interpretation(decision)
+
+                if decision.get("action") != "HOLD":
+                    send_telegram_message(decision)
 
             self._execute_kline_callbacks(price_data)
 
@@ -215,21 +220,20 @@ class BinanceWebSocket:
         return self.event_manager.important_event_occurred()
     
     def _execute_kline_callbacks(self, price_data: Dict):
-        """1분봉 Kline 콜백 실행"""
+        """3분봉 Kline 콜백 실행"""
         for callback in self.callbacks['kline_3m']:
             try:
                 callback(price_data)
             except Exception as e:
-                print(f"1분봉 Kline 콜백 실행 오류: {e}")
+                print(f"3분봉 Kline 콜백 실행 오류: {e}")
     
     async def start(self):
         """웹소켓 스트림 시작"""
         self.running = True
-        # 여러 스트림을 동시에 실행
+
         tasks = [
-            # self.connect_liquidation_stream(),
             self.connect_kline_3m_stream(),
-            self.worker()  # 1분봉 Kline 스트림 추가
+            self.worker() 
         ]
         
         await asyncio.gather(*tasks)
@@ -247,4 +251,3 @@ class BinanceWebSocket:
         
         self.thread = threading.Thread(target=run_async, daemon=True)
         self.thread.start()
-    
