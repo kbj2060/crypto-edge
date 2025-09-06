@@ -8,9 +8,9 @@ from indicators.global_indicators import get_vwap
 
 @dataclass
 class ZScoreConfig:
-    window: int = 60
+    window: int = 40
     use_log: bool = False
-    z_thresh: float = 2.0
+    z_thresh: float = 1.8
     exit_z: float = 0.5
     atr_period: int = 14
     stop_atr_mult: float = 2.0
@@ -66,9 +66,11 @@ class ZScoreMeanReversion:
         Returns:
             {'name','action'('BUY'/'SELL'/'HOLD'),'score'(0..1),'confidence'(0..1),'entry','stop','tp','context'}
         """
+        print(f"🔍 [ZSCORE] 신호 생성 시작 - 데이터 길이: {len(df)}")
+        
         df = self.ensure_index(df)
         if len(df) < max(self.config.min_history, self.config.window + 5):
-            print('insufficient_history')
+            print(f"❌ [ZSCORE] 데이터 부족 - 현재: {len(df)}, 필요: {max(self.config.min_history, self.config.window + 5)}")
             return {
                 'name': 'ZSCORE_MEAN_REVERSION', 
                 'action': 'HOLD', 
@@ -78,8 +80,10 @@ class ZScoreMeanReversion:
             }
 
         last_vol = float(df['quote_volume'].iloc[-1]) if 'quote_volume' in df.columns else 0.0
+        print(f"📊 [ZSCORE] 거래량 체크 - 현재: {last_vol:.2f}, 최소: {self.config.min_volume}")
+        
         if self.config.min_volume and last_vol < self.config.min_volume:
-            print('low_volume')
+            print(f"❌ [ZSCORE] 거래량 부족 - 현재: {last_vol:.2f}, 최소: {self.config.min_volume}")
             return {
                 'name': 'ZSCORE_MEAN_REVERSION', 
                 'action': 'HOLD', 
@@ -88,21 +92,32 @@ class ZScoreMeanReversion:
                 'context': {'reason': 'low_volume', 'last_vol': last_vol}
             }
 
+        print(f"⚙️ [ZSCORE] 설정 - 모드: {self.config.mode}, 윈도우: {self.config.window}, Z임계값: {self.config.z_thresh}")
+        
         if self.config.mode == "vwap_residual":
+            print("📈 [ZSCORE] VWAP 잔차 모드 사용")
             full_vwap, _ = get_vwap()
             series = (df['close'].astype(float) - full_vwap).astype(float)
+            print(f"📊 [ZSCORE] VWAP 값: {full_vwap.iloc[-1] if len(full_vwap) > 0 else 'N/A'}")
         else:
+            print("💰 [ZSCORE] 가격 모드 사용")
             series = df['close'].astype(float)
             if self.config.use_log:
+                print("📊 [ZSCORE] 로그 변환 적용")
                 series = np.log(series.replace(0, np.nan)).fillna(method='ffill')
 
         z = self.compute_zscore(series, self.config.window)
         last_z = float(z.iloc[-1])
+        print(f"📊 [ZSCORE] Z-Score 계산 완료 - 현재 Z: {last_z:.4f}")
 
         atr_val = float(self.atr(df, self.config.atr_period).iloc[-1]) if len(df) > 0 else 0.0
         last_price = float(df['close'].iloc[-1])
+        print(f"💰 [ZSCORE] 가격 정보 - 현재가: {last_price:.4f}, ATR: {atr_val:.4f}")
 
         action = 'HOLD'; score = 0.0; conf = 0.0; entry = last_price; stop = None; tp = None
+        
+        print(f"🎯 [ZSCORE] 신호 판단 시작 - Z: {last_z:.4f}, 임계값: ±{self.config.z_thresh}")
+        
         if last_z >= self.config.z_thresh:
             action = 'SELL'
             score = min(1.0, abs(last_z) / (self.config.z_thresh * 2.0))
@@ -111,6 +126,12 @@ class ZScoreMeanReversion:
             stop = entry + max(1e-6, self.config.stop_atr_mult * atr_val)
             if self.config.take_profit_atr_mult is not None:
                 tp = entry - self.config.take_profit_atr_mult * atr_val
+            
+            print(f"🔴 [ZSCORE] SELL 신호 생성!")
+            print(f"   📊 점수: {score:.4f}, 신뢰도: {conf:.4f}")
+            tp_str = f"{tp:.4f}" if tp is not None else "N/A"
+            print(f"   💰 진입가: {entry:.4f}, 손절가: {stop:.4f}, 목표가: {tp_str}")
+            
         elif last_z <= -self.config.z_thresh:
             action = 'BUY'
             score = min(1.0, abs(last_z) / (self.config.z_thresh * 2.0))
@@ -119,8 +140,15 @@ class ZScoreMeanReversion:
             stop = entry - max(1e-6, self.config.stop_atr_mult * atr_val)
             if self.config.take_profit_atr_mult is not None:
                 tp = entry + self.config.take_profit_atr_mult * atr_val
+            
+            print(f"🟢 [ZSCORE] BUY 신호 생성!")
+            print(f"   📊 점수: {score:.4f}, 신뢰도: {conf:.4f}")
+            tp_str = f"{tp:.4f}" if tp is not None else "N/A"
+            print(f"   💰 진입가: {entry:.4f}, 손절가: {stop:.4f}, 목표가: {tp_str}")
+        else:
+            print(f"⚪ [ZSCORE] HOLD - Z값이 임계값 범위 내 ({-self.config.z_thresh:.2f} ~ {self.config.z_thresh:.2f})")
 
-        return {
+        result = {
             'name': 'ZSCORE_MEAN_REVERSION',
             'action': action,
             'score': float(score),
@@ -135,3 +163,8 @@ class ZScoreMeanReversion:
                 'mode': self.config.mode
             }
         }
+        
+        print(f"✅ [ZSCORE] 신호 생성 완료 - 액션: {action}, 점수: {score:.4f}, 신뢰도: {self._conf_bucket(float(conf))}")
+        print(f"📋 [ZSCORE] 결과: {result}")
+        
+        return result
