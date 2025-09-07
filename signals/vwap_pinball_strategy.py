@@ -18,13 +18,14 @@ from utils.time_manager import get_time_manager
 
 @dataclass
 class VWAPPinballCfg:
+    lookback_bars: int = 300
     entry_sigma_steps: Tuple[float, ...] = (0.08, 0.15, 0.3)   # 훨씬 촘촘하게
     max_entries: int = 3
     tick: float = 0.02
     atr_stop_mult: float = 0.5          # 스탑 더 타이트
     tp_vwap_bonus_sigma: float = 0.15
     require_bounce_confirmation: bool = False   # 일단 꺼서 윅-온리 걸러내지 않음
-    bounce_lookback_bars: int = 1
+    bounce_lookback_bars: int = 2
     min_body_ratio: float = 0.08
     w_distance: float = 0.45
     w_bounce: float = 0.35

@@ -2,9 +2,6 @@ import datetime
 import requests
 from typing import List, Dict, Optional
 from dataclasses import dataclass
-import traceback
-
-from signals.liquidation_strategies_lite import BaseLiqConfig
 from utils.time_manager import get_time_manager
 
 

@@ -15,9 +15,9 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class OrderflowCVDConfig:
-    lookback_bars: int = 300
-    z_scale: float = 2.0
-    min_notional: float = 2000.0
+    lookback_bars: int = 60
+    z_scale: float = 1.2
+    min_notional: float = 500
 
 class OrderflowCVD:
     """간단한 체결 불균형 근사(CVD 스타일). 실제 체결측 데이터가 있으면 더 정밀하게 개선 가능."""

@@ -1,170 +1,201 @@
-# zscore_mean_reversion_bot.py
+# zscore_mean_reversion.py
+# Put this file in your project (e.g., signals/zscore_mean_reversion.py)
+# Usage:
+#   from zscore_mean_reversion import ZScoreConfig, ZScoreMeanReversion
+#   cfg = ZScoreConfig()
+#   bot = ZScoreMeanReversion(cfg)
+#   signal = bot.on_kline_close_3m(df)   # df must have 'close' (and optionally 'high','low','volume')
+
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-import pandas as pd
+from datetime import datetime, timezone
 import numpy as np
+import pandas as pd
 
-from indicators.global_indicators import get_vwap
 
 @dataclass
 class ZScoreConfig:
-    window: int = 40
-    use_log: bool = False
-    z_thresh: float = 1.8
+    window: int = 120
+    use_log: bool = True             # if True use log-price -> log-returns; else pct_change
+    z_thresh: float = 1.2
     exit_z: float = 0.5
     atr_period: int = 14
     stop_atr_mult: float = 2.0
     take_profit_atr_mult: Optional[float] = 2.5
     min_volume: float = 0.0
     min_history: int = 200
-    mode: str = "price"         # or "vwap_residual"
-    vwap_window: int = 390
+    mode: str = "price"              # unused other modes kept for compatibility
+    vwap_window: int = 300
+    # new options
+    use_ewma: bool = True
+    ewma_span: Optional[int] = None
+    z_scale: float = 1.0             # multiplies z to increase sensitivity (use with caution)
+    pre_signal_pct: float = 0.75     # if |z| >= pct * z_thresh => pre-signal (small score)
+
 
 class ZScoreMeanReversion:
-    """Z-Score Mean Reversion Bot - 클래스 기반"""
-    
-    def __init__(self, config: ZScoreConfig = None):
-        self.config = config or ZScoreConfig()
-    
-    @staticmethod
-    def ensure_index(df: pd.DataFrame) -> pd.DataFrame:
-        """DataFrame 인덱스를 DatetimeIndex로 변환"""
-        if not isinstance(df.index, pd.DatetimeIndex):
-            df = df.copy()
-            df.index = pd.to_datetime(df.index)
-        return df.sort_index()
-    
-    @staticmethod
-    def atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
-        """Average True Range 계산"""
-        high = df['high'].astype(float)
-        low = df['low'].astype(float)
-        close = df['close'].astype(float)
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
-        return tr.rolling(period, min_periods=1).mean()
-    
+    def __init__(self, cfg: Optional[ZScoreConfig] = None):
+        self.config = cfg or ZScoreConfig()
+
     @staticmethod
     def compute_zscore(series: pd.Series, window: int) -> pd.Series:
-        """Z-Score 계산"""
-        mean = series.rolling(window, min_periods=1).mean().shift(1)
-        std = series.rolling(window, min_periods=1).std(ddof=0).shift(1).replace(0, np.nan)
-        z = (series - mean) / std
-        return z.fillna(0.0)
+        """
+        Compute Z-score on a return-like series (e.g., log-returns or pct-change).
+        Uses rolling mean & rolling std with shift(1) to avoid lookahead.
+        Small epsilon replaces zero/NaN stds to avoid division by zero.
+        """
+        x = series.astype(float).copy()
+        mean = x.rolling(window, min_periods=1).mean().shift(1)
+        std = x.rolling(window, min_periods=1).std(ddof=0).shift(1)
+        std = std.replace(0, np.nan).fillna(1e-8)
+        z = (x - mean) / std
+        z = z.replace([np.inf, -np.inf], np.nan).fillna(0.0)
+        z = z.clip(lower=-100.0, upper=100.0)
+        return z
 
-    def _conf_bucket(self, v: float) -> str:
-        if v >= 0.75: return "HIGH"
-        if v >= 0.50: return "MEDIUM"
-        return "LOW"
+    @staticmethod
+    def _zscore_to_signal(last_z: float, cfg: ZScoreConfig) -> Dict[str, Any]:
+        """Convert last z into (action, score, confidence) with pre-signal logic."""
+        absz = abs(last_z)
+        zt = float(cfg.z_thresh)
+        pre_pct = float(cfg.pre_signal_pct)
+        result = {"action": "HOLD", "score": 0.0, "confidence": "LOW"}
+
+        if absz >= zt:
+            # full trigger
+            act = "LONG" if last_z < 0 else "SHORT"
+            # continuous score: base 0.5 then scale with additional z beyond threshold
+            extra = max(0.0, (absz - zt) / max(1e-9, zt))
+            score = min(1.0, 0.5 + 0.5 * extra)
+            conf = "HIGH" if absz >= (zt * 1.25) else "MEDIUM"
+            result.update({"action": act, "score": float(score), "confidence": conf})
+        elif absz >= (zt * pre_pct):
+            # pre-signal: no immediate action, small score for ensemble to use
+            result.update({"action": "HOLD", "score": float(max(0.05, 0.4 * (absz / zt))), "confidence": "MEDIUM"})
+        else:
+            result.update({"action": "HOLD", "score": 0.0, "confidence": "LOW"})
+        return result
+
+    def _prepare_input_series(self, df: pd.DataFrame) -> pd.Series:
+        """Return the series (returns-style) that we'll compute z-score on."""
+        if "close" not in df.columns:
+            raise ValueError("DataFrame must contain 'close' column")
+
+        # clean price series
+        price = df["close"].astype(float).replace(0, np.nan).ffill().bfill()
+
+        if self.config.use_log:
+            # log-price -> log-return
+            logp = np.log(price)
+            ret = logp.diff().fillna(0.0)
+            return ret
+        else:
+            # percent change
+            return price.pct_change().fillna(0.0)
 
     def on_kline_close_3m(self, df: pd.DataFrame) -> Dict[str, Any]:
         """
-        Z-Score Mean Reversion 신호 생성
-        
-        Returns:
-            {'name','action'('BUY'/'SELL'/'HOLD'),'score'(0..1),'confidence'(0..1),'entry','stop','tp','context'}
+        Main entry (keeps name compatible with prior project).
+        Input: df (pandas DataFrame) with at least 'close'; optionally 'volume','high','low'.
+        Output: dict with keys: name, action(LONG/SHORT/HOLD), score, confidence, entry, stop, tp, context
         """
-        print(f"🔍 [ZSCORE] 신호 생성 시작 - 데이터 길이: {len(df)}")
-        
-        df = self.ensure_index(df)
-        if len(df) < max(self.config.min_history, self.config.window + 5):
-            print(f"❌ [ZSCORE] 데이터 부족 - 현재: {len(df)}, 필요: {max(self.config.min_history, self.config.window + 5)}")
+        # basic checks
+        if len(df) < max(self.config.min_history, self.config.window + 2):
+            # not enough history
             return {
-                'name': 'ZSCORE_MEAN_REVERSION', 
-                'action': 'HOLD', 
-                'score': 0.0, 
-                'confidence': 0.0, 
-                'context': {'reason': 'insufficient_history', 'n': len(df)}
+                "name": "ZSCORE_MEAN_REVERSION",
+                "action": "HOLD",
+                "score": 0.0,
+                "confidence": "LOW",
+                "entry": None,
+                "stop": None,
+                "tp": None,
+                "context": {"reason": "not_enough_history", "n": len(df)}
             }
 
-        last_vol = float(df['quote_volume'].iloc[-1]) if 'quote_volume' in df.columns else 0.0
-        print(f"📊 [ZSCORE] 거래량 체크 - 현재: {last_vol:.2f}, 최소: {self.config.min_volume}")
-        
-        if self.config.min_volume and last_vol < self.config.min_volume:
-            print(f"❌ [ZSCORE] 거래량 부족 - 현재: {last_vol:.2f}, 최소: {self.config.min_volume}")
+        # volume gate if applicable
+        if "quote_volume" in df.columns and self.config.min_volume and df["quote_volume"].iloc[-1] < self.config.min_volume:
             return {
-                'name': 'ZSCORE_MEAN_REVERSION', 
-                'action': 'HOLD', 
-                'score': 0.0, 
-                'confidence': 0.0, 
-                'context': {'reason': 'low_volume', 'last_vol': last_vol}
+                "name": "ZSCORE_MEAN_REVERSION",
+                "action": "HOLD",
+                "score": 0.0,
+                "confidence": "LOW",
+                "entry": df["close"].iloc[-1],
+                "stop": None,
+                "tp": None,
+                "context": {"reason": "low_volume", "current_volume": float(df["quote_volume"].iloc[-1])}
             }
 
-        print(f"⚙️ [ZSCORE] 설정 - 모드: {self.config.mode}, 윈도우: {self.config.window}, Z임계값: {self.config.z_thresh}")
-        
-        if self.config.mode == "vwap_residual":
-            print("📈 [ZSCORE] VWAP 잔차 모드 사용")
-            full_vwap, _ = get_vwap()
-            series = (df['close'].astype(float) - full_vwap).astype(float)
-            print(f"📊 [ZSCORE] VWAP 값: {full_vwap.iloc[-1] if len(full_vwap) > 0 else 'N/A'}")
+        # prepare input series (returns-like)
+        try:
+            input_series = self._prepare_input_series(df)
+        except Exception as e:
+            return {
+                "name": "ZSCORE_MEAN_REVERSION",
+                "action": "HOLD",
+                "score": 0.0,
+                "confidence": "LOW",
+                "entry": df["close"].iloc[-1] if "close" in df.columns else None,
+                "stop": None,
+                "tp": None,
+                "context": {"reason": "prepare_input_failed", "error": str(e)}
+            }
+
+        # compute z using EWMA or rolling
+        if self.config.use_ewma:
+            span = int(self.config.ewma_span) if self.config.ewma_span else self.config.window
+            mean = input_series.ewm(span=span, adjust=False).mean().shift(1)
+            std = input_series.ewm(span=span, adjust=False).std(bias=False).shift(1).replace(0, np.nan).fillna(1e-8)
+            z = (input_series - mean) / std
+            z = z.replace([np.inf, -np.inf], np.nan).fillna(0.0).clip(-100.0, 100.0)
         else:
-            print("💰 [ZSCORE] 가격 모드 사용")
-            series = df['close'].astype(float)
-            if self.config.use_log:
-                print("📊 [ZSCORE] 로그 변환 적용")
-                series = np.log(series.replace(0, np.nan)).fillna(method='ffill')
+            z = self.compute_zscore(input_series, self.config.window)
 
-        z = self.compute_zscore(series, self.config.window)
+        # optional scaling
+        if getattr(self.config, "z_scale", 1.0) != 1.0:
+            z = z * float(self.config.z_scale)
+
         last_z = float(z.iloc[-1])
-        print(f"📊 [ZSCORE] Z-Score 계산 완료 - 현재 Z: {last_z:.4f}")
-
-        atr_val = float(self.atr(df, self.config.atr_period).iloc[-1]) if len(df) > 0 else 0.0
-        last_price = float(df['close'].iloc[-1])
-        print(f"💰 [ZSCORE] 가격 정보 - 현재가: {last_price:.4f}, ATR: {atr_val:.4f}")
-
-        action = 'HOLD'; score = 0.0; conf = 0.0; entry = last_price; stop = None; tp = None
+        last_price = float(df["close"].iloc[-1])
         
-        print(f"🎯 [ZSCORE] 신호 판단 시작 - Z: {last_z:.4f}, 임계값: ±{self.config.z_thresh}")
-        
-        if last_z >= self.config.z_thresh:
-            action = 'SELL'
-            score = min(1.0, abs(last_z) / (self.config.z_thresh * 2.0))
-            conf = min(1.0, (abs(last_z) - self.config.z_thresh + 1.0) / (abs(last_z) + 1.0))
-            entry = last_price
-            stop = entry + max(1e-6, self.config.stop_atr_mult * atr_val)
-            if self.config.take_profit_atr_mult is not None:
-                tp = entry - self.config.take_profit_atr_mult * atr_val
-            
-            print(f"🔴 [ZSCORE] SELL 신호 생성!")
-            print(f"   📊 점수: {score:.4f}, 신뢰도: {conf:.4f}")
-            tp_str = f"{tp:.4f}" if tp is not None else "N/A"
-            print(f"   💰 진입가: {entry:.4f}, 손절가: {stop:.4f}, 목표가: {tp_str}")
-            
-        elif last_z <= -self.config.z_thresh:
-            action = 'BUY'
-            score = min(1.0, abs(last_z) / (self.config.z_thresh * 2.0))
-            conf = min(1.0, (abs(last_z) - self.config.z_thresh + 1.0) / (abs(last_z) + 1.0))
-            entry = last_price
-            stop = entry - max(1e-6, self.config.stop_atr_mult * atr_val)
-            if self.config.take_profit_atr_mult is not None:
-                tp = entry + self.config.take_profit_atr_mult * atr_val
-            
-            print(f"🟢 [ZSCORE] BUY 신호 생성!")
-            print(f"   📊 점수: {score:.4f}, 신뢰도: {conf:.4f}")
-            tp_str = f"{tp:.4f}" if tp is not None else "N/A"
-            print(f"   💰 진입가: {entry:.4f}, 손절가: {stop:.4f}, 목표가: {tp_str}")
+        # approximate ATR (simple proxy if hi/lo available)
+        if "high" in df.columns and "low" in df.columns:
+            tr = pd.concat([df["high"] - df["low"], (df["high"] - df["close"].shift()).abs(), (df["low"] - df["close"].shift()).abs()], axis=1)
+            tr = tr.max(axis=1)
+            atr = tr.rolling(self.config.atr_period, min_periods=1).mean().iloc[-1]
         else:
-            print(f"⚪ [ZSCORE] HOLD - Z값이 임계값 범위 내 ({-self.config.z_thresh:.2f} ~ {self.config.z_thresh:.2f})")
+            atr = float(df["close"].diff().abs().rolling(self.config.atr_period, min_periods=1).mean().iloc[-1])
 
-        result = {
-            'name': 'ZSCORE_MEAN_REVERSION',
-            'action': action,
-            'score': float(score),
-            'confidence': self._conf_bucket(float(conf)),
-            'entry': float(entry) if entry is not None else None,
-            'stop': float(stop) if stop is not None else None,
-            'tp': float(tp) if tp is not None else None,
-            'context': {
-                'last_z': last_z, 
-                'z_threshold': self.config.z_thresh, 
-                'atr': atr_val, 
-                'mode': self.config.mode
+        # convert z -> signal (with pre-signal)
+        sig = self._zscore_to_signal(last_z, self.config)
+
+        # produce entry/stop/tp using ATR if real trade
+        entry = last_price
+        stop = None
+        tp = None
+        if sig["action"] == "LONG":
+            stop = entry - self.config.stop_atr_mult * atr
+            tp = entry + (self.config.take_profit_atr_mult * atr if self.config.take_profit_atr_mult else None)
+        elif sig["action"] == "SHORT":
+            stop = entry + self.config.stop_atr_mult * atr
+            tp = entry - (self.config.take_profit_atr_mult * atr if self.config.take_profit_atr_mult else None)
+
+        # map action to canonical LONG/SHORT/HOLD
+        action = sig["action"]
+
+        return {
+            "name": "ZSCORE_MEAN_REVERSION",
+            "action": action,
+            "score": float(sig["score"]),
+            "confidence": sig["confidence"],
+            "entry": float(entry),
+            "stop": float(stop) if stop is not None else None,
+            "tp": float(tp) if tp is not None else None,
+            "context": {
+                "last_z": last_z,
+                "z_threshold": float(self.config.z_thresh),
+                "atr": float(atr),
+                "mode": "returns" if self.config.use_log else "pct",
+                "window": int(self.config.window),
             }
         }
-        
-        print(f"✅ [ZSCORE] 신호 생성 완료 - 액션: {action}, 점수: {score:.4f}, 신뢰도: {self._conf_bucket(float(conf))}")
-        print(f"📋 [ZSCORE] 결과: {result}")
-        
-        return result

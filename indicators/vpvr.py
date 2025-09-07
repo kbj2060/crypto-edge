@@ -31,14 +31,14 @@ class SessionVPVR:
         self,
         bins: int = 50,
         price_bin_size: float = 0.05,
-        lookback: int = 100,
+        lookback: int = 300,
         volume_field: str = "quote_volume",  # or "volume"
         hvn_sigma_factor: float = 0.5,
         lvn_sigma_factor: float = 0.5,
         top_n: int = 3,
         bottom_n: int = 3,
         recalc_bin_price_move_pct: float = 0.15,  # price move % to trigger bin_size recalculation
-        min_vol_pct: float = 0.0005,   # 전체 거래량 대비 최소 볼륨 비율(예: 0.0005 = 0.05%)
+        min_vol_pct: float = 0.005,   # 전체 거래량 대비 최소 볼륨 비율(예: 0.0005 = 0.05%)
         poc_distance_bins: int = 2,    # POC로부터 이 bins 이내 후보는 우선순위 낮춤
         distance_penalty: float = 0.6, # POC 거리 기반 점수 패널티 계수 (0..1)
     ):
@@ -74,9 +74,6 @@ class SessionVPVR:
         self.time_manager = get_time_manager()
         self.atr = ATR3M(length=14)
 
-        # session metadata
-        self.last_session_name: Optional[str] = None
-
         # initialize
         self._initialize_vpvr()
 
@@ -87,57 +84,22 @@ class SessionVPVR:
         """세션 설정 확인 후 초기 데이터 로드 및 bin_size 계산"""
         session_config = self.time_manager.get_indicator_mode_config()
 
-        if session_config.get('use_session_mode'):
-            self._load_session_data(session_config)
-        else:
-            self._load_lookback_data()
+        self._load_lookback_data()
 
         # determine initial sample price for bin_size calculation
         if self.price_bins:
             centers = list(self.price_bins.values())
             self._bin_sample_price = float(np.median(centers))
         else:
-            last_price = session_config.get('last_price') or session_config.get('session_start_price')
-            try:
-                self._bin_sample_price = float(last_price) if last_price is not None else 1.0
-            except Exception:
-                self._bin_sample_price = 1.0
+            self._bin_sample_price = 1.0
 
         # compute and fix bin_size for this session
         self.bin_size = self._calculate_dynamic_bin_size(self._bin_sample_price, force=True)
 
         self.last_update_time = dt.datetime.now(dt.timezone.utc)
-        self.last_session_name = session_config.get('session_name', 'UNKNOWN')
 
         # after initialization, compute vpvr result
-        self._update_vpvr_result(session_config)
-
-    def _load_session_data(self, session_config: Dict[str, Any]):
-        """세션 시작부터 현재까지의 데이터 로딩 및 누적"""
-        try:
-            data_manager = get_data_manager()
-            session_start = session_config.get('session_start_time')
-
-            if not session_start:
-                print("⚠️ 세션 시작 시간을 찾을 수 없습니다")
-                return
-
-            if isinstance(session_start, str):
-                session_start = dt.datetime.fromisoformat(session_start.replace('Z', '+00:00'))
-
-            df = data_manager.get_data_range(session_start, dt.datetime.now(dt.timezone.utc))
-
-            if df is None or df.empty:
-                print("⚠️ 세션 시작 이후 데이터가 없습니다")
-                return
-
-            for timestamp, row in df.iterrows():
-                self._process_candle_data(row, timestamp)
-
-            self.processed_candle_count = len(df)
-
-        except Exception as e:
-            print(f"❌ 세션 데이터 로딩 오류: {e}")
+        self._update_vpvr_result()
 
     def _load_lookback_data(self):
         """lookback 기간만큼 과거부터 현재까지 데이터 로딩 (간이 모드)"""
@@ -247,29 +209,15 @@ class SessionVPVR:
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들 데이터로 VPVR 업데이트 (실시간 경로)"""
         session_config = self.time_manager.get_indicator_mode_config()
-        self._check_session_reset(session_config)
-
-        try:
-            if hasattr(self.atr, 'update_with_candle'):
-                self.atr.update_with_candle(candle_data)
-        except Exception:
-            pass
+        # self._check_session_reset(session_config)
+        
+        self.atr.update_with_candle(candle_data)
 
         # price
-        try:
-            close_price = float(candle_data.get('close', candle_data.get('price', candle_data.get('last'))))
-        except Exception:
-            print("⚠️ 캔들에 close 가격이 없습니다.")
-            return
+        close_price = float(candle_data.get('close'))
 
-        # volume: prefer configured field, fallback to other
-        vol_val = candle_data.get(self.volume_field, None)
-        if vol_val is None:
-            vol_val = candle_data.get('volume', candle_data.get('base_volume', candle_data.get('qty', 0.0)))
-        try:
-            quote_volume = float(vol_val)
-        except Exception:
-            quote_volume = 0.0
+        vol_val = candle_data.get(self.volume_field)
+        quote_volume = float(vol_val)
 
         bin_key = self._get_price_bin_key(close_price)
 
@@ -283,7 +231,7 @@ class SessionVPVR:
         self.last_update_time = dt.datetime.now(dt.timezone.utc)
 
         # VPVR 결과 갱신
-        self._update_vpvr_result(session_config)
+        self._update_vpvr_result()
         print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] VPVR 업데이트 POC: {self.cached_result['poc']:.2f} HVN: {self.cached_result['hvn']:.2f} LVN: {self.cached_result['lvn']:.2f}")
         print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] ATR 업데이트 {self.atr.current_atr:.2f}")
 
@@ -318,7 +266,7 @@ class SessionVPVR:
     # -----------------------
     # VPVR 계산 (POC/HVN/LVN)
     # -----------------------
-    def _update_vpvr_result(self, session_config: Dict[str, Any] = None):
+    def _update_vpvr_result(self):
         """현재 누적된 데이터로 VPVR 결과 업데이트 (개선된 HVN/LVN 계산)"""
         try:
             if not self.volume_histogram:
@@ -452,54 +400,13 @@ class SessionVPVR:
                 "lvn_threshold": lvn_threshold,
                 "min_vol_threshold": min_vol_threshold,
                 "last_update": dt.datetime.now(dt.timezone.utc).isoformat(),
-                "mode": "session"
             }
-
-            if session_config:
-                s_start = session_config.get('session_start_time')
-                s_start_iso = (s_start.isoformat() if isinstance(s_start, dt.datetime) else s_start)
-                result.update({
-                    "session": session_config.get('session_name'),
-                    "session_start": s_start_iso,
-                    "elapsed_minutes": session_config.get('elapsed_minutes', 0)
-                })
 
             self.cached_result = result
             self.last_update_time = dt.datetime.now(dt.timezone.utc)
 
         except Exception as e:
             print(f"❌ VPVR 결과 업데이트 오류: {e}")
-
-    # -----------------------
-    # Reset / Session handling
-    # -----------------------
-    def _check_session_reset(self, session_config: Dict[str, Any]):
-        """세션 변경 시 VPVR 리셋 처리"""
-        try:
-            current_session = session_config.get('session_name', 'UNKNOWN')
-            if hasattr(self, 'last_session_name') and self.last_session_name != current_session:
-                print(f"🔄 세션 변경 감지: {self.last_session_name} → {current_session}")
-                print("🔄 VPVR 세션 데이터 리셋")
-                self.reset_session()
-            self.last_session_name = current_session
-        except Exception as e:
-            print(f"❌ 세션 리셋 확인 오류: {e}")
-
-    def reset_session(self):
-        """새 세션 시작 시 VPVR 리셋 (bin_size는 재계산 필요)"""
-        try:
-            session_config = self.time_manager.get_indicator_mode_config()
-            self.price_bins = {}
-            self.volume_histogram = {}
-            self.cached_result = None
-            self.last_update_time = None
-            self.processed_candle_count = 0
-            self.bin_size = None
-            self._bin_sample_price = None
-            self.last_session_name = session_config.get('session_name', 'UNKNOWN')
-            print(f"🔄 {self.last_session_name} 세션 VPVR 리셋 완료")
-        except Exception as e:
-            print(f"❌ 세션 리셋 오류: {e}")
 
     # -----------------------
     # Utilities / Exports
@@ -519,8 +426,8 @@ class SessionVPVR:
                 'is_session_active': session_config.get('use_session_mode', False),
                 'current_session': session_config.get('session_name'),
                 'session_start': (session_config.get('session_start_time').isoformat()
-                                  if isinstance(session_config.get('session_start_time'), dt.datetime)
-                                  else session_config.get('session_start_time')),
+                                    if isinstance(session_config.get('session_start_time'), dt.datetime)
+                                    else session_config.get('session_start_time')),
                 'mode': session_config.get('mode'),
                 'data_count': self._get_processed_candle_count(),
                 'last_update': self.last_update_time.isoformat() if self.last_update_time else None,
@@ -555,81 +462,3 @@ class SessionVPVR:
                 'mode': 'error',
                 'data_count': 0
             }
-
-    # -----------------------
-    # Debug / Verification
-    # -----------------------
-    def debug_verify_vpvr(self) -> Optional[Dict[str, Any]]:
-        """
-        디버그용: 현재 volume_histogram / price_bins로 POC/HVN/LVN 후보 및 통계 출력.
-        - 값들을 반환하므로 외부에서 검사하기 쉬움.
-        """
-        try:
-            active_bins = {k: v for k, v in self.volume_histogram.items() if v > 0}
-            if not active_bins:
-                print("No active bins")
-                return None
-
-            total_volume = float(sum(active_bins.values()))
-            poc_bin = max(active_bins, key=active_bins.get)
-            poc_price = self.price_bins.get(poc_bin)
-            print("TOTAL VOLUME:", total_volume)
-            print("POC BIN:", poc_bin, "POC PRICE:", poc_price, "POC VOL:", active_bins[poc_bin])
-
-            volume_ratios = {k: v / total_volume for k, v in active_bins.items()}
-            ratios_arr = np.array(list(volume_ratios.values()))
-            mean_ratio = float(np.mean(ratios_arr))
-            std_ratio = float(np.std(ratios_arr))
-            print("mean_ratio:", mean_ratio, "std_ratio:", std_ratio)
-
-            hvn_th = mean_ratio + (self.hvn_sigma_factor * std_ratio)
-            lvn_th = mean_ratio - (self.lvn_sigma_factor * std_ratio)
-            print("hvn_threshold:", hvn_th, "lvn_threshold:", lvn_th)
-
-            hvn_candidates = [k for k, r in volume_ratios.items() if (r > hvn_th and k != poc_bin)]
-            lvn_candidates = [k for k, r in volume_ratios.items() if (r < lvn_th and k != poc_bin)]
-            print("initial hvn_candidates:", hvn_candidates)
-            print("initial lvn_candidates:", lvn_candidates)
-
-            if not hvn_candidates:
-                sorted_desc = sorted(((k, v) for k, v in active_bins.items() if k != poc_bin),
-                                     key=lambda x: x[1], reverse=True)
-                hvn_candidates = [k for k, _ in sorted_desc[:self.top_n]]
-                print("fallback hvn_candidates (top_n):", hvn_candidates)
-
-            if not lvn_candidates:
-                sorted_asc = sorted(((k, v) for k, v in active_bins.items() if k != poc_bin),
-                                    key=lambda x: x[1])
-                lvn_candidates = [k for k, _ in sorted_asc[:self.bottom_n]]
-                print("fallback lvn_candidates (bottom_n):", lvn_candidates)
-
-            hvn_bin = max(hvn_candidates, key=lambda k: active_bins.get(k, 0)) if hvn_candidates else poc_bin
-            lvn_bin = min(lvn_candidates, key=lambda k: active_bins.get(k, 0)) if lvn_candidates else poc_bin
-            hvn_price = self.price_bins.get(hvn_bin)
-            lvn_price = self.price_bins.get(lvn_bin)
-
-            top10 = sorted(active_bins.items(), key=lambda x: x[1], reverse=True)[:10]
-            bottom10 = sorted(active_bins.items(), key=lambda x: x[1])[:10]
-
-            print("TOP10 BINS (bin, vol, price_rep):")
-            for b, v in top10:
-                print(" ", b, v, self.price_bins.get(b))
-            print("BOTTOM10 BINS (bin, vol, price_rep):")
-            for b, v in bottom10:
-                print(" ", b, v, self.price_bins.get(b))
-
-            return {
-                "total_volume": total_volume,
-                "poc_bin": poc_bin, "poc_price": poc_price,
-                "hvn_bin": hvn_bin, "hvn_price": hvn_price,
-                "lvn_bin": lvn_bin, "lvn_price": lvn_price,
-                "hvn_candidates": hvn_candidates,
-                "lvn_candidates": lvn_candidates,
-                "mean_ratio": mean_ratio, "std_ratio": std_ratio,
-                "hvn_threshold": hvn_th, "lvn_threshold": lvn_th,
-                "top10": top10, "bottom10": bottom10
-            }
-
-        except Exception as e:
-            print("debug_verify_vpvr error:", e)
-            return None

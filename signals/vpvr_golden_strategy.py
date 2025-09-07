@@ -15,7 +15,7 @@ class LVNGoldenPocket:
 
     @dataclass
     class VPVRConfig:
-        lookback_bars: int = 400
+        lookback_bars: int = 300
         bin_size: Optional[float] = None
         max_bins: int = 80
         use_quote_volume: bool = True
@@ -30,8 +30,8 @@ class LVNGoldenPocket:
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 400 
-        dryup_lookback: int = 20
+        swing_lookback: int = 300 
+        dryup_lookback: int = 60
         dryup_window: int = 5         # 4 -> 5
         dryup_frac: float = 0.6      # 0.6 -> 0.75 (완화)
         dryup_k: int = 3              # 최근 N봉 중 최소 k개 만족

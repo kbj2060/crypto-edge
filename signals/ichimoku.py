@@ -1,3 +1,19 @@
+
+class IchimokuCfg:
+    # Scalping-friendly Ichimoku settings (suitable for 1m-5m bars)
+    tenkan_period: int = 7          # conversion line (fast)
+    kijun_period: int = 22          # base line (slow)
+    senkou_b_period: int = 44       # leading span B (longer term)
+    displacement: int = 22          # cloud shift
+    require_price_above_cloud: bool = False  # only take long signals above cloud
+    require_cloud_thickness: float = 0.001  # minimal cloud thickness (in price units) to consider
+    require_chikou_confirm: bool = False    # whether to require chikou span confirmation for scalping (often False to be responsive)
+    max_holding_minutes: int = 30            # scalping max hold
+    min_body_ratio: float = 0.06             # require decent candle body for cross confirmation
+    use_cross_confirm: bool = False            # require Tenkan/Kijun cross to confirm entries
+    debug: bool = False
+
+
 # ichimoku_htf.py
 from dataclasses import dataclass
 from datetime import timedelta
@@ -30,7 +46,7 @@ def _atr(df: pd.DataFrame, period: int = 14) -> pd.Series:
     ], axis=1).max(axis=1)
     return tr.ewm(alpha=1/period, adjust=False).mean()
 
-def _ichimoku(df: pd.DataFrame, tenkan=9, kijun=26, senkou_b=52, shift=26):
+def _ichimoku(df: pd.DataFrame, tenkan, kijun, senkou_b, shift):
     """
     반환:
       - tenkan_sen, kijun_sen, senkou_a, senkou_b, chikou_span
