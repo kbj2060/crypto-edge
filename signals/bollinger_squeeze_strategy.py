@@ -15,27 +15,29 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class BBSqueezeCfg:
     # Aggressive / high-leverage tuning (10x-20x). More sensitive => earlier entries, tighter stops.
-    ma_period: int = 30                # short MA for responsiveness
-    std_period: int = 30               # short STD
-    std_dev: float = 1.25              # slightly tighter bands
-    squeeze_lookback: int = 6         # lookback for bb width mean
-    squeeze_threshold: float = 0.05   # interpret as normalized strength threshold (lower => more sensitive)
-    breakout_lookback: int = 1        # recent bars for breakout highs/lows
-    tp_R1: float = 1.5                # more conservative first target (smaller R)
-    tp_R2: float = 3.0                # tighter second target
-    stop_atr_mult: float = 1.0        # tighter stop (smaller ATR multiplier)
+    ma_period: int = 20                # short MA for responsiveness (lower => faster signaling)
+    std_period: int = 20               # STD period aligned with MA
+    std_dev: float = 1.8               # band width multiplier (1.8 is a good balance for tight but not noise-driven)
+    squeeze_lookback: int = 120        # lookback for bb width mean (e.g. ~6 hours on 3m bars)
+    squeeze_threshold: float = 0.12    # normalized strength threshold (higher => fewer false squeezes)
+    breakout_lookback: int = 2         # recent bars for breakout highs/lows (allow small confirmation)
+    tp_R1: float = 1.0                 # first target in R multiples (scalping-friendly)
+    tp_R2: float = 2.0                 # second target in R multiples (optional extended target)
+    stop_atr_mult: float = 1.5         # ATR multiplier for stop placement (avoid too tight stops)
     tick: float = 0.01
-    min_body_ratio: float = 0.06      # allow smaller bodies
-    allow_wick_break: bool = True     # allow wick touch as breakout
+    min_body_ratio: float = 0.08      # require a slightly larger candle body to confirm breakout
+    allow_wick_break: bool = False    # avoid wick-only triggers (require real body breakout)
     debug: bool = False
+
     # score composition weights (squeeze_strength, momentum, volume)
-    w_squeeze: float = 0.55
-    w_momentum: float = 0.3
+    w_squeeze: float = 0.40
+    w_momentum: float = 0.45
     w_volume: float = 0.15
+
     # minimal passive contribution when squeezed but no full breakout
-    passive_score_mul: float = 0.30
-    # allow firing even if squeeze not long-lived but strength above tiny threshold
-    immediate_fire_min_strength: float = 0.03
+    passive_score_mul: float = 0.20
+    # require a more meaningful immediate strength to fire without long squeeze
+    immediate_fire_min_strength: float = 0.04
 
 class BollingerSqueezeStrategy:
     def __init__(self, cfg: BBSqueezeCfg = BBSqueezeCfg()):

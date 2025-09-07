@@ -7,9 +7,9 @@ import pandas as pd
 @dataclass
 class VPVRConfig:
     n_bins: int = 64
-    lookback_bars: int = 240
+    lookback_bars: int = 180
     poc_tolerance: float = 0.002
-    min_profile_volume: float = 1.0
+    min_profile_volume: float = 5
     lookback_retest_bars: int = 3
     side_bias: Optional[str] = None  # 'LONG' or 'SHORT' or None
 
@@ -73,7 +73,7 @@ class VPVRMicro:
                 'name': 'VPVR_MICRO', 
                 'action': 'HOLD', 
                 'score': 0.0, 
-                'confidence': 0.0, 
+                'confidence': self._conf_bucket(float(0)), 
                 'context': {'reason': 'insufficient_bars'}
             }
 
@@ -85,7 +85,7 @@ class VPVRMicro:
                 'name': 'VPVR_MICRO', 
                 'action': 'HOLD', 
                 'score': 0.0, 
-                'confidence': 0.0, 
+                'confidence': self._conf_bucket(float(0)),
                 'context': {'reason': 'vpvr_fail'}
             }
 

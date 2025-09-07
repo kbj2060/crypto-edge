@@ -21,10 +21,10 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class VolSpikeConfig:
     # legacy params kept for backward compatibility
-    lookback: int = 20
-    vol_threshold: float = 1.6   # legacy: last_vol / vol_ma >= threshold
+    lookback: int = 60
+    vol_threshold: float = 1.4   # legacy: last_vol / vol_ma >= threshold
     # dynamic params
-    window: int = 30             # rolling window for dynamic statistics (excludes last bar)
+    window: int = 60             # rolling window for dynamic statistics (excludes last bar)
     mult: float = 3.0            # median multiplier for spike detection (dynamic)
     z_thresh: float = 2.0        # z-score threshold for dynamic detection
     min_volume: float = 1.0      # minimum absolute volume to consider
@@ -176,40 +176,3 @@ def _no_signal_result(**kwargs):
         'timestamp': datetime.utcnow(),
         'context': kwargs
     }
-
-def generate_signal(df: Optional[pd.DataFrame] = None, symbol: Optional[str] = None,
-                    lookback: int = 20, vol_threshold: float = 1.6,
-                    window: int = 30, mult: float = 3.0, z_thresh: float = 2.0,
-                    min_volume: float = 1.0) -> Dict[str, Any]:
-    cfg = VolSpikeConfig(lookback=lookback, vol_threshold=vol_threshold,
-                         window=window, mult=mult, z_thresh=z_thresh, min_volume=min_volume)
-    detector = VolSpike3m(cfg=cfg)
-    if df is None:
-        if get_data_manager is None or symbol is None:
-            return _no_signal_result(reason="no_data_provided")
-        try:
-            dm = get_data_manager()
-            df = dm.fetch_candles(symbol=symbol, timeframe='3m', limit=max(200, cfg.window + 10))
-        except Exception as e:
-            return _no_signal_result(reason="data_fetch_error", error=str(e))
-
-    # Ensure datetime index & sorted
-    if not isinstance(df.index, pd.DatetimeIndex):
-        try:
-            df.index = pd.to_datetime(df.index)
-        except Exception:
-            pass
-    df = df.sort_index()
-    return detector.detect(df)
-
-if __name__ == "__main__":
-    # quick self-test with synthetic data
-    import pandas as pd, numpy as np
-    rng = pd.date_range(end=pd.Timestamp.utcnow(), periods=120, freq='3T')
-    vols = np.random.poisson(lam=100, size=len(rng)).astype(float)
-    # insert a big spike
-    vols[-1] = vols[-1] * 8
-    closes = np.cumsum(np.random.randn(len(rng)) * 0.5) + 100
-    df = pd.DataFrame({'open': closes, 'high': closes + 0.2, 'low': closes - 0.2,
-                       'close': closes, 'volume': vols}, index=rng)
-    print(generate_signal(df=df))

@@ -1,6 +1,8 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
 from data.data_manager import get_data_manager
+from signals.vpvr_micro import VPVRConfig
+from signals.vwap_pinball_strategy import VWAPPinballCfg
 from utils.time_manager import get_time_manager
 
 
@@ -280,7 +282,8 @@ class StrategyExecutor:
         if not self.vpvr_micro_strategy:
             return
         
-        df_3m = self.data_manager.get_latest_data(count=300)
+        config = VPVRConfig()
+        df_3m = self.data_manager.get_latest_data(count=config.lookback_bars)
         result = self.vpvr_micro_strategy.on_kline_close_3m(df_3m)
         
         if result:
@@ -421,8 +424,8 @@ class StrategyExecutor:
         """VWAP 피니언 전략 실행"""
         if not self.vwap_pinball_strategy:
             return
-        
-        df_3m = self.data_manager.get_latest_data(count=4)
+        config = VWAPPinballCfg()
+        df_3m = self.data_manager.get_latest_data(count=config.lookback_bars)
         result = self.vwap_pinball_strategy.on_kline_close_3m(df_3m)
 
         if result:

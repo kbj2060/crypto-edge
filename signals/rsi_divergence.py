@@ -33,7 +33,7 @@ class HTFRSIDivCfg:
     rsi_period: int = 14
     stoch_period: int = 14
     lookback_bars: int = 200
-    divergence_lookback: int = 5   # 최근 N봉에서 다이버전스 확인
+    divergence_lookback: int = 8   # 최근 N봉에서 다이버전스 확인
     min_score: float = 0.5
 
 class RSIDivergence:

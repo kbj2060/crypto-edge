@@ -45,12 +45,12 @@ class GlobalIndicatorManager:
                 'class': SessionVPVR,
                 'bins': 50,
                 'price_bin_size': 0.05,
-                'lookback': 100
+                'lookback': 400
             },
             'atr': {
                 'class': ATR3M,
                 'length': 14,
-                'max_candles': 100
+                'max_candles': 300
             },
             'daily_levels': {
                 'class': DailyLevels,

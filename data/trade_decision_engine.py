@@ -49,7 +49,7 @@ class TradeDecisionEngine:
             "VWAP_PINBALL":    0.12,
             "HTF_TREND_15M":   0.12,
             "VPVR":            0.12,
-            "VPVR_MICRO":   0.05,
+            "VPVR_MICRO":      0.05,
             "VOL_SPIKE":       0.08,
             "ZSCORE_MEAN_REVERSION": 0.03,
             "BB_SQUEEZE":      0.08,
@@ -126,7 +126,7 @@ class TradeDecisionEngine:
         signed = {}
         raw = {}
         used_weight_sum = 0.0
-        
+
         for name, s in signals.items():
             name = name.upper()
             action = (s.get("action")).upper()
