@@ -154,67 +154,55 @@ class BinanceWebSocket:
 
     async def process_kline_3m(self, data: Dict):
         """3분봉 Kline 데이터 처리 (오류 처리 강화)"""
-        try:
-            if not data.get('k', {}).get('x', True):
-                return
-            kline = data['k']
-            
-            await asyncio.sleep(1)
-
-            print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
-            
-            # 3분봉이 완성되었으므로 카운트다운 재시작
-            if self.countdown_task and not self.countdown_task.done():
-                self.countdown_task.cancel()
-                
-            self.countdown_task = asyncio.create_task(self._countdown_to_next_3min_candle())
-            
-            price_data = self.candle_creator.create_price_data(kline)
-            
-        except Exception as e:
-            print(f"❌ [ProcessKline] 3분봉 데이터 처리 오류: {e}")
-            import traceback
-            traceback.print_exc()
+        if not data.get('k', {}).get('x', True):
             return
+        kline = data['k']
+        
+        await asyncio.sleep(1)
 
-        try:
-        # 이벤트 차단 기간 체크
-            is_event_blocking = self.event_manager.is_in_event_blocking_period()
-
-            # 웹소켓에서 받은 3분봉 데이터를 Series로 변환
-            series_3m = self.candle_creator.create_3min_series(price_data)
-            self.data_manager.update_with_candle(series_3m)
-
-            if self.candle_creator.is_candle_close("15m"):
-                self.data_manager.update_with_candle_15m()
+        print(f"\n⏰ OPEN TIME : {(self.time_manager.get_current_time()).strftime('%H:%M:%S')}")
+        
+        # 3분봉이 완성되었으므로 카운트다운 재시작
+        if self.countdown_task and not self.countdown_task.done():
+            self.countdown_task.cancel()
             
-            if self.candle_creator.is_candle_close("1h"):
-                self.data_manager.update_with_candle_1h()
+        self.countdown_task = asyncio.create_task(self._countdown_to_next_3min_candle())
+        
+        price_data = self.candle_creator.create_price_data(kline)
+        series_3m = self.candle_creator.create_3min_series(price_data)
 
-            self.global_manager.update_all_indicators(series_3m)
+        # is_event_blocking = self.event_manager.is_in_event_blocking_period()
 
-            # 이벤트 차단 기간이 아닐 때만 전략 신호 실행
-            if not is_event_blocking:
-                self.strategy_executor.execute_all_strategies()
-                
-                signals = self.strategy_executor.get_signals()
-                decision = self.decision_engine.decide_trade_realtime(signals, leverage=20)
-                print_decision_interpretation(decision)
+        self.data_manager.update_with_candle(series_3m)
 
-                if decision.get("action") != "HOLD":
-                    send_telegram_message(decision)
+        if self.candle_creator.is_candle_close("15m"):
+            self.data_manager.update_with_candle_15m()
+        
+        if self.candle_creator.is_candle_close("1h"):
+            self.data_manager.update_with_candle_1h()
 
-            self._execute_kline_callbacks(price_data)
+        self.global_manager.update_all_indicators(series_3m)
+        self.strategy_executor.execute_all_strategies()
+        
+        # if not is_event_blocking:
+        
+        signals = self.strategy_executor.get_signals()
+        decision = self.decision_engine.decide_trade_realtime(signals, leverage=20)
+        print_decision_interpretation(decision)
 
-            if self.time_manager.is_midnight_time():
-                self.event_manager.load_daily_events()
-                print(self.event_manager.get_events())
-            
-        except Exception as e:
-            print(f"❌ [ProcessKline] 전략 실행 오류: {e}")
-            import traceback
-            traceback.print_exc()
-    
+        # decision["candle_data"] = price_data
+        # llm_decision = await self.llm_decider.decide_async(signals)
+        # print_llm_judgment(llm_decision)
+
+        if decision.get("action") != "HOLD":
+            send_telegram_message(decision)
+
+        self._execute_kline_callbacks(price_data)
+
+        if self.time_manager.is_midnight_time():
+            self.event_manager.load_daily_events()
+            print(self.event_manager.get_events())
+
     def important_event_occurred(self) -> bool:
         """중요 이벤트 발생 여부 체크"""
         return self.event_manager.important_event_occurred()

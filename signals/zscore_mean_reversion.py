@@ -15,7 +15,7 @@ import pandas as pd
 
 @dataclass
 class ZScoreConfig:
-    window: int = 120
+    window: int = 80
     use_log: bool = True             # if True use log-price -> log-returns; else pct_change
     z_thresh: float = 1.2
     exit_z: float = 0.5

@@ -65,7 +65,7 @@ class EMATrend15m:
         diff_pct = diff / (ema_l if ema_l != 0 else 1.0)
 
         score = 0.0
-        action = None
+        action = "HOLD"
         conf = 'LOW'
 
         thresh = self.cfg.score_scale
@@ -86,8 +86,6 @@ class EMATrend15m:
         else:
             conf = 'LOW'
 
-        if action is None:
-            return None
         
         return {
             'name': 'EMA_TREND_15m',
