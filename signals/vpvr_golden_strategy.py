@@ -30,7 +30,7 @@ class LVNGoldenPocket:
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 300 
+        swing_lookback: int = 180 
         dryup_lookback: int = 60
         dryup_window: int = 5         # 4 -> 5
         dryup_frac: float = 0.6      # 0.6 -> 0.75 (완화)
@@ -230,12 +230,7 @@ class LVNGoldenPocket:
 
         # optional volume series 준비
         if vol_multiplier is not None:
-            if 'quote_volume' in df.columns:
-                vol_series = df['quote_volume'].astype(float)
-            elif 'volume' in df.columns:
-                vol_series = (df['volume'] * df['close']).astype(float)
-            else:
-                vol_series = None
+            vol_series = df['quote_volume'].astype(float)
             vol_sma = vol_series.rolling(max(1, lookback), min_periods=1).mean() if vol_series is not None else None
         else:
             vol_series = vol_sma = None
@@ -326,9 +321,6 @@ class LVNGoldenPocket:
         """Evaluate on the last bar of df. Returns signal dict or None.
         df: OHLCV DataFrame (open, high, low, close, volume[, quote_volume]) in time order.
         """
-        if df is None:
-            return None
-        
         gp = getattr(self, 'gp', None)
         if gp is not None:
             # apply more permissive settings for testing only
@@ -350,22 +342,18 @@ class LVNGoldenPocket:
             
         need = max(self.vpvr.lookback_bars, self.gp.swing_lookback) + 5
         if len(df) < need:
+            print("len(df) < need")
             return None
 
         df = df.copy()
         df.index = pd.Index(range(len(df)))
 
         # 1) ATR & tolerance
-        atr_last = get_atr()
-        if atr_last is None:
-            atr_last = float(self._atr(df, self.gp.atr_len).iloc[-1])
+        atr_last = float(self._atr(df, self.gp.atr_len).iloc[-1])    
         tol = self.gp.tolerance_atr_mult * atr_last
 
         # 2) VPVR (전역 우선) & LVN
-        try:
-            poc_global, hvn_global, lvn_global = get_vpvr()
-        except Exception as e:
-            poc_global, hvn_global, lvn_global = (None, None, None)
+        poc_global, hvn_global, lvn_global = get_vpvr()
 
         vp = None
         lvns = []
@@ -550,8 +538,6 @@ class LVNGoldenPocket:
         # print(f"[VPVR_SCORE] score={score:.3f} conf={confidence} comps={components} pct_move={pct_move:.4f} relaxed_level={relaxed_level}")
         # attach to ctx later by injecting into result
         # --- end SCORING ---
-
-
 
         result = {
             "stage": "ENTRY",

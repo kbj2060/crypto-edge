@@ -18,7 +18,7 @@ from utils.time_manager import get_time_manager
 
 @dataclass
 class VWAPPinballCfg:
-    lookback_bars: int = 300
+    lookback_bars: int = 200
     entry_sigma_steps: Tuple[float, ...] = (0.08, 0.15, 0.3)   # 훨씬 촘촘하게
     max_entries: int = 3
     tick: float = 0.02

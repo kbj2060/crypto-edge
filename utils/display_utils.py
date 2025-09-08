@@ -47,8 +47,23 @@ def print_decision_interpretation(decision: dict) -> None:
             # best-effort fallback
             contributions.append((name, 0.0, info.get("action"), info.get("score"), info.get("confidence"), info.get("weight")))
 
-    # sort by absolute contribution descending
-    contributions_sorted = sorted(contributions, key=lambda x: abs(x[1]), reverse=True)
+    # Group by action type and sort within each group
+    buy_strategies = []
+    sell_strategies = []
+    hold_strategies = []
+    
+    for (name, contrib, act, score, conf, weight) in contributions:
+        if act == "BUY":
+            buy_strategies.append((name, contrib, act, score, conf, weight))
+        elif act == "SELL":
+            sell_strategies.append((name, contrib, act, score, conf, weight))
+        else:  # HOLD or other
+            hold_strategies.append((name, contrib, act, score, conf, weight))
+    
+    # Sort each group by absolute contribution descending
+    buy_strategies.sort(key=lambda x: abs(x[1]), reverse=True)
+    sell_strategies.sort(key=lambda x: abs(x[1]), reverse=True)
+    hold_strategies.sort(key=lambda x: abs(x[1]), reverse=True)
 
     # Header
     print("────────────────────────────────────────────────────────")
@@ -57,13 +72,30 @@ def print_decision_interpretation(decision: dict) -> None:
     print(f"▶ 이유: {reason}")
     print("────────────────────────────────────────────────────────")
 
-    # Top contributors
-    if contributions_sorted:
-        print("전략별 기여 (큰 순):")
-        for (name, contrib, act, score, conf, weight) in contributions_sorted:
-            # format contribution sign and percent-ish
-            sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
-            print(f" - {name:12s} | action={str(act):5s} | score={score:.3f} conf={conf:.2f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+    # Print strategies grouped by action
+    if buy_strategies or sell_strategies or hold_strategies:
+        print("전략별 기여:")
+        
+        # BUY strategies
+        if buy_strategies:
+            print("🟢 BUY 신호:")
+            for (name, contrib, act, score, conf, weight) in buy_strategies:
+                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
+                print(f"   - {name:12s} | score={score:.3f} conf={conf:.2f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+        
+        # SELL strategies
+        if sell_strategies:
+            print("🔴 SELL 신호:")
+            for (name, contrib, act, score, conf, weight) in sell_strategies:
+                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
+                print(f"   - {name:12s} | score={score:.3f} conf={conf:.2f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+        
+        # HOLD strategies (at the end)
+        if hold_strategies:
+            print("🟡 HOLD 신호:")
+            for (name, contrib, act, score, conf, weight) in hold_strategies:
+                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
+                print(f"   - {name:12s} | score={score:.3f} conf={conf:.2f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
     else:
         print("전략별 정보가 없습니다.")
 
@@ -96,8 +128,6 @@ def print_decision_interpretation(decision: dict) -> None:
             checklist.append(f"권장 스케일이 작음 ({recommended_scale:.2f}) — 소량/스캘프 권장")
         # if confidence overall low (average conf factor small)
         avg_conf = 0.0
-        if contributions_sorted:
-            avg_conf = sum([c[4] for c in contributions_sorted]) / max(1.0, len(contributions_sorted))
         if avg_conf < 0.6:
             checklist.append("전반적 신뢰도 낮음(중·저) — 보수적 사이징 권장")
         # print checklist

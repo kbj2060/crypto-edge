@@ -18,8 +18,8 @@ class BBSqueezeCfg:
     ma_period: int = 20                # short MA for responsiveness (lower => faster signaling)
     std_period: int = 20               # STD period aligned with MA
     std_dev: float = 1.8               # band width multiplier (1.8 is a good balance for tight but not noise-driven)
-    squeeze_lookback: int = 120        # lookback for bb width mean (e.g. ~6 hours on 3m bars)
-    squeeze_threshold: float = 0.12    # normalized strength threshold (higher => fewer false squeezes)
+    squeeze_lookback: int = 60        # lookback for bb width mean (e.g. ~6 hours on 3m bars)
+    squeeze_threshold: float = 0.08    # normalized strength threshold (higher => fewer false squeezes)
     breakout_lookback: int = 2         # recent bars for breakout highs/lows (allow small confirmation)
     tp_R1: float = 1.0                 # first target in R multiples (scalping-friendly)
     tp_R2: float = 2.0                 # second target in R multiples (optional extended target)
@@ -260,4 +260,8 @@ class BollingerSqueezeStrategy:
                     }
                 }
         
-        return None
+        return {
+                    "stage": "NONE", "action": "HOLD", "entry": None, "stop": None,
+                    "targets": [None, None], "score": float(score), "confidence": conf,
+                    "context": {}
+                }

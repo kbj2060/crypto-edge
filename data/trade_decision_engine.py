@@ -45,16 +45,16 @@ class TradeDecisionEngine:
         ]
 
         default_weights = {
-            "ORDERFLOW_CVD":   0.26,
-            "VWAP_PINBALL":    0.12,
+            "ORDERFLOW_CVD":   0.18,
+            "VWAP_PINBALL":    0.15,
+            "SESSION":         0.15,
             "HTF_TREND_15M":   0.12,
             "VPVR":            0.12,
             "VPVR_MICRO":      0.05,
-            "VOL_SPIKE":       0.08,
-            "ZSCORE_MEAN_REVERSION": 0.03,
-            "BB_SQUEEZE":      0.08,
-            "SESSION":         0.05,
+            "VOL_SPIKE":       0.05,
+            "BB_SQUEEZE":      0.05,
             "EMA_TREND_15M":   0.04,
+            "ZSCORE_MEAN_REVERSION": 0.03,
             "RSI_DIV":         0.03,
             "ICHIMOKU":        0.02,
         }

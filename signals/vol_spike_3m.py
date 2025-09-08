@@ -21,10 +21,10 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class VolSpikeConfig:
     # legacy params kept for backward compatibility
-    lookback: int = 60
-    vol_threshold: float = 1.4   # legacy: last_vol / vol_ma >= threshold
+    lookback: int = 30
+    vol_threshold: float = 1.2   # legacy: last_vol / vol_ma >= threshold
     # dynamic params
-    window: int = 60             # rolling window for dynamic statistics (excludes last bar)
+    window: int = 30             # rolling window for dynamic statistics (excludes last bar)
     mult: float = 3.0            # median multiplier for spike detection (dynamic)
     z_thresh: float = 2.0        # z-score threshold for dynamic detection
     min_volume: float = 1.0      # minimum absolute volume to consider

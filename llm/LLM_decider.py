@@ -145,7 +145,7 @@ class LLMDecider:
         self,
         model: str = "deepseek-r1:14b",
         aggressive_mode: bool = True,
-        warmup_trades: int = 10,
+        warmup_trades: int = 1,
         rules_text: str = "",
         api_base: str = "http://localhost:11434",
         temperature: float = 0.0,
@@ -263,23 +263,23 @@ class LLMDecider:
         # raw can be dict(strategy_name->info) or list; handle dict primarily
         clean_strats: Dict[str, Dict[str, Any]] = {}
         top_scores = []
-        agree_counts = {"BUY": 0, "SELL": 0, "HOLD": 0}
+        agree_counts = {"LONG": 0, "SHORT": 0, "HOLD": 0}
 
         for name, info in raw.items():
             # skip non-dict entries
             if not isinstance(info, dict):
                 continue
             # normalize name
-            key_name = str(name).upper()
+            key_name = str(name).upper()    
 
             # infer votes if action present, but do NOT keep action in clean_strats
             action = info.get("action")
             if isinstance(action, str):
                 a = action.strip().upper()
                 if a in ("BUY", "LONG"):
-                    agree_counts["BUY"] += 1
+                    agree_counts["LONG"] += 1
                 elif a in ("SELL", "SHORT"):
-                    agree_counts["SELL"] += 1
+                    agree_counts["SHORT"] += 1
                 else:
                     agree_counts["HOLD"] += 1
 

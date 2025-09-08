@@ -16,7 +16,7 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class OrderflowCVDConfig:
     lookback_bars: int = 60
-    z_scale: float = 1.2
+    z_scale: float = 1.0
     min_notional: float = 500
 
 class OrderflowCVD:
@@ -61,7 +61,7 @@ class OrderflowCVD:
 
         z = (recent_sum - mu) / (sd if sd != 0 else 1.0)
 
-        action = None
+        action = "HOLD"
         score = 0.0
         conf = 'LOW'
 
@@ -75,19 +75,15 @@ class OrderflowCVD:
             else:
                 conf = 'LOW'
         else:
-            action = None
+            action = "HOLD"
             score = 0.0
             conf = 'LOW'
-
-        if action is None:
-            return None
         
         return {
-            'name': 'ORDERFLOW_CVD',
             'action': action,
             'score': float(score),
             'confidence': conf,
-            'timestamp': datetime.utcnow(),
+            'timestamp': self.time_manager.get_current_time(),
             'context': {
                 'recent_sum': float(recent_sum),
                 'mu': float(mu),
