@@ -5,6 +5,7 @@ import numpy as np
 import pandas as pd
 
 from indicators.global_indicators import get_atr, get_vpvr
+from utils.time_manager import get_time_manager
 
 class LVNGoldenPocket:
     """
@@ -30,13 +31,13 @@ class LVNGoldenPocket:
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 180 
-        dryup_lookback: int = 60
+        swing_lookback: int = 120 
+        dryup_lookback: int = 40
         dryup_window: int = 5         # 4 -> 5
-        dryup_frac: float = 0.6      # 0.6 -> 0.75 (완화)
-        dryup_k: int = 3              # 최근 N봉 중 최소 k개 만족
-        tolerance_atr_mult: float = 1.0  # 0.3 -> 0.5 (완화)
-        confirm_body_ratio: float = 0.3 # 0.3 -> 0.25 (조금 완화)
+        dryup_frac: float = 0.8      # 0.6 -> 0.75 (완화)
+        dryup_k: int = 2              # 최근 N봉 중 최소 k개 만족
+        tolerance_atr_mult: float = 2.0  # 0.3 -> 0.5 (완화)
+        confirm_body_ratio: float = 0.1 # 0.3 -> 0.25 (조금 완화)
         atr_len: int = 14
         tick: float = 0.1
         lvn_max_atr: float = 4.0      # LVN이 GP중앙에서 4×ATR 이내면 LVN 인정
@@ -60,6 +61,7 @@ class LVNGoldenPocket:
         self.lvn = lvn or LVNGoldenPocket.LVNSettings()
         self.gp = gp or LVNGoldenPocket.GoldenPocketCfg()
         self.risk = risk or LVNGoldenPocket.TargetsStopsCfg()
+        self.tm = get_time_manager()
 
     # ===== Utilities =====
 
@@ -146,7 +148,7 @@ class LVNGoldenPocket:
         return [(int(i), float(centers[i]), float(vols[i])) for i in idxs]
 
     def _nearest_lvn_to_price(self, lvns: List[Tuple[int, float, float]], price: float) -> Optional[Tuple[int, float, float]]:
-        if not lvns: return None
+        if not lvns: return self._no_signal_result()
         i = int(np.argmin([abs(p - price) for _, p, _ in lvns]))
         return lvns[i]
 
@@ -154,7 +156,8 @@ class LVNGoldenPocket:
         if len(df) < lookback + 1:
             lookback = len(df) - 1
         if lookback < 10:
-            return None
+            print("lookback < 10")
+            return self._no_signal_result()
         seg = df.tail(lookback)
         idx_low  = int(seg['low' ].idxmin())
         idx_high = int(seg['high'].idxmax())
@@ -314,9 +317,16 @@ class LVNGoldenPocket:
 
         return sat >= require_k
 
-
+    def _no_signal_result(self, **kwargs):
+        return {
+            "name": "VPVR",
+            "action": "HOLD",   
+            "timestamp": self.tm.get_current_time(),
+            "score": 0.0,
+            "context": kwargs
+        }
     # ===== Public API =====
-
+    
     def evaluate(self, df: pd.DataFrame) -> Optional[Dict[str, Any]]:
         """Evaluate on the last bar of df. Returns signal dict or None.
         df: OHLCV DataFrame (open, high, low, close, volume[, quote_volume]) in time order.
@@ -343,7 +353,7 @@ class LVNGoldenPocket:
         need = max(self.vpvr.lookback_bars, self.gp.swing_lookback) + 5
         if len(df) < need:
             print("len(df) < need")
-            return None
+            return self._no_signal_result()
 
         df = df.copy()
         df.index = pd.Index(range(len(df)))
@@ -382,7 +392,12 @@ class LVNGoldenPocket:
         # 3) Swing & Golden Pocket zone
         swing = self._detect_last_swing(df, self.gp.swing_lookback)
         if swing is None:
-            return None
+            return {
+                "name": "VPVR",
+                "action": "HOLD",   
+                "timestamp": self.time_manager.get_current_time(),
+                "score": 0.0,
+            }
             
         gp_low, gp_high, direction = self._golden_pocket_zone(df, swing)
 
@@ -392,7 +407,8 @@ class LVNGoldenPocket:
 
         # 4) Volume dry-up
         if not self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k):
-            return None
+            print("[VPVR] volume dry-up failed -> no signal")
+            return self._no_signal_result()
 
         # 5) Rejection confirmation
                 # --- Extra diagnostics: print GP/LVN/tol and df tail for manual inspection ---
@@ -442,8 +458,8 @@ class LVNGoldenPocket:
                     ok = True
                     break
             if not ok_relaxed:
-                # print('[VPVR] all relaxed rejection_confirm attempts failed -> no signal')
-                return None
+                print('[VPVR] all relaxed rejection_confirm attempts failed -> no signal')
+                return self._no_signal_result()
 
         # 6) Orders
 # 6) Orders
@@ -535,7 +551,7 @@ class LVNGoldenPocket:
         # --- end SCORING ---
 
         result = {
-            "stage": "ENTRY",
+            "name": "VPVR",
             "action": action,   
             "entry": float(entry),
             "stop": float(stop),
@@ -553,3 +569,4 @@ class LVNGoldenPocket:
             result['components'] = None
 
         return result
+

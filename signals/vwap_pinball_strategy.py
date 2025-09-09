@@ -53,6 +53,15 @@ class VWAPPinballStrategy:
         if hi == lo: return 0.0
         return float(max(0.0, min(1.0, (x - lo) / (hi - lo))))
 
+    def _no_signal_result(self,**kwargs):
+        return {
+            'name': 'VWAP_PINBALL',
+            'action': 'HOLD',
+            'score': 0.0,
+            'timestamp': self.tm.get_current_time(),
+            'context': kwargs
+        }
+
     def _bounce_quality(self, recent: pd.DataFrame, direction: str) -> float:
         lb = max(1, min(len(recent), self.cfg.bounce_lookback_bars))
         seg = recent.tail(lb)
@@ -105,7 +114,7 @@ class VWAPPinballStrategy:
     def on_kline_close_3m(self, df3: pd.DataFrame) -> Optional[Dict[str, Any]]:
         if df3 is None or len(df3) < 3:
             print("df3 is None or len(df3) < 3")
-            return None
+            return self._no_signal_result()
 
         try:
             vwap_val, vwap_std = get_vwap()
@@ -116,7 +125,7 @@ class VWAPPinballStrategy:
 
         if vwap_val is None:
             print("vwap_val is None")
-            return None
+            return self._no_signal_result()
         
         vwap_val = float(vwap_val)
         vwap_std = float(vwap_std) if vwap_std and vwap_std > 0 else max(0.01, float(np.std(df3['close'].values)) * 0.02)
@@ -208,7 +217,7 @@ class VWAPPinballStrategy:
             print("not cand_signals")
             if self.cfg.debug:
                 print("[VWAP_PINBALL DEBUG] no candidates for any sigma steps")
-            return None
+            return self._no_signal_result()
 
         scored = []
 
@@ -281,7 +290,7 @@ class VWAPPinballStrategy:
                 best_tmp = sorted(scored, key=lambda x: x["score"], reverse=True)[0]
                 print(f"[VWAP_PINBALL DEBUG] best below threshold score={best_tmp['score']:.3f} reason={best_tmp['reason']} "
                       f"mom={best_tmp['momentum']:.3f} price_score={best_tmp['price_score']:.3f}")
-            return None
+            return self._no_signal_result()
 
         best = sorted(scored_filtered, key=lambda x: x["score"], reverse=True)[0]
         reasons = [

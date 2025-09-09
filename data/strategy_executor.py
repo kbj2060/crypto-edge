@@ -2,7 +2,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 from data.data_manager import get_data_manager
 from signals.funding_rate_strategy import FundingRateCfg, FundingRateStrategy
-from signals.io_delta_strategy import OIDeltaCfg, OIDeltaStrategy
+from signals.oi_delta_strategy import OIDeltaCfg, OIDeltaStrategy
 from signals.liquidity_grab_strategy import LiquidityGrabStrategy
 from signals.macd_histogram_strategy import MACDHistogramStrategy
 from signals.vpvr_micro import VPVRConfig
@@ -71,7 +71,7 @@ class StrategyExecutor:
         
         self.funding_rate_strategy = FundingRateStrategy()
 
-        self.ioDelta_strategy = OIDeltaStrategy()
+        self.oiDelta_strategy = OIDeltaStrategy()
 
         self.macd_histogram_strategy = MACDHistogramStrategy()
 
@@ -121,7 +121,7 @@ class StrategyExecutor:
         # 15분봉 전략략
         #self._execute_ema_trend_15m_strategy()
         self._execute_htf_trend_15m_strategy()
-        self._execute_ioDelta_strategy()
+        self._execute_oiDelta_strategy()
         self._execute_funding_rate_strategy()
 
     def _execute_liquidity_grab_strategy(self):
@@ -160,11 +160,11 @@ class StrategyExecutor:
                 'timestamp': self.time_manager.get_current_time()
             }
 
-    def _execute_ioDelta_strategy(self):
+    def _execute_oiDelta_strategy(self):
         """IO Delta 전략 실행"""
-        if not self.ioDelta_strategy:
+        if not self.oiDelta_strategy:
             return
-        result = self.ioDelta_strategy.on_kline_close_3m()
+        result = self.oiDelta_strategy.on_kline_close_3m()
         if result:
             self.signals['OI_DELTA'] = {
                 'action': result.get('action', 'UNKNOWN'),

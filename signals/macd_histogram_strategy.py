@@ -17,24 +17,24 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class MACDHistogramCfg:
-    fast_period: int = 12
-    slow_period: int = 26
-    signal_period: int = 9
-    lookback_bars: int = 100
+    fast_period: int = 8             # 12 → 8 (더 민감)
+    slow_period: int = 18            # 26 → 18 (더 민감)
+    signal_period: int = 6           # 9 → 6 (더 민감)
+    lookback_bars: int = 60          # 100 → 60 (단축)
     min_histogram_change: float = 0.00005  # 최소 히스토그램 변화량
-    divergence_lookback: int = 20
-    momentum_threshold: float = 0.08         # 모멘텀 임계값
+    divergence_lookback: int = 10
+    momentum_threshold: float = 0.04         # 모멘텀 임계값
     atr_stop_mult: float = 1.2
     tp_R1: float = 2.0
     tp_R2: float = 3.0
     tick: float = 0.01
-    debug: bool = True
+    debug: bool = False
     
     # 점수 구성 가중치
-    w_histogram: float = 0.50    # 0.40 → 0.50
-    w_momentum: float = 0.25     # 0.30 → 0.25  
-    w_divergence: float = 0.15   # 0.20 → 0.15
-    w_volume: float = 0.10
+    w_histogram: float = 0.70    # 0.40 → 0.50
+    w_momentum: float = 0.15     # 0.30 → 0.25  
+    w_divergence: float = 0.10   # 0.20 → 0.15
+    w_volume: float = 0.05
 
 class MACDHistogramStrategy:
     """
@@ -148,12 +148,7 @@ class MACDHistogramStrategy:
     def _calculate_volume_confirmation(self, df: pd.DataFrame) -> float:
         """거래량 확인"""
         try:
-            if 'quote_volume' in df.columns:
-                vol_series = df['quote_volume'].astype(float)
-            elif 'volume' in df.columns:
-                vol_series = df['volume'].astype(float) * df['close'].astype(float)
-            else:
-                return 0.5  # 기본값
+            vol_series = df['quote_volume'].astype(float)
                 
             vol_ma = vol_series.rolling(20, min_periods=1).mean()
             current_vol = float(vol_series.iloc[-1])
@@ -167,18 +162,26 @@ class MACDHistogramStrategy:
                 
         except Exception:
             return 0.0
-    
+    def _no_signal_result(self,**kwargs):
+        return {
+            'name': 'MACD_HISTOGRAM',
+            'action': 'HOLD',
+            'score': 0.0,
+            'timestamp': self.time_manager.get_current_time(),
+            'context': kwargs
+        }
+
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
         """3분봉 마감 시 MACD 히스토그램 전략 실행"""
         data_manager = get_data_manager()
         if data_manager is None:
-            return None
+            return self._no_signal_result()
             
         df = data_manager.get_latest_data(self.cfg.lookback_bars + 50)
         if df is None or len(df) < max(self.cfg.slow_period + self.cfg.signal_period + 5, 50):
             if self.cfg.debug:
                 print(f"[MACD_HISTOGRAM] 데이터 부족: 필요={self.cfg.lookback_bars + 50}, 실제={len(df) if df is not None else 'None'}")
-            return None
+            return self._no_signal_result()
         
         close = pd.to_numeric(df['close'].astype(float))
         
@@ -200,7 +203,7 @@ class MACDHistogramStrategy:
         if abs(hist_change) < self.cfg.min_histogram_change:
             if self.cfg.debug:
                 print(f"[MACD_HISTOGRAM] 히스토그램 변화량 부족: {hist_change:.6f}")
-            return None
+            return self._no_signal_result()
         
         # 각 컴포넌트 점수 계산
         momentum_score = self._calculate_momentum_acceleration(histogram)
@@ -228,7 +231,7 @@ class MACDHistogramStrategy:
             div_score = 0.0
         
         if action == "HOLD":
-            return None
+            return self._no_signal_result()
         
         # 최종 점수 계산 (가중 평균)
         total_score = (
@@ -244,7 +247,7 @@ class MACDHistogramStrategy:
         if momentum_score < self.cfg.momentum_threshold:
             if self.cfg.debug:
                 print(f"[MACD_HISTOGRAM] 모멘텀 부족: {momentum_score:.3f} < {self.cfg.momentum_threshold}")
-            return None
+            return self._no_signal_result()
         
         # 진입/손절/목표가 계산
         atr = get_atr()

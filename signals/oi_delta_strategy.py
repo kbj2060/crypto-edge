@@ -101,6 +101,15 @@ class OIDeltaStrategy:
                 print(f"[OI_DELTA] OI 히스토리 처리 실패: {e}")
             return []
     
+    def _no_signal_result(self,**kwargs):
+        return {
+            'name': 'OI_DELTA',
+            'action': 'HOLD',
+            'score': 0.0,
+            'timestamp': self.time_manager.get_current_time(),
+            'context': kwargs
+        }
+
     def _analyze_oi_price_relationship(self, price_data: pd.DataFrame, 
                                      oi_history: List[Dict[str, Any]]) -> Dict[str, float]:
         """가격과 OI 변화의 관계 분석 - 개선된 버전"""
@@ -299,18 +308,18 @@ class OIDeltaStrategy:
         if len(oi_history) < 1:
             if self.cfg.debug:
                 print("[OI_DELTA] OI 히스토리 없음")
-            return None
+            return self._no_signal_result()
         
         # 가격 데이터 가져오기
         data_manager = get_data_manager()
         if data_manager is None:
-            return None
+            return self._no_signal_result()
             
         df = data_manager.get_latest_data(100)
         if df is None or len(df) < 50:
             if self.cfg.debug:
                 print("[OI_DELTA] 가격 데이터 부족")
-            return None
+            return self._no_signal_result()
         
         # 단일 포인트로도 변화 추정 (개선)
         if len(oi_history) == 1:
@@ -344,7 +353,7 @@ class OIDeltaStrategy:
                             'oi_available': len(oi_history)
                         }
                     }
-            return None
+            return self._no_signal_result()
         
         # 정상적인 분석 (2개 이상 데이터)
         oi_analysis = self._analyze_oi_price_relationship(df, oi_history)
@@ -352,7 +361,7 @@ class OIDeltaStrategy:
         
         # 개선: 중립이 아닌 모든 신호 처리
         if oi_signals['signal_type'] in ['NEUTRAL']:
-            return None
+            return self._no_signal_result()
         
         # 각 컴포넌트 점수 계산
         oi_magnitude = _clamp(abs(oi_analysis['oi_change_pct']) / self.cfg.oi_change_threshold, 0.0, 1.0)
@@ -374,7 +383,7 @@ class OIDeltaStrategy:
             elif signal_type in ['BEARISH_NEW_MONEY', 'LONG_LIQUIDATION', 'LIQUIDATION_DECLINE']:
                 action = "SELL"
             else:
-                return None
+                return self._no_signal_result()
             
             # 최종 점수 계산
             total_score = (
@@ -392,7 +401,7 @@ class OIDeltaStrategy:
         if total_score < 0.2:  # 0.4 → 0.2로 완화
             if self.cfg.debug:
                 print(f"[OI_DELTA] 점수 부족: {total_score:.3f}")
-            return None
+            return self._no_signal_result()
         
         # 신뢰도 설정
         if total_score >= 0.7:

@@ -25,11 +25,20 @@ class OrderflowCVD:
     def __init__(self, cfg: OrderflowCVDConfig = OrderflowCVDConfig()):
         self.cfg = cfg
         self.time_manager = get_time_manager()
-        
+    
+    def _no_signal_result(self,**kwargs):
+        return {
+            'name': 'ORDERFLOW_CVD',
+            'action': 'HOLD',
+            'score': 0.0,
+            'timestamp': self.time_manager.get_current_time(),
+            'context': kwargs
+        }
+
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
         dm = get_data_manager()
         if dm is None:
-            return None
+            return self._no_signal_result()
 
         df = None
         try:
@@ -39,14 +48,14 @@ class OrderflowCVD:
                 
 
         if df is None or len(df) < self.cfg.lookback_bars + 10:
-            return None
+            return self._no_signal_result()
 
         try:
             close = pd.to_numeric(df['close'].astype(float))
             open_ = pd.to_numeric(df['open'].astype(float))
             vol = pd.to_numeric(df['volume'].astype(float)) if 'volume' in df.columns else pd.Series([1.0]*len(df))
         except Exception:
-            return None
+            return self._no_signal_result()
 
         imbalance = (close - open_) * vol
         recent_sum = imbalance.iloc[-self.cfg.lookback_bars:].sum()

@@ -28,7 +28,7 @@ class LiquidityGrabCfg:
     tp_R1: float = 2.5
     tp_R2: float = 4.0
     tick: float = 0.01
-    debug: bool = True
+    debug: bool = False
     
     # 점수 구성 가중치
     w_grab_quality: float = 0.35
@@ -49,11 +49,6 @@ class LiquidityGrabStrategy:
         self.time_manager = get_time_manager()
         self.cached_levels = []
         self.last_level_update = None
-        self.default_result =  {
-            'action': 'HOLD', 
-            'score': 0.0, 
-            'timestamp': self.time_manager.get_current_time()
-            }
         
     def _find_support_resistance_levels(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
         """지지/저항선 찾기"""
@@ -132,7 +127,7 @@ class LiquidityGrabStrategy:
     def _detect_liquidity_grab(self, df: pd.DataFrame, levels: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """유동성 사냥 패턴 감지"""
         if len(df) < self.cfg.max_grab_bars + 1:
-            return self.default_result
+            return None
             
         recent_bars = df.tail(self.cfg.max_grab_bars + 1)
         
@@ -248,18 +243,27 @@ class LiquidityGrabStrategy:
                 print(f"[LIQUIDITY_GRAB] 품질 분석 오류: {e}")
             return self.default_result
     
+    def _no_signal_result(self,**kwargs):
+        return {
+            'name': 'LIQUIDITY_GRAB',
+            'action': 'HOLD',
+            'score': 0.0,
+            'timestamp': self.time_manager.get_current_time(),
+            'context': kwargs
+        }
+    
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
         """3분봉 마감 시 유동성 사냥 전략 실행"""
         data_manager = get_data_manager()
         if data_manager is None:
-            return self.default_result
+            return self._no_signal_result()
             
         df = data_manager.get_latest_data(self.cfg.lookback_bars + 20)
         if df is None or len(df) < self.cfg.support_resistance_period + 10:
             if self.cfg.debug:
                 print(f"[LIQUIDITY_GRAB] 데이터 부족: 필요={self.cfg.lookback_bars + 20}, "
                         f"실제={len(df) if df is not None else 'None'}")
-            return self.default_result
+            return self._no_signal_result()
         
         # 지지/저항선 찾기 (캐시 활용)
         now = self.time_manager.get_current_time()
@@ -275,12 +279,12 @@ class LiquidityGrabStrategy:
         if not levels:
             if self.cfg.debug:
                 print("[LIQUIDITY_GRAB] 유효한 지지/저항선 없음")
-            return self.default_result
+            return self._no_signal_result()
         
         # 유동성 사냥 패턴 감지
         grab_result = self._detect_liquidity_grab(df, levels)
         if grab_result is None:
-            return None
+            return self._no_signal_result()
         
         # 추가 확인 지표들
         current_price = float(df['close'].iloc[-1])
@@ -292,7 +296,6 @@ class LiquidityGrabStrategy:
             vwap_distance = abs(current_price - float(vwap)) / float(vwap_std or current_price * 0.01)
             vwap_score = _clamp(1.0 - vwap_distance / 2.0, 0.0, 1.0)
         
-        print(grab_result)
         # 최종 점수 계산
         total_score = (
             self.cfg.w_grab_quality * grab_result['grab_quality'] +
@@ -309,7 +312,7 @@ class LiquidityGrabStrategy:
         if total_score < 0.5:
             if self.cfg.debug:
                 print(f"[LIQUIDITY_GRAB] 점수 부족: {total_score:.3f}")
-            return self.default_result
+            return self._no_signal_result()
         
         # 진입/손절/목표가 계산
         action = grab_result['signal_direction']

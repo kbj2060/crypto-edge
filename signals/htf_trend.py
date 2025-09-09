@@ -102,17 +102,15 @@ class HTFTrend:
         last_ema15 = float(ema15.iloc[-1])
         atr_val = float(self.atr(df_15m, self.config.atr_period).iloc[-1])
 
-        action = 'HOLD'; score = 0.0; conf = 0.0; entry = None; stop = None
+        action = 'HOLD'; score = 0.0; entry = None; stop = None
         if ema_trend == 'UP' and last_close >= last_ema15:
             action = 'BUY'
             score = min(1.0, max(0.0, (macd_hist / (abs(macd_hist) + 1e-9)) * 0.8 + 0.2))
-            conf = 0.8 if macd_hist > 0 else 0.6
             entry = last_close
             stop = entry - 1.5 * atr_val
         elif ema_trend == 'DOWN' and last_close <= last_ema15:
             action = 'SELL'
             score = min(1.0, max(0.0, (-macd_hist / (abs(macd_hist) + 1e-9)) * 0.8 + 0.2))
-            conf = 0.8 if macd_hist < 0 else 0.6
             entry = last_close
             stop = entry + 1.5 * atr_val
 

@@ -19,56 +19,47 @@ class TradeDecisionEngine:
         base_risk_pct: float = 0.005,
         leverage: float = 20,
         weights: Optional[Dict[str, float]] = None,
-        open_threshold: float = 0.5,
+        open_threshold: float = 0.25,
         immediate_threshold: float = 0.75,
-        confirm_threshold: float = 0.45,
+        confirm_threshold: float = 0.3,
         confirm_window_sec: int = 180,
         session_priority: bool = True,
         news_event: bool = False,
     ) -> Dict[str, Any]:
         """실시간 거래 결정"""
         
-        # 기본 가중치 설정
+        # 기본 가중치 설정 (단타 최적화)
         priority_order = [
-            "HTF_TREND_15M",      
-            "ORDERFLOW_CVD",       
-            "RSI_DIV",      
-            "MACD_HISTOGRAM",              
-            "FUNDING_RATE",
-            "LIQUIDITY_GRAB",      
-            "OI_DELTA",      
-            "VWAP_PINBALL",    
-            "SESSION",           
-            "VPVR",
-            "VOL_SPIKE",             
+            "ORDERFLOW_CVD",       # 1순위 (25%)
+            "RSI_DIV",             # 2순위 (22%)
+            "MACD_HISTOGRAM",      # 3순위 (20%)
+            "LIQUIDITY_GRAB",      # 4순위 (12%)
+            "VWAP_PINBALL",        # 5순위 (10%)
+            "SESSION",             # 6순위 (8%)
+            "OI_DELTA",            # 7순위 (8%)
+            "VPVR",                # 8순위 (6%)
+            "VOL_SPIKE",           # 9순위 (6%)
+            "FUNDING_RATE",        # 10순위 (2%)
+            "HTF_TREND_15M",       # 11순위 (1%)
         ]
 
         default_weights = {
-            # 핵심 추세/모멘텀 (45%)
-            "HTF_TREND_15M":    0.15,  # 상위 추세 확인
-            "ORDERFLOW_CVD":    0.15,  # 스마트머니 추적  
-            "RSI_DIV":          0.15,  # 모멘텀 전환 신호
+            # 순수 단타 핵심 지표 (67%)
+            "ORDERFLOW_CVD":    0.35,  # 스마트머니 실시간 추적
+            "RSI_DIV":          0.01,  # 모멘텀 전환 포착
+            "MACD_HISTOGRAM":   0.25,  # 모멘텀 가속도
             
-            # 신규 핵심 지표 (30%)
-            "MACD_HISTOGRAM":   0.12,  # 🆕 모멘텀 가속도 (가장 중요)
-            "FUNDING_RATE":     0.08,  # 🆕 시장 심리 (크립토 특화)
-            "LIQUIDITY_GRAB":   0.06,  # 🆕 유동성 사냥 패턴
-            "OI_DELTA":         0.04,  # 🆕 선물 미결제약정 변화
+            # 단타 보조 지표 (30%)
+            "LIQUIDITY_GRAB":   0.12,  # 유동성 사냥 패턴
+            "VWAP_PINBALL":     0.10,  # 동적 지지저항
+            "SESSION":          0.10,  # 세션 오프닝
+            "OI_DELTA":         0.01,  # 선물 OI 변화
+            "VPVR":             0.01,  # 볼륨 프로파일
+            "VOL_SPIKE":        0.15,  # 볼륨 스파이크
             
-            # 레벨/세션 기반 (20%)
-            "VWAP_PINBALL":     0.08,  # 동적 지지/저항
-            "SESSION":          0.07,  # 세션 오프닝 레인지  
-            "VPVR":             0.05,  # 볼륨 프로파일 레벨
-            
-            # 볼륨/변동성 (5%)
-            "VOL_SPIKE":        0.05,  # 볼륨 스파이크
-            
-            # 제거 대상
-            # "VPVR_MICRO":      제거 (VPVR와 중복)
-            # "EMA_TREND_15M":   제거 (HTF_TREND_15M와 중복) 
-            # "ZSCORE_MEAN_REVERSION": 제거 (VWAP_PINBALL과 유사)
-            # "BB_SQUEEZE":      제거 (VOL_SPIKE로 대체)
-            # "ICHIMOKU":        제거 (단타에 부적합)
+            # 장기성 지표 (3%)
+            "FUNDING_RATE":     0.01,  # 8시간 고정값
+            "HTF_TREND_15M":    0.01,  # 참고용 최소 가중치
         }
 
         if weights is None:
@@ -137,7 +128,6 @@ class TradeDecisionEngine:
         used_weight_sum = 0.0
 
         for name, s in signals.items():
-            print(name, s)
             name = name.upper()
             action = (s.get("action")).upper()
             score = float(s.get("score"))

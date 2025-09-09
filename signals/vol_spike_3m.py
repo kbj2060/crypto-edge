@@ -21,13 +21,13 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class VolSpikeConfig:
     # legacy params kept for backward compatibility
-    lookback: int = 30
-    vol_threshold: float = 1.2   # legacy: last_vol / vol_ma >= threshold
+    lookback: int = 20
+    vol_threshold: float = 1.1   # legacy: last_vol / vol_ma >= threshold
     # dynamic params
     window: int = 30             # rolling window for dynamic statistics (excludes last bar)
-    mult: float = 3.0            # median multiplier for spike detection (dynamic)
-    z_thresh: float = 2.0        # z-score threshold for dynamic detection
-    min_volume: float = 1.0      # minimum absolute volume to consider
+    mult: float = 1.5           # median multiplier for spike detection (dynamic)
+    z_thresh: float = 1.0        # z-score threshold for dynamic detection
+    min_volume: float = 0.1     # minimum absolute volume to consider
 
 class VolSpike:
     """VOL_SPIKE detector - dynamic mode (median + z-score) while keeping legacy outputs.
@@ -37,21 +37,30 @@ class VolSpike:
         self.cfg = cfg
         self.tm = get_time_manager()
 
+    def _no_signal_result(self,**kwargs):
+        return {
+            'name': 'VOL_SPIKE',
+            'action': 'HOLD',
+            'score': 0.0,
+            'timestamp': self.tm.get_current_time(),
+            'context': kwargs
+        }
+
     def on_kline_close_3m(self, df: pd.DataFrame) -> Dict[str, Any]:
         # Validate input
         if df is None or len(df) < max(5, self.cfg.window + 1):
-            return _no_signal_result(reason="insufficient_data")
+            return self._no_signal_result(reason="insufficient_data")
 
         # Require necessary columns
         for col in ('open', 'high', 'low', 'close', 'volume'):
             if col not in df.columns:
-                return _no_signal_result(reason=f"missing_column_{col}")
+                return self._no_signal_result(reason=f"missing_column_{col}")
 
         df = df.sort_index()
         v_series = df['volume'].astype(float)
         last_vol = float(v_series.iloc[-1])
         if last_vol < self.cfg.min_volume:
-            return _no_signal_result(reason="low_absolute_volume", last_vol=last_vol)
+            return self._no_signal_result(reason="low_absolute_volume", last_vol=last_vol)
 
         # Compute legacy vol_ma (rolling mean) excluding last bar for compatibility
         try:
@@ -157,11 +166,3 @@ class VolSpike:
             }
         }
 
-def _no_signal_result(**kwargs):
-    return {
-        'name': 'VOL_SPIKE',
-        'action': 'HOLD',
-        'score': 0.0,
-        'timestamp': datetime.utcnow(),
-        'context': kwargs
-    }
