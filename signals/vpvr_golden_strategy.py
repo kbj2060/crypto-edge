@@ -24,25 +24,25 @@ class LVNGoldenPocket:
 
     @dataclass
     class LVNSettings:
-        low_percentile: float = 0.30
-        local_min: bool = True
+        low_percentile: float = 0.40  # 0.30 -> 0.40 (완화)
+        local_min: bool = False       # True -> False (완화)
         merge_neighbors: bool = True
-        merge_ticks: int = 3
+        merge_ticks: int = 5          # 3 -> 5 (완화)
 
     @dataclass
     class GoldenPocketCfg:
-        swing_lookback: int = 120 
-        dryup_lookback: int = 40
-        dryup_window: int = 5         # 4 -> 5
-        dryup_frac: float = 0.8      # 0.6 -> 0.75 (완화)
-        dryup_k: int = 2              # 최근 N봉 중 최소 k개 만족
-        tolerance_atr_mult: float = 2.0  # 0.3 -> 0.5 (완화)
-        confirm_body_ratio: float = 0.1 # 0.3 -> 0.25 (조금 완화)
+        swing_lookback: int = 60      # 120 -> 60 (단축)
+        dryup_lookback: int = 20      # 40 -> 20 (단축)
+        dryup_window: int = 3         # 5 -> 3 (단축)
+        dryup_frac: float = 0.9      # 0.8 -> 0.9 (완화)
+        dryup_k: int = 1              # 2 -> 1 (완화)
+        tolerance_atr_mult: float = 3.0  # 2.0 -> 3.0 (완화)
+        confirm_body_ratio: float = 0.05 # 0.1 -> 0.05 (완화)
         atr_len: int = 14
         tick: float = 0.1
-        lvn_max_atr: float = 4.0      # LVN이 GP중앙에서 4×ATR 이내면 LVN 인정
+        lvn_max_atr: float = 6.0      # 4.0 -> 6.0 (완화)
         confirm_mode: str = "wick_or_break"  # 'wick' | 'break' | 'wick_or_break'
-        zone_widen_atr: float = 0.3   # GP 존을 ±(0.2×ATR) 만큼 넓혀 허용
+        zone_widen_atr: float = 0.5   # 0.3 -> 0.5 (완화)
 
     @dataclass
     class TargetsStopsCfg:
@@ -155,8 +155,8 @@ class LVNGoldenPocket:
     def _detect_last_swing(self, df: pd.DataFrame, lookback: int) -> Optional[Tuple[int, int]]:
         if len(df) < lookback + 1:
             lookback = len(df) - 1
-        if lookback < 10:
-            print("lookback < 10")
+        if lookback < 5:  # 10 -> 5 (완화)
+            print("lookback < 5")
             return self._no_signal_result()
         seg = df.tail(lookback)
         idx_low  = int(seg['low' ].idxmin())
@@ -199,8 +199,11 @@ class LVNGoldenPocket:
         last_idx = df.tail(window).index
         conds = (v.loc[last_idx] <= dry_frac * sma.loc[last_idx]).to_list()
         sat = sum(1 for c in conds if bool(c))
-        # require at least dry_k successes
-        return sat >= max(1, min(dry_k, window))
+        
+        # 더 유연한 조건: 최소 1개 또는 전체의 50% 이상
+        min_required = max(1, min(dry_k, window))
+        alt_required = max(1, window // 2)  # 전체의 50%
+        return sat >= min_required or sat >= alt_required
 
 
     def _rejection_confirm(self,
@@ -392,12 +395,15 @@ class LVNGoldenPocket:
         # 3) Swing & Golden Pocket zone
         swing = self._detect_last_swing(df, self.gp.swing_lookback)
         if swing is None:
+            print(f"[VPVR] swing detection failed -> no signal (lookback={self.gp.swing_lookback}, df_len={len(df)})")
             return {
                 "name": "VPVR",
                 "action": "HOLD",   
-                "timestamp": self.time_manager.get_current_time(),
+                "timestamp": self.tm.get_current_time(),
                 "score": 0.0,
             }
+        else:
+            print(f"[VPVR] swing detected ✓ (swing={swing})")
             
         gp_low, gp_high, direction = self._golden_pocket_zone(df, swing)
 
@@ -406,9 +412,12 @@ class LVNGoldenPocket:
         lvn_price = nearest_lvn[1] if nearest_lvn else None
 
         # 4) Volume dry-up
-        if not self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k):
-            print("[VPVR] volume dry-up failed -> no signal")
+        dryup_result = self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k)
+        if not dryup_result:
+            print(f"[VPVR] volume dry-up failed -> no signal (lookback={self.gp.dryup_lookback}, window={self.gp.dryup_window}, frac={self.gp.dryup_frac}, k={self.gp.dryup_k})")
             return self._no_signal_result()
+        else:
+            print(f"[VPVR] volume dry-up passed ✓")
 
         # 5) Rejection confirmation
                 # --- Extra diagnostics: print GP/LVN/tol and df tail for manual inspection ---
@@ -527,13 +536,10 @@ class LVNGoldenPocket:
         lvn_comp = max(0.0, min(1.0, lvn_comp))
         # pct comp (more sensitive)
         pct_comp = min(1.0, abs(pct_move) / 0.002)
-        # relaxed_level if present in local scope or ps
+        # relaxed_level if present in local scope
         relaxed_level = locals().get('i', None)
         if relaxed_level is None:
-            try:
-                relaxed_level = int(ps.get('relaxed_level', 0)) if ps is not None else 0
-            except Exception:
-                relaxed_level = 0
+            relaxed_level = 0
         # small penalty for high relaxation
         relax_pen = max(0.0, 1.0 - 0.15 * float(relaxed_level))
         # weights

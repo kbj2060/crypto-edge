@@ -52,7 +52,7 @@ class EMATrend15m:
         # 데이터 시작 시간을 15분 경계 기준으로 설정
         start_time = last_15min_boundary - timedelta(minutes=15*self.cfg.min_bars)
         
-        df = self.data_loader.fetch_data(interval="15m", symbol='ETHUSDT', start_time=start_time, end_time=last_15min_boundary)
+        df = self.data_loader.fetch_data(interval="15m", symbol='ETHUSDC', start_time=start_time, end_time=last_15min_boundary)
 
         if df is None or len(df) < self.cfg.ema_long + 2:
             return None
@@ -78,9 +78,6 @@ class EMATrend15m:
         else:
             action = None
             score = 0.0
-
-        conf = score
-
         
         return {
             'name': 'EMA_TREND_15m',

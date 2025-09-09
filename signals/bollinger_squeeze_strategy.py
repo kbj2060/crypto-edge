@@ -12,32 +12,61 @@ def _clamp(x, a=0.0, b=1.0):
     except Exception:
         return a
 
+def _calculate_atr(df: pd.DataFrame, period: int = 14) -> float:
+    """
+    15분봉 데이터에 맞는 ATR 계산
+    """
+    try:
+        if len(df) < period + 1:
+            return 0.0
+        
+        high = pd.to_numeric(df['high'].astype(float))
+        low = pd.to_numeric(df['low'].astype(float))
+        close = pd.to_numeric(df['close'].astype(float))
+        
+        # True Range 계산
+        prev_close = close.shift(1)
+        tr1 = high - low
+        tr2 = (high - prev_close).abs()
+        tr3 = (low - prev_close).abs()
+        
+        true_range = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+        
+        # ATR 계산 (지수이동평균 사용)
+        atr = true_range.ewm(alpha=1/period, adjust=False).mean()
+        
+        return float(atr.iloc[-1]) if not pd.isna(atr.iloc[-1]) else 0.0
+        
+    except Exception as e:
+        print(f"[BB_SQUEEZE] ATR 계산 오류: {e}")
+        return 0.0
+
 @dataclass
 class BBSqueezeCfg:
-    # Aggressive / high-leverage tuning (10x-20x). More sensitive => earlier entries, tighter stops.
-    ma_period: int = 20                # short MA for responsiveness (lower => faster signaling)
-    std_period: int = 20               # STD period aligned with MA
-    std_dev: float = 1.8               # band width multiplier (1.8 is a good balance for tight but not noise-driven)
-    squeeze_lookback: int = 60        # lookback for bb width mean (e.g. ~6 hours on 3m bars)
-    squeeze_threshold: float = 0.08    # normalized strength threshold (higher => fewer false squeezes)
-    breakout_lookback: int = 2         # recent bars for breakout highs/lows (allow small confirmation)
-    tp_R1: float = 1.0                 # first target in R multiples (scalping-friendly)
-    tp_R2: float = 2.0                 # second target in R multiples (optional extended target)
-    stop_atr_mult: float = 1.5         # ATR multiplier for stop placement (avoid too tight stops)
+    # Medium-term strategy tuning for 15m bars (1-4 hour holds)
+    ma_period: int = 20                # 20개 봉 = 5시간 (15분봉)
+    std_period: int = 20               # 20개 봉 = 5시간 (15분봉)
+    std_dev: float = 2.0               # 밴드 폭 배수 (15분봉용으로 완화)
+    squeeze_lookback: int = 60         # 60개 봉 = 15시간 (15분봉)
+    squeeze_threshold: float = 0.06    # 스퀴즈 임계값 완화 (15분봉용)
+    breakout_lookback: int = 3         # 3개 봉 = 45분 (15분봉용)
+    tp_R1: float = 2.0                 # 1차 목표: 2R (중기용)
+    tp_R2: float = 3.5                 # 2차 목표: 3.5R (중기용)
+    stop_atr_mult: float = 2.0         # ATR 배수 증가 (중기용)
     tick: float = 0.01
-    min_body_ratio: float = 0.08      # require a slightly larger candle body to confirm breakout
-    allow_wick_break: bool = False    # avoid wick-only triggers (require real body breakout)
-    debug: bool = False
+    min_body_ratio: float = 0.06       # 몸통 비율 완화 (15분봉용)
+    allow_wick_break: bool = True      # 위크 브레이크 허용 (15분봉용)
+    debug: bool = True                 # 디버깅 활성화
 
     # score composition weights (squeeze_strength, momentum, volume)
-    w_squeeze: float = 0.40
-    w_momentum: float = 0.45
+    w_squeeze: float = 0.50            # 스퀴즈 가중치 증가
+    w_momentum: float = 0.35           # 모멘텀 가중치 감소
     w_volume: float = 0.15
 
     # minimal passive contribution when squeezed but no full breakout
-    passive_score_mul: float = 0.20
+    passive_score_mul: float = 0.30    # 패시브 점수 증가
     # require a more meaningful immediate strength to fire without long squeeze
-    immediate_fire_min_strength: float = 0.04
+    immediate_fire_min_strength: float = 0.03  # 즉시 발화 임계값 완화
 
 class BollingerSqueezeStrategy:
     def __init__(self, cfg: BBSqueezeCfg = BBSqueezeCfg()):
@@ -50,7 +79,7 @@ class BollingerSqueezeStrategy:
     def evaluate(self) -> Optional[Dict[str, Any]]:
         data_manager = get_data_manager()
         req_len = self.cfg.squeeze_lookback + max(self.cfg.ma_period, self.cfg.std_period) + 5
-        df = data_manager.get_latest_data(req_len)
+        df = data_manager.get_latest_data_15m(req_len)
 
         if df is None or len(df) < max(self.cfg.ma_period, self.cfg.std_period, self.cfg.squeeze_lookback) + 2:
             if self.cfg.debug:
@@ -134,12 +163,8 @@ class BollingerSqueezeStrategy:
         # volume component (optional): compare last volume to recent MA (quote_volume preferred)
         vol_comp = 0.0
         try:
-            if 'quote_volume' in df.columns:
-                v_series = pd.to_numeric(df['quote_volume'].astype(float))
-            elif 'volume' in df.columns:
-                v_series = pd.to_numeric(df['volume'].astype(float) * df['close'].astype(float))
-            else:
-                v_series = None
+            v_series = pd.to_numeric(df['quote_volume'].astype(float))
+
             if v_series is not None:
                 vol_ma = v_series.rolling(self.cfg.squeeze_lookback, min_periods=1).mean().iloc[-2]
                 last_vol = float(v_series.iloc[-1])
@@ -158,14 +183,14 @@ class BollingerSqueezeStrategy:
             momentum = (last_close - prev_close) / prev_close
         mom_norm = _clamp(abs(momentum) / 0.005, 0.0, 1.0)
 
-        # determine allowed_to_fire: aggressive rules (RELAXED)
+        # determine allowed_to_fire: medium-term rules (RELAXED for 15m bars)
         allowed_to_fire = False
         fire_reasons = []
-        # thresholds for non-squeeze breakouts (tunable)
+        # thresholds for non-squeeze breakouts (15분봉용으로 완화)
         
-        body_fire_thresh = max(self.cfg.min_body_ratio, 0.12)   # 몸통 기준: 0.12 (권장 범위 0.10~0.18)
-        mom_fire_thresh  = 0.12                                # 약 0.6% 움직임 기준 (0.10~0.18 범위)
-        vol_fire_thresh  = 0.06                                  # 약 1.16x 볼륨 기준 (0.06~0.14 범위)
+        body_fire_thresh = max(self.cfg.min_body_ratio, 0.08)   # 몸통 기준: 0.08 (15분봉용 완화)
+        mom_fire_thresh  = 0.08                                # 약 0.4% 움직임 기준 (15분봉용 완화)
+        vol_fire_thresh  = 0.04                                # 약 1.08x 볼륨 기준 (15분봉용 완화)
 
         if is_strong_breakout:
             # prefer squeeze-based firing first
@@ -217,7 +242,8 @@ class BollingerSqueezeStrategy:
 
         # generate entry if allowed and breakout direction exists
         if allowed_to_fire and is_strong_breakout:
-            atr = get_atr()
+            # 15분봉 데이터에 맞는 ATR 계산
+            atr = _calculate_atr(df, period=14)
             if long_breakout:
                 entry = last_close + self.cfg.tick
                 stop = last_close - float(atr) * self.cfg.stop_atr_mult
@@ -227,14 +253,13 @@ class BollingerSqueezeStrategy:
                 return {
                     "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
                     "targets": [float(tp1), float(tp2)], "score": float(score),                     "context": {
-                        "mode": "BB_SQUEEZE_AGG", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
+                        "mode": "BB_SQUEEZE_15M", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
                         "squeeze_strength": float(squeeze_strength), "atr": float(atr),
                         "upper_band": float(upper_now), "lower_band": float(lower_now),
                         "body_ratio": float(body_ratio), "vol_comp": float(vol_comp)
                     }
                 }
             if short_breakout:
-                atr = get_atr()
                 entry = last_close - self.cfg.tick
                 stop = last_close + float(atr) * self.cfg.stop_atr_mult
                 R = stop - entry if stop > entry else float(atr) * self.cfg.stop_atr_mult
@@ -243,7 +268,7 @@ class BollingerSqueezeStrategy:
                 return {
                     "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
                     "targets": [float(tp1), float(tp2)], "score": float(score),                     "context": {
-                        "mode": "BB_SQUEEZE_AGG", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
+                        "mode": "BB_SQUEEZE_15M", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
                         "squeeze_strength": float(squeeze_strength), "atr": float(atr),
                         "upper_band": float(upper_now), "lower_band": float(lower_now),
                         "body_ratio": float(body_ratio), "vol_comp": float(vol_comp)

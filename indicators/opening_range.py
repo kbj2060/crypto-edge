@@ -26,7 +26,7 @@ class OpeningRange:
     공용 데이터를 사용하여 효율적으로 OR을 계산합니다.
     """
     
-    def __init__(self, or_minutes: int = DEFAULT_OR_MINUTES, symbol: str = "ETHUSDT"):
+    def __init__(self, or_minutes: int = DEFAULT_OR_MINUTES, symbol: str = "ETHUSDC"):
         """
         OpeningRange 초기화
         

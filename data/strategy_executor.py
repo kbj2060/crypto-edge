@@ -1,8 +1,8 @@
-from typing import Dict, Any, Optional
-from datetime import datetime
+from typing import Dict, Any
 from data.data_manager import get_data_manager
-from signals.funding_rate_strategy import FundingRateCfg, FundingRateStrategy
-from signals.oi_delta_strategy import OIDeltaCfg, OIDeltaStrategy
+from signals.funding_rate_strategy import FundingRateStrategy
+from signals.multitimeframe_strategy import MultiTimeframeStrategy
+from signals.oi_delta_strategy import OIDeltaStrategy
 from signals.liquidity_grab_strategy import LiquidityGrabStrategy
 from signals.macd_histogram_strategy import MACDHistogramStrategy
 from signals.vpvr_micro import VPVRConfig
@@ -10,18 +10,17 @@ from signals.vwap_pinball_strategy import VWAPPinballCfg
 from utils.time_manager import get_time_manager
 
 # 전략 imports
-from signals.session_or_lite import SessionORLite, SessionORLiteCfg
+from signals.session_or_lite import SessionORLite
 from signals.vpvr_golden_strategy import LVNGoldenPocket
 from signals.vpvr_micro import VPVRMicro, VPVRConfig
-from signals.bollinger_squeeze_strategy import BollingerSqueezeStrategy, BBSqueezeCfg
-from signals.ema_trend_15m import EMATrend15m
+from signals.bollinger_squeeze_strategy import BollingerSqueezeStrategy
 from signals.rsi_divergence import RSIDivergence
 from signals.ichimoku import Ichimoku
-from signals.htf_trend import HTFTrend, HTFConfig
+from signals.htf_trend import HTFTrend
 from signals.orderflow_cvd import OrderflowCVD
 from signals.vwap_pinball_strategy import VWAPPinballStrategy
 from signals.vol_spike_3m import VolSpike
-from signals.zscore_mean_reversion import ZScoreMeanReversion, ZScoreConfig
+from signals.zscore_mean_reversion import ZScoreMeanReversion
 
 
 class StrategyExecutor:
@@ -44,10 +43,7 @@ class StrategyExecutor:
         
         # 볼린저 스퀴즈 전략
         self.bollinger_squeeze_strategy = BollingerSqueezeStrategy()
-        
-        # EMA 트렌드 전략
-        self.ema_trend_15m_strategy = EMATrend15m()
-        
+                
         # RSI 다이버전스 전략
         self.rsi_divergence_strategy = RSIDivergence()
         
@@ -76,6 +72,8 @@ class StrategyExecutor:
         self.macd_histogram_strategy = MACDHistogramStrategy()
 
         self.liquidity_grab_strategy = LiquidityGrabStrategy()
+
+        self.multitimeframe_strategy = MultiTimeframeStrategy()
 
         print("🎯 모든 전략 초기화 완료")
 
@@ -110,19 +108,31 @@ class StrategyExecutor:
         
         self._execute_session_strategy()
         self._execute_vpvr_golden_strategy()
-        #self._execute_bollinger_squeeze_strategy()
+        self._execute_bollinger_squeeze_strategy()
         self._execute_orderflow_cvd_strategy()
         self._execute_rsi_divergence_strategy()
-        #self._execute_ichimoku_strategy()
+        self._execute_ichimoku_strategy()
         self._execute_vwap_pinball_strategy()
         self._execute_vol_spike_strategy()
         self._execute_macd_histogram_strategy()
         self._execute_liquidity_grab_strategy()
-        # 15분봉 전략략
-        #self._execute_ema_trend_15m_strategy()
+        # 15분봉 전략
         self._execute_htf_trend_15m_strategy()
         self._execute_oiDelta_strategy()
         self._execute_funding_rate_strategy()
+        self._execute_multitimeframe_strategy()
+
+    def _execute_multitimeframe_strategy(self):
+        """Multi-Timeframe 전략 실행"""
+        if not self.multitimeframe_strategy:
+            return
+        result = self.multitimeframe_strategy.on_kline_close_3m()
+        if result:
+            self.signals['MULTI_TIMEFRAME'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
     def _execute_liquidity_grab_strategy(self):
         """Liquidity Grab 전략 실행"""
@@ -176,8 +186,8 @@ class StrategyExecutor:
         """HTF Trend 15m 전략 실행"""
         if not self.htf_trend_15m_strategy:
             return
-        df_15m = self.data_manager.get_15m_data(count=300)
-        df_1h = self.data_manager.get_1h_data(count=300)
+        df_15m = self.data_manager.get_latest_data_15m(count=300)
+        df_1h = self.data_manager.get_latest_data_1h(count=300)
         result = self.htf_trend_15m_strategy.on_kline_close_15m(df_15m=df_15m, df_1h=df_1h)
         
         if result:
@@ -241,8 +251,8 @@ class StrategyExecutor:
             return
         
         config = self.vpvr_golden_strategy.VPVRConfig()
-        df_3m = self.data_manager.get_latest_data(count=config.lookback_bars + 5)
-        sig = self.vpvr_golden_strategy.evaluate(df_3m)
+        df_15m = self.data_manager.get_latest_data_15m(count=config.lookback_bars + 5)
+        sig = self.vpvr_golden_strategy.evaluate(df_15m)
         
         if sig:
             self.signals['VPVR'] = {
@@ -262,24 +272,11 @@ class StrategyExecutor:
         result = self.bollinger_squeeze_strategy.evaluate()
 
         if result:
-            self.signals['BB_SQUEEZE'] = {
+            self.signals['BOLLINGER_SQUEEZE'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
                 'entry': result.get('entry', 0),
                 'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
-            }
-
-    def _execute_ema_trend_15m_strategy(self):
-        """EMA 트렌드 전략 실행 (15분봉)"""
-        if not self.ema_trend_15m_strategy:
-            return
-        
-        result = self.ema_trend_15m_strategy.on_kline_close_15m()
-        if result:
-            self.signals['EMA_TREND_15m'] = {
-                'action': result.get('action', 'UNKNOWN'),
-                'score': result.get('score', 0),
                 'timestamp': self.time_manager.get_current_time()
             }
 

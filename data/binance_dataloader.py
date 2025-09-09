@@ -22,7 +22,7 @@ class BinanceDataLoader:
     def fetch_data(
         self,
         interval: str = "3m",
-        symbol: str = "ETHUSDT",
+        symbol: str = "ETHUSDC",
         limit: int = 1500,
         start_time: Optional[datetime] = None,
         end_time: Optional[datetime] = None,
@@ -31,7 +31,7 @@ class BinanceDataLoader:
         3분봉 데이터 가져오기
         
         Args:
-            symbol: 심볼 (기본값: ETHUSDT)
+            symbol: 심볼 (기본값: ETHUSDC)
             start_time: 시작 시간 (UTC)
             end_time: 종료 시간 (UTC)
         
@@ -74,12 +74,12 @@ class BinanceDataLoader:
         except Exception as e:
             return None
     
-    def fetch_prev_day_3m(self, symbol: str = "ETHUSDT") -> Optional[pd.DataFrame]:
+    def fetch_prev_day_3m(self, symbol: str = "ETHUSDC") -> Optional[pd.DataFrame]:
         """
         어제 하루의 3분봉 데이터 가져오기
         
         Args:
-            symbol: 심볼 (기본값: ETHUSDT)
+            symbol: 심볼 (기본값: ETHUSDC)
         
         Returns:
             DataFrame 또는 None (실패 시)
@@ -92,12 +92,12 @@ class BinanceDataLoader:
         
         return self.fetch_data(symbol, start_time, end_time)
     
-    def fetch_recent_3m(self, symbol: str = "ETHUSDT", hours: int = 24) -> Optional[pd.DataFrame]:
+    def fetch_recent_3m(self, symbol: str = "ETHUSDC", hours: int = 24) -> Optional[pd.DataFrame]:
         """
         최근 N시간의 3분봉 데이터 가져오기
         
         Args:
-            symbol: 심볼 (기본값: ETHUSDT)
+            symbol: 심볼 (기본값: ETHUSDC)
             hours: 최근 몇 시간 (기본값: 24시간)
         
         Returns:
@@ -168,7 +168,7 @@ class BinanceDataLoader:
             return {}
         
         return {
-            'symbol': 'ETHUSDT',  # 현재는 고정값
+            'symbol': 'ETHUSDC',  # 현재는 고정값
             'interval': '3m',
             'count': len(df),
             'start_time': df.index[0],

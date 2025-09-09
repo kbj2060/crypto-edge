@@ -17,24 +17,24 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class LiquidityGrabCfg:
-    lookback_bars: int = 100
-    support_resistance_period: int = 50    # 지지/저항선 찾는 기간
-    min_touches: int = 1                  # 최소 터치 횟수
-    grab_threshold_pct: float =  0.05       # 0.1% 돌파로 간주
-    recovery_threshold_pct: float = 0.1  # 0.15% 복귀로 간주
-    max_grab_bars: int = 3               # 가짜돌파 후 최대 N봉 내 복귀
-    volume_spike_threshold: float = 1.2   # 거래량 급증 임계값
+    lookback_bars: int = 80               # 100 -> 80 (단축)
+    support_resistance_period: int = 30   # 50 -> 30 (단축)
+    min_touches: int = 1                  # 유지
+    grab_threshold_pct: float = 0.02      # 0.05 -> 0.02 (완화)
+    recovery_threshold_pct: float = 0.05  # 0.1 -> 0.05 (완화)
+    max_grab_bars: int = 5                # 3 -> 5 (완화)
+    volume_spike_threshold: float = 1.1   # 1.2 -> 1.1 (완화)
     atr_stop_mult: float = 1.0
     tp_R1: float = 2.5
     tp_R2: float = 4.0
     tick: float = 0.01
-    debug: bool = False
+    debug: bool = True                    # True로 변경 (디버깅 활성화)
     
     # 점수 구성 가중치
-    w_grab_quality: float = 0.35
-    w_volume_spike: float = 0.25
-    w_level_strength: float = 0.25
-    w_recovery_speed: float = 0.15
+    w_grab_quality: float = 0.30          # 0.35 -> 0.30
+    w_volume_spike: float = 0.20          # 0.25 -> 0.20
+    w_level_strength: float = 0.30        # 0.25 -> 0.30
+    w_recovery_speed: float = 0.20        # 0.15 -> 0.20
 
 class LiquidityGrabStrategy:
     """
@@ -51,19 +51,21 @@ class LiquidityGrabStrategy:
         self.last_level_update = None
         
     def _find_support_resistance_levels(self, df: pd.DataFrame) -> List[Dict[str, Any]]:
-        """지지/저항선 찾기"""
+        """지지/저항선 찾기 (완화된 조건)"""
         high = pd.to_numeric(df['high'].astype(float))
         low = pd.to_numeric(df['low'].astype(float))
         close = pd.to_numeric(df['close'].astype(float))
         
         levels = []
-        window = 5  # 피벗 포인트를 찾기 위한 윈도우
+        window = 3  # 5 -> 3 (완화된 윈도우)
         
-        # 지지선 찾기 (저점)
+        # 지지선 찾기 (저점) - 더 완화된 조건
         for i in range(window, len(low) - window):
-            if all(low.iloc[i] <= low.iloc[i-j] for j in range(1, window+1)) and \
-               all(low.iloc[i] <= low.iloc[i+j] for j in range(1, window+1)):
-                
+            # 완화된 조건: 양쪽 대부분보다 낮으면 OK
+            left_lower = sum(low.iloc[i] <= low.iloc[i-j] for j in range(1, window+1))
+            right_lower = sum(low.iloc[i] <= low.iloc[i+j] for j in range(1, window+1))
+            
+            if left_lower >= (window * 0.6) and right_lower >= (window * 0.6):  # 60% 이상
                 level_price = float(low.iloc[i])
                 level_index = low.index[i]
                 
@@ -76,14 +78,16 @@ class LiquidityGrabStrategy:
                         'type': 'support',
                         'touches': touches,
                         'last_touch_index': level_index,
-                        'strength': min(1.0, touches / 5.0)  # 정규화된 강도
+                        'strength': min(1.0, touches / 3.0)  # 5.0 -> 3.0 (완화)
                     })
         
-        # 저항선 찾기 (고점)
+        # 저항선 찾기 (고점) - 더 완화된 조건
         for i in range(window, len(high) - window):
-            if all(high.iloc[i] >= high.iloc[i-j] for j in range(1, window+1)) and \
-               all(high.iloc[i] >= high.iloc[i+j] for j in range(1, window+1)):
-                
+            # 완화된 조건: 양쪽 대부분보다 높으면 OK
+            left_higher = sum(high.iloc[i] >= high.iloc[i-j] for j in range(1, window+1))
+            right_higher = sum(high.iloc[i] >= high.iloc[i+j] for j in range(1, window+1))
+            
+            if left_higher >= (window * 0.6) and right_higher >= (window * 0.6):  # 60% 이상
                 level_price = float(high.iloc[i])
                 level_index = high.index[i]
                 
@@ -96,7 +100,7 @@ class LiquidityGrabStrategy:
                         'type': 'resistance',
                         'touches': touches,
                         'last_touch_index': level_index,
-                        'strength': min(1.0, touches / 5.0)
+                        'strength': min(1.0, touches / 3.0)  # 5.0 -> 3.0 (완화)
                     })
         
         # 가격에 따라 정렬
@@ -110,8 +114,8 @@ class LiquidityGrabStrategy:
         return levels
     
     def _count_level_touches(self, df: pd.DataFrame, level_price: float, level_type: str) -> int:
-        """특정 레벨의 터치 횟수 계산"""
-        tolerance = level_price * 0.002  # 0.2% 허용 오차
+        """특정 레벨의 터치 횟수 계산 (완화된 조건)"""
+        tolerance = level_price * 0.005  # 0.2% -> 0.5% (완화)
         touches = 0
         
         if level_type == 'support':
@@ -127,11 +131,16 @@ class LiquidityGrabStrategy:
     def _detect_liquidity_grab(self, df: pd.DataFrame, levels: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """유동성 사냥 패턴 감지"""
         if len(df) < self.cfg.max_grab_bars + 1:
+            if self.cfg.debug:
+                print(f"[LIQUIDITY_GRAB] 데이터 부족: {len(df)} < {self.cfg.max_grab_bars + 1}")
             return None
             
         recent_bars = df.tail(self.cfg.max_grab_bars + 1)
         
-        for level in levels:
+        if self.cfg.debug:
+            print(f"[LIQUIDITY_GRAB] {len(levels)}개 레벨에서 유동성 사냥 패턴 검사 중...")
+        
+        for i, level in enumerate(levels):
             level_price = level['price']
             level_type = level['type']
             
@@ -139,9 +148,15 @@ class LiquidityGrabStrategy:
             grab_distance = level_price * (self.cfg.grab_threshold_pct / 100.0)
             recovery_distance = level_price * (self.cfg.recovery_threshold_pct / 100.0)
             
+            if self.cfg.debug:
+                print(f"[LIQUIDITY_GRAB] 레벨 {i+1}: {level_type} @ {level_price:.2f}, "
+                      f"돌파거리: {grab_distance:.4f}, 회복거리: {recovery_distance:.4f}")
+            
             if level_type == 'support':
                 # 지지선 하향 돌파 체크
                 if self._check_support_grab(recent_bars, level_price, grab_distance, recovery_distance):
+                    if self.cfg.debug:
+                        print(f"[LIQUIDITY_GRAB] 지지선 가짜돌파 감지!")
                     grab_info = self._analyze_grab_quality(recent_bars, level, 'support_grab')
                     if grab_info:
                         grab_info.update({
@@ -151,10 +166,15 @@ class LiquidityGrabStrategy:
                             'signal_direction': 'BUY'  # 지지선 가짜돌파 후 반등
                         })
                         return grab_info
+                    else:
+                        if self.cfg.debug:
+                            print(f"[LIQUIDITY_GRAB] 지지선 가짜돌파 품질 부족")
                         
             else:  # resistance
                 # 저항선 상향 돌파 체크
                 if self._check_resistance_grab(recent_bars, level_price, grab_distance, recovery_distance):
+                    if self.cfg.debug:
+                        print(f"[LIQUIDITY_GRAB] 저항선 가짜돌파 감지!")
                     grab_info = self._analyze_grab_quality(recent_bars, level, 'resistance_grab')
                     if grab_info:
                         grab_info.update({
@@ -164,11 +184,16 @@ class LiquidityGrabStrategy:
                             'signal_direction': 'SELL'  # 저항선 가짜돌파 후 하락
                         })
                         return grab_info
+                    else:
+                        if self.cfg.debug:
+                            print(f"[LIQUIDITY_GRAB] 저항선 가짜돌파 품질 부족")
         
+        if self.cfg.debug:
+            print("[LIQUIDITY_GRAB] 모든 레벨에서 유동성 사냥 패턴 없음")
         return None
     
     def _check_support_grab(self, bars: pd.DataFrame, level_price: float, 
-                           grab_distance: float, recovery_distance: float) -> bool:
+                            grab_distance: float, recovery_distance: float) -> bool:
         """지지선 유동성 사냥 체크"""
         # 최근 봉들 중에 하향 돌파가 있었는지 확인
         break_threshold = level_price - grab_distance
@@ -201,7 +226,7 @@ class LiquidityGrabStrategy:
     
     def _analyze_grab_quality(self, bars: pd.DataFrame, level: Dict[str, Any], 
                              grab_type: str) -> Optional[Dict[str, Any]]:
-        """유동성 사냥의 품질 분석"""
+        """유동성 사냥의 품질 분석 (완화된 조건)"""
         try:
             # 거래량 분석
             vol_series = bars['quote_volume'].astype(float)
@@ -222,12 +247,16 @@ class LiquidityGrabStrategy:
             recovery_bars = len(bars) - 1  # 마지막 봉까지의 시간
             recovery_speed = _clamp(1.0 - (recovery_bars / self.cfg.max_grab_bars), 0.0, 1.0)
             
-            # 가짜돌파 품질 점수
-            grab_quality = min(1.0, volatility_ratio * 0.5 + 0.5)
+            # 가짜돌파 품질 점수 (완화)
+            grab_quality = min(1.0, volatility_ratio * 0.3 + 0.7)  # 0.5 -> 0.3, 0.5 -> 0.7
             
-            # 최소 품질 체크
-            if volume_score < 0.3 and grab_quality < 0.4:
+            # 최소 품질 체크 완화
+            if volume_score < 0.1 and grab_quality < 0.2:  # 0.3 -> 0.1, 0.4 -> 0.2
                 return None
+            
+            # 최소 점수 보장 (유동성 사냥 감지 시 최소 0.2 점수)
+            if volume_spike > 1.05:  # 거래량이 5% 이상 증가하면
+                volume_score = max(volume_score, 0.2)
             
             return {
                 'grab_type': grab_type,
@@ -241,7 +270,7 @@ class LiquidityGrabStrategy:
         except Exception as e:
             if self.cfg.debug:
                 print(f"[LIQUIDITY_GRAB] 품질 분석 오류: {e}")
-            return self.default_result
+            return None
     
     def _no_signal_result(self,**kwargs):
         return {
@@ -284,7 +313,12 @@ class LiquidityGrabStrategy:
         # 유동성 사냥 패턴 감지
         grab_result = self._detect_liquidity_grab(df, levels)
         if grab_result is None:
+            if self.cfg.debug:
+                print("[LIQUIDITY_GRAB] 유동성 사냥 패턴 감지 실패")
             return self._no_signal_result()
+        else:
+            if self.cfg.debug:
+                print(f"[LIQUIDITY_GRAB] 유동성 사냥 패턴 감지 ✓ ({grab_result['grab_type']})")
         
         # 추가 확인 지표들
         current_price = float(df['close'].iloc[-1])
@@ -308,10 +342,10 @@ class LiquidityGrabStrategy:
         total_score = total_score * 0.9 + vwap_score * 0.1
         total_score = _clamp(total_score, 0.0, 1.0)
         
-        # 최소 점수 체크
-        if total_score < 0.5:
+        # 최소 점수 체크 완화
+        if total_score < 0.3:  # 0.5 -> 0.3 (완화)
             if self.cfg.debug:
-                print(f"[LIQUIDITY_GRAB] 점수 부족: {total_score:.3f}")
+                print(f"[LIQUIDITY_GRAB] 점수 부족: {total_score:.3f} < 0.3")
             return self._no_signal_result()
         
         # 진입/손절/목표가 계산

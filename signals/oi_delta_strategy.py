@@ -18,20 +18,20 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class OIDeltaCfg:
-    symbol: str = "ETHUSDT"
-    lookback_hours: int = 24              # OI 히스토리 조회 기간
-    oi_change_threshold: float = 0.02     # 2% OI 변화량 임계값 (완화됨)
-    price_oi_correlation_period: int = 12 # 가격-OI 상관관계 분석 기간
-    volume_confirmation_mult: float = 1.2 # 거래량 확인 배수
+    symbol: str = "ETHUSDC"
+    lookback_hours: int = 12              # 24 -> 12 (단축)
+    oi_change_threshold: float = 0.005    # 2% -> 0.5% (대폭 완화)
+    price_oi_correlation_period: int = 6  # 12 -> 6 (단축)
+    volume_confirmation_mult: float = 1.1 # 1.2 -> 1.1 (완화)
     atr_stop_mult: float = 1.3
     tp_R1: float = 2.0
     tp_R2: float = 3.0
     tick: float = 0.01
-    debug: bool = False
+    debug: bool = True                    # True로 변경 (디버깅 활성화)
     
     # 점수 구성 가중치
-    w_oi_magnitude: float = 0.35
-    w_price_oi_sync: float = 0.30
+    w_oi_magnitude: float = 0.30          # 0.35 -> 0.30
+    w_price_oi_sync: float = 0.35         # 0.30 -> 0.35
     w_volume_confirm: float = 0.20
     w_momentum: float = 0.15
 
@@ -87,12 +87,15 @@ class OIDeltaStrategy:
                 'open_interest': current_oi
             })
             
-            # 오래된 데이터 제거 (24시간 이상)
+            # 오래된 데이터 제거 (설정된 시간 이상)
             cutoff_time = now - timedelta(hours=self.cfg.lookback_hours)
             self.oi_data_cache = [
                 item for item in self.oi_data_cache 
                 if item['timestamp'] > cutoff_time
             ]
+            
+            if self.cfg.debug:
+                print(f"[OI_DELTA] OI 캐시 업데이트: {len(self.oi_data_cache)}개 데이터 (최신: {current_oi:,.0f})")
             
             return self.oi_data_cache
             
@@ -126,8 +129,8 @@ class OIDeltaStrategy:
             # 가격 변화량 계산 (시간 범위 단축으로 민감도 증가)
             current_price = float(price_data['close'].iloc[-1])
             
-            # 더 짧은 시간으로 민감도 증가
-            lookback_minutes = 30  # 1시간 → 30분으로 단축
+            # 더 짧은 시간으로 민감도 대폭 증가
+            lookback_minutes = 15  # 30분 → 15분으로 더 단축
             if len(price_data) >= lookback_minutes:
                 prev_price = float(price_data['close'].iloc[-(lookback_minutes+1)])
             else:
@@ -139,17 +142,17 @@ class OIDeltaStrategy:
             same_direction = (price_change_pct * oi_change_pct) > 0
             
             # 더 관대한 sync_score 계산
-            if abs(oi_change_pct) < 0.001:  # OI 변화가 너무 작으면
-                sync_score = 0.1  # 기본 점수
+            if abs(oi_change_pct) < 0.0005:  # OI 변화가 너무 작으면 (더 완화)
+                sync_score = 0.2  # 기본 점수 증가
             else:
                 if same_direction:
                     # 동조: 변화량 크기에 비례
                     intensity = min(abs(price_change_pct), abs(oi_change_pct))
-                    sync_score = min(1.0, intensity / 0.01 + 0.3)  # 기본 30% + 변화량
+                    sync_score = min(1.0, intensity / 0.005 + 0.4)  # 기본 40% + 변화량 (더 관대)
                 else:
                     # 역방향: 여전히 의미있는 신호
                     intensity = (abs(price_change_pct) + abs(oi_change_pct)) / 2
-                    sync_score = min(0.8, intensity / 0.015 + 0.2)  # 기본 20% + 변화량
+                    sync_score = min(0.9, intensity / 0.008 + 0.3)  # 기본 30% + 변화량 (더 관대)
             
             if self.cfg.debug:
                 print(f"[OI_DELTA] 가격 변화: {price_change_pct:.4f}, OI 변화: {oi_change_pct:.4f}, "
@@ -182,8 +185,8 @@ class OIDeltaStrategy:
         signal_strength = 0.0
         interpretation = ""
         
-        # 최소 변화량 체크 완화
-        min_oi_change = self.cfg.oi_change_threshold * 0.5  # 기존 임계값의 절반
+        # 최소 변화량 체크 대폭 완화
+        min_oi_change = self.cfg.oi_change_threshold * 0.2  # 기존 임계값의 1/5
         
         if abs(oi_change) >= min_oi_change:
             if same_direction:
@@ -224,11 +227,11 @@ class OIDeltaStrategy:
                     signal_strength = min(1.0, (abs(price_change) + abs(oi_change)) / 0.06)
                     interpretation = "롱 청산, 약세"
         
-        # 작은 변화라도 신호 생성 (새로 추가)
-        elif abs(oi_change) >= 0.001:  # 0.1% 이상의 작은 변화
-            if abs(price_change) >= 0.005:  # 0.5% 이상의 가격 변화와 함께
+        # 작은 변화라도 신호 생성 (더 완화)
+        elif abs(oi_change) >= 0.0005:  # 0.05% 이상의 작은 변화 (더 완화)
+            if abs(price_change) >= 0.002:  # 0.2% 이상의 가격 변화와 함께 (더 완화)
                 signal_type = "WEAK_SIGNAL"
-                signal_strength = 0.2
+                signal_strength = 0.3  # 0.2 -> 0.3 (증가)
                 
                 if price_change * oi_change > 0:
                     interpretation = "약한 동조 신호"
@@ -294,10 +297,10 @@ class OIDeltaStrategy:
     
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
         """3분봉 마감 시 OI 델타 전략 실행 - 개선된 버전"""
-        # OI 데이터 가져오기 (5분마다만 갱신)
+        # OI 데이터 가져오기 (3분마다 갱신)
         now = self.time_manager.get_current_time()
         if (self.last_oi_fetch is None or 
-            (now - self.last_oi_fetch).total_seconds() > 300):  # 5분마다
+            (now - self.last_oi_fetch).total_seconds() > 180):  # 5분 -> 3분 (더 자주)
             
             oi_history = self._fetch_oi_history()
             self.last_oi_fetch = now
@@ -309,6 +312,9 @@ class OIDeltaStrategy:
             if self.cfg.debug:
                 print("[OI_DELTA] OI 히스토리 없음")
             return self._no_signal_result()
+        else:
+            if self.cfg.debug:
+                print(f"[OI_DELTA] OI 히스토리 {len(oi_history)}개 데이터로 분석 시작")
         
         # 가격 데이터 가져오기
         data_manager = get_data_manager()
@@ -321,38 +327,41 @@ class OIDeltaStrategy:
                 print("[OI_DELTA] 가격 데이터 부족")
             return self._no_signal_result()
         
-        # 단일 포인트로도 변화 추정 (개선)
+        # 단일 포인트로도 변화 추정 (더 완화)
         if len(oi_history) == 1:
             # 이전 캐시와 비교하거나 기본 변화율 사용
             current_oi = oi_history[0]['open_interest']
             
-            # 기본 분석으로 처리
-            price_change_30min = float((df['close'].iloc[-1] - df['close'].iloc[-10]) / df['close'].iloc[-10])
+            # 더 짧은 시간으로 가격 변화 분석
+            price_change_15min = float((df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5])
             
-            if abs(price_change_30min) > 0.01:  # 1% 이상 가격 변화
-                weak_analysis = {
-                    'sync_score': 0.3,
-                    'oi_change_pct': 0.002,  # 가정값
-                    'price_change_pct': price_change_30min,
-                    'same_direction': True
-                }
-                weak_signals = self._interpret_oi_signals(weak_analysis)
+            if self.cfg.debug:
+                print(f"[OI_DELTA] 단일 포인트 분석 - 가격 변화: {price_change_15min:.4f} ({price_change_15min*100:.2f}%)")
+            
+            if abs(price_change_15min) > 0.001:  # 0.1% 이상 가격 변화 (더 완화)
+                # 단일 포인트에서는 직접 WEAK_SIGNAL 생성
+                action = "BUY" if price_change_15min > 0 else "SELL"
                 
-                if weak_signals['signal_type'] != 'NEUTRAL':
-                    action = "BUY" if price_change_30min > 0 else "SELL"
-                    return {
-                        'name': 'OI_DELTA',
-                        'action': action,
-                        'score': 0.25,  # 낮은 점수
-                        'confidence': 'LOW',
-                        'timestamp': self.time_manager.get_current_time(),
-                        'context': {
-                            'mode': 'OI_DELTA_WEAK_SIGNAL',
-                            'signal_type': 'SINGLE_POINT_ESTIMATE',
-                            'price_change_pct': float(price_change_30min),
-                            'oi_available': len(oi_history)
-                        }
+                if self.cfg.debug:
+                    print(f"[OI_DELTA] 단일 포인트 신호 생성: {action} (가격 변화: {price_change_15min*100:.2f}%)")
+                
+                return {
+                    'name': 'OI_DELTA',
+                    'action': action,
+                    'score': 0.35,  # 0.25 -> 0.35 (증가)
+                    'confidence': 'MEDIUM',  # LOW -> MEDIUM
+                    'timestamp': self.time_manager.get_current_time(),
+                    'context': {
+                        'mode': 'OI_DELTA_SINGLE_POINT',
+                        'signal_type': 'WEAK_SIGNAL',
+                        'price_change_pct': float(price_change_15min),
+                        'oi_available': len(oi_history),
+                        'interpretation': '단일 OI 포인트 기반 가격 변화 신호'
                     }
+                }
+            else:
+                if self.cfg.debug:
+                    print(f"[OI_DELTA] 가격 변화 부족: {price_change_15min:.4f} < 0.001")
             return self._no_signal_result()
         
         # 정상적인 분석 (2개 이상 데이터)
@@ -397,10 +406,10 @@ class OIDeltaStrategy:
             total_score = total_score * oi_signals['signal_strength']
             total_score = _clamp(total_score, 0.0, 1.0)
         
-        # 최소 점수 체크 완화
-        if total_score < 0.2:  # 0.4 → 0.2로 완화
+        # 최소 점수 체크 대폭 완화
+        if total_score < 0.15:  # 0.2 -> 0.15로 더 완화
             if self.cfg.debug:
-                print(f"[OI_DELTA] 점수 부족: {total_score:.3f}")
+                print(f"[OI_DELTA] 점수 부족: {total_score:.3f} < 0.15")
             return self._no_signal_result()
         
         # 신뢰도 설정

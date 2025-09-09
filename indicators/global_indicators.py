@@ -54,11 +54,11 @@ class GlobalIndicatorManager:
             },
             'daily_levels': {
                 'class': DailyLevels,
-                'symbol': 'ETHUSDT',
+                'symbol': 'ETHUSDC',
             },
             'vwap': {
                 'class': SessionVWAP,
-                'symbol': 'ETHUSDT'
+                'symbol': 'ETHUSDC'
             },
             'opening_range': {
                 'class': OpeningRange,

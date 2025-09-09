@@ -11,128 +11,99 @@ from typing import Dict, Any
 
 def print_decision_interpretation(decision: dict) -> None:
     """
-    decision: decide_trade_realtime(...) 반환값
+    decision: decide_trade_realtime(...) 반환값 (독립적 다중 포지션 구조)
     사람이 보기 쉽게 해석해서 출력합니다.
     """
     if not decision or not isinstance(decision, dict):
         print("⚠️ decision이 비어있거나 형식이 잘못되었습니다.")
         return
 
-    action = decision.get("action", "HOLD")
-    net_score = decision.get("net_score", 0.0)
-    reason = decision.get("reason", "")
-    raw = decision.get("raw", {})
-    sizing = decision.get("sizing", {})
-    recommended_scale = decision.get("recommended_trade_scale", 0.0)
-    oppositions = decision.get("oppositions", [])
-    agree_counts = decision.get("agree_counts", {"BUY": 0, "SELL": 0})
+    # 새로운 구조에서 decisions와 conflicts 추출
+    decisions = decision.get("decisions", {})
+    conflicts = decision.get("conflicts", {})
     meta = decision.get("meta", {})
 
-    # compute per-strategy signed contributions (if possible)
-    contributions = []
-    for name, info in (raw.items() if isinstance(raw, dict) else []):
-        try:
-            act = (info.get("action") or "").upper()
-            score = float(info.get("score") or 0.0)
-            weight = float(info.get("weight") or 0.0)
-            sign = 0
-            if act == "BUY":
-                sign = 1
-            elif act == "SELL":
-                sign = -1
-            contrib = sign * score * weight
-            contributions.append((name, contrib, act, score, weight))
-        except Exception:
-            # best-effort fallback
-            contributions.append((name, 0.0, info.get("action"), info.get("score"), info.get("weight")))
-
-    # Group by action type and sort within each group
-    buy_strategies = []
-    sell_strategies = []
-    hold_strategies = []
-    
-    for (name, contrib, act, score, weight) in contributions:
-        if act == "BUY":
-            buy_strategies.append((name, contrib, act, score, weight))
-        elif act == "SELL":
-            sell_strategies.append((name, contrib, act, score, weight))
-        else:  # HOLD or other
-            hold_strategies.append((name, contrib, act, score, weight))
-    
-    # Sort each group by absolute contribution descending
-    buy_strategies.sort(key=lambda x: abs(x[1]), reverse=True)
-    sell_strategies.sort(key=lambda x: abs(x[1]), reverse=True)
-    hold_strategies.sort(key=lambda x: abs(x[1]), reverse=True)
-
     # Header
-    print("────────────────────────────────────────────────────────")
-    print(f"🕒 Decision @ {meta.get('timestamp_utc', 'unknown')}")
-    print(f"▶ 추천 액션: {action}    |   net_score={net_score:.3f}    |   recommended_scale={recommended_scale:.3f}")
-    print(f"▶ 이유: {reason}")
-    print("────────────────────────────────────────────────────────")
+    print("=" * 80)
+    print(f"🕒 Multi-Category Decision @ {meta.get('timestamp_utc', 'unknown')}")
+    print(f"📊 활성 포지션: {meta.get('active_positions', 0)}개 / {meta.get('total_categories', 0)}개 카테고리")
+    print("=" * 80)
 
-    # Print strategies grouped by action
-    if buy_strategies or sell_strategies or hold_strategies:
-        print("전략별 기여:")
+    # 각 카테고리별 결정 출력
+    for category_name, category_decision in decisions.items():
+        print(f"\n📈 {category_name} 카테고리")
+        print("-" * 50)
         
-        # BUY strategies
-        if buy_strategies:
-            print("🟢 BUY 신호:")
-            for (name, contrib, act, score, weight) in buy_strategies:
-                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
-                print(f"   - {name:12s} | score={score:.3f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+        action = category_decision.get("action", "HOLD")
+        net_score = category_decision.get("net_score", 0.0)
+        reason = category_decision.get("reason", "")
+        raw = category_decision.get("raw", {})
+        sizing = category_decision.get("sizing", {})
+        leverage = category_decision.get("leverage", 1)
+        max_holding = category_decision.get("max_holding_minutes", 0)
+        strategies_used = category_decision.get("strategies_used", [])
+        timeframe = category_decision.get("meta", {}).get("timeframe", "unknown")
+
+        # 액션에 따른 이모지
+        action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
         
-        # SELL strategies
-        if sell_strategies:
-            print("🔴 SELL 신호:")
-            for (name, contrib, act, score, weight) in sell_strategies:
-                sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
-                print(f"   - {name:12s} | score={score:.3f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+        print(f"{action_emoji} 액션: {action} | 점수: {net_score:.3f} | 레버리지: {leverage}x")
+        print(f"⏱️ 보유기간: {max_holding}분 | 시간프레임: {timeframe}")
+        print(f"💭 이유: {reason}")
         
-        # HOLD strategies (at the end)
-        if hold_strategies:
-            print("🟡 HOLD 신호:")
-            for (name, contrib, act, score, weight) in hold_strategies:
+        if strategies_used:
+            print(f"🎯 사용 전략: {', '.join(strategies_used)}")
+        
+        # 포지션 크기 정보
+        if action != "HOLD" and sizing:
+            qty = sizing.get("qty")
+            risk_usd = sizing.get("risk_usd", 0)
+            entry = sizing.get("entry_used")
+            stop = sizing.get("stop_used")
+            
+            if qty is not None:
+                print(f"💰 포지션 크기: {qty:.4f} | 리스크: ${risk_usd:.2f}")
+                if entry and stop:
+                    print(f"📊 진입가: {entry:.4f} | 손절가: {stop:.4f}")
+
+        # 전략별 기여도 출력
+        if raw:
+            print("📊 전략별 기여도:")
+            contributions = []
+            
+            for name, info in raw.items():
+                try:
+                    act = (info.get("action") or "").upper()
+                    score = float(info.get("score") or 0.0)
+                    weight = float(info.get("weight") or 0.0)
+                    sign = 1 if act == "BUY" else (-1 if act == "SELL" else 0)
+                    contrib = sign * score * weight
+                    contributions.append((name, contrib, act, score, weight))
+                except Exception:
+                    contributions.append((name, 0.0, info.get("action"), info.get("score"), info.get("weight")))
+            
+            # 기여도 순으로 정렬
+            contributions.sort(key=lambda x: abs(x[1]), reverse=True)
+            
+            for (name, contrib, act, score, weight) in contributions:
                 sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
-                print(f"   - {name:12s} | score={score:.3f} weight={weight:.2f} | contrib={sign_sym}{abs(contrib):.4f}")
+                act_emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}.get(act, "⚪")
+                print(f"   {act_emoji} {name:15s} | score={score:.3f} weight={weight:.3f} | contrib={sign_sym}{abs(contrib):.4f}")
+
+    # 충돌 정보 출력
+    if conflicts.get("has_conflicts", False):
+        print(f"\n⚠️ 포지션 충돌 감지!")
+        print("-" * 50)
+        print(f"🟢 LONG 카테고리: {', '.join(conflicts.get('long_categories', []))}")
+        print(f"🔴 SHORT 카테고리: {', '.join(conflicts.get('short_categories', []))}")
+        print("충돌 타입:")
+        for conflict_type in conflicts.get("conflict_types", []):
+            print(f"   - {conflict_type}")
+        print("💡 권고: 반대 방향 포지션은 리스크 관리에 주의하세요.")
     else:
-        print("전략별 정보가 없습니다.")
+        print(f"\n✅ 포지션 충돌 없음")
 
-    # human guidance
-    print("────────────────────────────────────────────────────────")
-    if action == "HOLD":
-        # if hold, explain top reasons why
-        reasons = []
-        # net too small
-        if abs(net_score) < 0.35:
-            reasons.append("net_score가 작음 (잡음일 가능성)")
-        if oppositions:
-            reasons.append("상반되는 강한 신호 존재")
-        if reasons:
-            print("권고: HOLD (보류). 이유들:")
-            for r in reasons:
-                print(" -", r)
-        else:
-            print("권고: HOLD. 추가 확인 또는 더 강한 컨펌 대기.")
-    else:
-        # actionable suggestion
-        print(f"권고: {action} — 실행 전 체크리스트:")
-        # checklist items
-        checklist = []
-        # if any strong opposite exists -> warn
-        if oppositions:
-            checklist.append("상반되는 강한 신호 존재: 재확인 권장 (충돌 시 사이즈 축소)")
-        # if recommended_scale small -> warn
-        if recommended_scale < 0.35:
-            checklist.append(f"권장 스케일이 작음 ({recommended_scale:.2f}) — 소량/스캘프 권장")
-        # print checklist
-        if checklist:
-            for it in checklist:
-                print(" -", it)
-        else:
-            print(" - 조건 양호: 설정한 사이즈로 진입 고려 가능")
-
-    print("────────────────────────────────────────────────────────")
+    print("=" * 80)
     print("")  # blank line for spacing
 
 
@@ -178,29 +149,48 @@ def print_llm_judgment(judge: dict) -> None:
 
 def print_trading_summary(signals: Dict[str, Any], decision: Dict[str, Any], judge: Dict[str, Any]) -> None:
     """
-    트레이딩 요약 정보를 출력합니다.
+    트레이딩 요약 정보를 출력합니다. (독립적 다중 포지션 구조)
     """
     print("📊" + "="*60)
-    print("📈 트레이딩 요약")
+    print("📈 Multi-Category Trading Summary")
     print("📊" + "="*60)
     
     # 신호 개수
     signal_count = len(signals) if signals else 0
     print(f"🎯 활성 신호: {signal_count}개")
     
-    # 결정 정보
-    action = decision.get("action", "HOLD")
-    net_score = decision.get("net_score", 0.0)
-    print(f"⚖️ 시스템 결정: {action} (net_score: {net_score:.3f})")
+    # 새로운 구조에서 decisions 추출
+    decisions = decision.get("decisions", {})
+    conflicts = decision.get("conflicts", {})
+    meta = decision.get("meta", {})
     
-    # LLM 판단
-    llm_decision = judge.get("decision", "HOLD")
-    llm_confidence = judge.get("confidence", 0.0)
-    print(f"🤖 LLM 판단: {llm_decision} (신뢰도: {llm_confidence:.2f})")
+    # 카테고리별 요약
+    print(f"📊 카테고리별 결정:")
+    for category_name, category_decision in decisions.items():
+        action = category_decision.get("action", "HOLD")
+        net_score = category_decision.get("net_score", 0.0)
+        leverage = category_decision.get("leverage", 1)
+        strategies_count = len(category_decision.get("strategies_used", []))
+        
+        action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
+        print(f"   {action_emoji} {category_name}: {action} (점수: {net_score:.3f}, 레버리지: {leverage}x, 전략: {strategies_count}개)")
     
-    # 최종 결정
-    final_decision = llm_decision if llm_decision != "HOLD" else action
-    print(f"✅ 최종 결정: {final_decision}")
+    # 활성 포지션 요약
+    active_positions = meta.get("active_positions", 0)
+    total_categories = meta.get("total_categories", 0)
+    print(f"⚖️ 활성 포지션: {active_positions}개 / {total_categories}개 카테고리")
+    
+    # 충돌 정보
+    if conflicts.get("has_conflicts", False):
+        print(f"⚠️ 포지션 충돌: {len(conflicts.get('conflict_types', []))}개")
+    else:
+        print(f"✅ 포지션 충돌 없음")
+    
+    # LLM 판단 (기존 구조 유지)
+    if judge:
+        llm_decision = judge.get("decision", "HOLD")
+        llm_confidence = judge.get("confidence", 0.0)
+        print(f"🤖 LLM 판단: {llm_decision} (신뢰도: {llm_confidence:.2f})")
     
     print("📊" + "="*60)
     print("")  # blank line for spacing

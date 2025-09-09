@@ -68,7 +68,7 @@ pip install -r requirements.txt
 ```python
 # config/integrated_config.py
 class IntegratedConfig:
-    symbol: str = "ETHUSDT"                    # 거래 심볼
+    symbol: str = "ETHUSDC"                    # 거래 심볼
     enable_hybrid_strategy: bool = True        # 하이브리드 전략 활성화
     enable_liquidation_strategy: bool = True   # 청산 전략 활성화
     hybrid_min_confidence: float = 0.5       # 최소 신뢰도 (45%)

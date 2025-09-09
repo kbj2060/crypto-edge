@@ -25,7 +25,7 @@ from data.binance_dataloader import BinanceDataLoader
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
     
-    def __init__(self, symbol: str = "ETHUSDT", strategy_executor: Optional[StrategyExecutor] = None):
+    def __init__(self, symbol: str = "ETHUSDC", strategy_executor: Optional[StrategyExecutor] = None):
         """웹소켓 초기화"""
         self.symbol = symbol.lower()
         self.ws_url = "wss://fstream.binance.com/ws"
@@ -130,7 +130,7 @@ class BinanceWebSocket:
         """첫 시작 시 모든 지표 업데이트 및 전략 실행"""
         self.strategy_executor.execute_all_strategies()
         signals = self.strategy_executor.get_signals()
-        decision = self.decision_engine.decide_trade_realtime(signals, leverage=30)
+        decision = self.decision_engine.decide_trade_realtime(signals)
         print("✅ 모든 지표 및 전략 초기화 완료")
         print_decision_interpretation(decision)
 
@@ -181,7 +181,7 @@ class BinanceWebSocket:
         self.strategy_executor.execute_all_strategies()
                 
         signals = self.strategy_executor.get_signals()
-        decision = self.decision_engine.decide_trade_realtime(signals, leverage=20)
+        decision = self.decision_engine.decide_trade_realtime(signals)
         print_decision_interpretation(decision)
 
         if decision.get("action") != "HOLD":
