@@ -137,20 +137,10 @@ class VolSpike:
             else:
                 action = "BUY" if last_close > prev_close else "SELL"
 
-        if conf >= 0.8:
-            conf = 'HIGH'
-        elif conf >= 0.5:
-            conf = 'MEDIUM'
-        elif conf > 0.0:
-            conf = 'LOW'
-        else:
-            conf = 'LOW'
-
         return {
             'name': 'VOL_SPIKE',
             'action': action,
             'score': float(score),
-            'confidence': conf,
             'timestamp': self.tm.get_current_time(),
             'context': {
                 'vol_ratio': float(vol_ratio),
@@ -172,7 +162,6 @@ def _no_signal_result(**kwargs):
         'name': 'VOL_SPIKE',
         'action': 'HOLD',
         'score': 0.0,
-        'confidence': 0.0,
         'timestamp': datetime.utcnow(),
         'context': kwargs
     }

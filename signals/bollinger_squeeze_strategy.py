@@ -207,15 +207,7 @@ class BollingerSqueezeStrategy:
             else:
                 score = 0.0
 
-        # map to confidence
-        if score >= 0.85:
-            conf = 'HIGH'
-        elif score >= 0.5:
-            conf = 'MEDIUM'
-        elif score > 0.0:
-            conf = 'LOW'
-        else:
-            conf = 'LOW'
+        conf = score
 
         if self.cfg.debug:
             print(f"[BB Agg DEBUG] cur_w={cur_w:.6f} ma_w={ma_w:.6f} squeeze_strength={squeeze_strength:.3f} "
@@ -234,8 +226,7 @@ class BollingerSqueezeStrategy:
                 self.last_signal_time = now
                 return {
                     "stage": "ENTRY", "action": "BUY", "entry": float(entry), "stop": float(stop),
-                    "targets": [float(tp1), float(tp2)], "score": float(score), "confidence": conf,
-                    "context": {
+                    "targets": [float(tp1), float(tp2)], "score": float(score),                     "context": {
                         "mode": "BB_SQUEEZE_AGG", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
                         "squeeze_strength": float(squeeze_strength), "atr": float(atr),
                         "upper_band": float(upper_now), "lower_band": float(lower_now),
@@ -251,8 +242,7 @@ class BollingerSqueezeStrategy:
                 self.last_signal_time = now
                 return {
                     "stage": "ENTRY", "action": "SELL", "entry": float(entry), "stop": float(stop),
-                    "targets": [float(tp1), float(tp2)], "score": float(score), "confidence": conf,
-                    "context": {
+                    "targets": [float(tp1), float(tp2)], "score": float(score),                     "context": {
                         "mode": "BB_SQUEEZE_AGG", "bb_width": float(cur_w), "bb_width_ma": float(ma_w),
                         "squeeze_strength": float(squeeze_strength), "atr": float(atr),
                         "upper_band": float(upper_now), "lower_band": float(lower_now),
@@ -262,6 +252,6 @@ class BollingerSqueezeStrategy:
         
         return {
                     "stage": "NONE", "action": "HOLD", "entry": None, "stop": None,
-                    "targets": [None, None], "score": float(score), "confidence": conf,
+                    "targets": [None, None], "score": float(score),
                     "context": {}
                 }
