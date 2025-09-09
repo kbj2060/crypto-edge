@@ -30,33 +30,45 @@ class TradeDecisionEngine:
         
         # 기본 가중치 설정
         priority_order = [
-            "ORDERFLOW_CVD",       # 마이크로구조 / 체결 흐름 — 핵심
-            "VWAP_PINBALL",        # 세션 기준 동적 지지/저항 & 리테스트 핀볼
-            "HTF_TREND_15M",       # 고타임프레임 추세 확인(15m/1h) — 컨텍스트 필터
-            "VPVR",                # 체결량 기반 레벨(지지/저항)
-            "VPVR_MICRO",       # VPVR 마이크로봇(POC 리테스트) — 레벨 전용 보조
-            "VOL_SPIKE",           # 적응형 볼륨 스파이크 (median + z-score)
-            "ZSCORE_MEAN_REVERSION",     # 통계적 평균회귀 (z-score) — 직교성 검증/리버전
-            "BB_SQUEEZE",          # 변동성 확장 트리거 (진입 보조)
-            "SESSION",             # 세션 모멘텀 / 오프닝 영향 (보조)
-            "EMA_TREND_15M",       # 방향성 필터 (진입 허가용, 보조)
-            "RSI_DIV",             # 다이버전스(보조 확인)
-            "ICHIMOKU",            # 장/중기 흐름(약한 보조)
+            "HTF_TREND_15M",      
+            "ORDERFLOW_CVD",       
+            "RSI_DIV",      
+            "MACD_HISTOGRAM",              
+            "FUNDING_RATE",
+            "LIQUIDITY_GRAB",      
+            "OI_DELTA",      
+            "VWAP_PINBALL",    
+            "SESSION",           
+            "VPVR",
+            "VOL_SPIKE",             
         ]
 
         default_weights = {
-            "ORDERFLOW_CVD":   0.18,
-            "VWAP_PINBALL":    0.15,
-            "SESSION":         0.15,
-            "HTF_TREND_15M":   0.12,
-            "VPVR":            0.12,
-            "VPVR_MICRO":      0.05,
-            "VOL_SPIKE":       0.05,
-            "BB_SQUEEZE":      0.05,
-            "EMA_TREND_15M":   0.04,
-            "ZSCORE_MEAN_REVERSION": 0.03,
-            "RSI_DIV":         0.03,
-            "ICHIMOKU":        0.02,
+            # 핵심 추세/모멘텀 (45%)
+            "HTF_TREND_15M":    0.15,  # 상위 추세 확인
+            "ORDERFLOW_CVD":    0.15,  # 스마트머니 추적  
+            "RSI_DIV":          0.15,  # 모멘텀 전환 신호
+            
+            # 신규 핵심 지표 (30%)
+            "MACD_HISTOGRAM":   0.12,  # 🆕 모멘텀 가속도 (가장 중요)
+            "FUNDING_RATE":     0.08,  # 🆕 시장 심리 (크립토 특화)
+            "LIQUIDITY_GRAB":   0.06,  # 🆕 유동성 사냥 패턴
+            "OI_DELTA":         0.04,  # 🆕 선물 미결제약정 변화
+            
+            # 레벨/세션 기반 (20%)
+            "VWAP_PINBALL":     0.08,  # 동적 지지/저항
+            "SESSION":          0.07,  # 세션 오프닝 레인지  
+            "VPVR":             0.05,  # 볼륨 프로파일 레벨
+            
+            # 볼륨/변동성 (5%)
+            "VOL_SPIKE":        0.05,  # 볼륨 스파이크
+            
+            # 제거 대상
+            # "VPVR_MICRO":      제거 (VPVR와 중복)
+            # "EMA_TREND_15M":   제거 (HTF_TREND_15M와 중복) 
+            # "ZSCORE_MEAN_REVERSION": 제거 (VWAP_PINBALL과 유사)
+            # "BB_SQUEEZE":      제거 (VOL_SPIKE로 대체)
+            # "ICHIMOKU":        제거 (단타에 부적합)
         }
 
         if weights is None:
@@ -75,11 +87,8 @@ class TradeDecisionEngine:
 
         now = self.time_manager.get_current_time()
 
-        # 신뢰도 숫자 매핑
-        conf_map = {"HIGH": 1.0, "MEDIUM": 0.7, "LOW": 0.4, None: 0.6}
-
         # 전략별 가중 점수 계산
-        signed, raw, used_weight_sum = self._calculate_weighted_scores(signals, weights, conf_map)
+        signed, raw, used_weight_sum = self._calculate_weighted_scores(signals, weights)
 
         # 가중치가 없으면 HOLD
         if used_weight_sum <= 0:
@@ -121,18 +130,17 @@ class TradeDecisionEngine:
             "meta": {"timestamp_utc": now.isoformat(), "used_weight_sum": used_weight_sum}
         }
 
-    def _calculate_weighted_scores(self, signals, weights, conf_map):
+    def _calculate_weighted_scores(self, signals, weights):
         """가중 점수 계산"""
         signed = {}
         raw = {}
         used_weight_sum = 0.0
 
         for name, s in signals.items():
+            print(name, s)
             name = name.upper()
             action = (s.get("action")).upper()
             score = float(s.get("score"))
-            conf = (s.get("confidence"))
-            conf_factor = float(conf_map.get(conf))
             w = float(weights.get(name))
             
             # 부호 있는 값 계산
@@ -141,13 +149,11 @@ class TradeDecisionEngine:
                 sign = 1
             elif action == "SELL":
                 sign = -1
-            val = sign * score * conf_factor * w
+            val = sign * score * w
             signed[name] = val
             raw[name] = {
                 "action": action if action else None,
                 "score": score,
-                "confidence": conf,
-                "conf_factor": conf_factor,
                 "weight": w,
                 "entry": s.get("entry"),
                 "stop": s.get("stop"),
@@ -179,9 +185,8 @@ class TradeDecisionEngine:
             if session_rec:
                 sess_act = session_rec.get("action")
                 sess_score = float(session_rec.get("score") or 0.0)
-                sess_conf = session_rec.get("confidence")
                 
-                if sess_act in ("BUY", "SELL") and sess_score >= immediate_threshold and sess_conf == "HIGH":
+                if sess_act in ("BUY", "SELL") and sess_score >= immediate_threshold:
                     # 반대 신호 체크
                     opp_strong = False
                     for nm, r in raw.items():
@@ -241,16 +246,7 @@ class TradeDecisionEngine:
         else:
             conflict_penalty = 1.0
             
-        # 신뢰도 승수
-        conf_factors = [r.get("conf_factor", 0.6) for nm, r in raw.items() if r.get("weight", 0) > 0]
-        conf_mult = 0.6
-        if conf_factors:
-            prod = 1.0
-            for f in conf_factors:
-                prod *= f
-            conf_mult = prod ** (1.0 / max(1, len(conf_factors)))
-            
-        return max(0.0, min(1.0, base_scale * conflict_penalty * conf_mult))
+        return max(0.0, min(1.0, base_scale * conflict_penalty))
 
     def _make_final_decision(self, session_override, session_action, raw, net, open_threshold, agree_counts):
         """최종 결정"""
@@ -260,7 +256,7 @@ class TradeDecisionEngine:
         if session_override:
             action = "LONG" if session_action == "BUY" else "SHORT"
             session_rec = raw.get("SESSION")
-            reason.append(f"SESSION strong override (score={session_rec.get('score')}, conf={session_rec.get('confidence')})")
+            reason.append(f"SESSION strong override (score={session_rec.get('score')})")
         else:
             if net >= open_threshold:
                 action = "LONG"

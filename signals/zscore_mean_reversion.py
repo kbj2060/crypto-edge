@@ -34,7 +34,7 @@ class ZScoreConfig:
 
 
 class ZScoreMeanReversion:
-    def __init__(self, cfg: Optional[ZScoreConfig] = None):
+    def __init__(self, cfg: Optional[ZScoreConfig] = ZScoreConfig()):
         self.config = cfg or ZScoreConfig()
 
     @staticmethod
@@ -55,25 +55,25 @@ class ZScoreMeanReversion:
 
     @staticmethod
     def _zscore_to_signal(last_z: float, cfg: ZScoreConfig) -> Dict[str, Any]:
-        """Convert last z into (action, score, confidence) with pre-signal logic."""
+        """Convert last z into (action, score) with pre-signal logic."""
         absz = abs(last_z)
         zt = float(cfg.z_thresh)
         pre_pct = float(cfg.pre_signal_pct)
-        result = {"action": "HOLD", "score": 0.0, "confidence": "LOW"}
+        result = {"action": "HOLD", "score": 0.0}
 
         if absz >= zt:
             # full trigger
-            act = "LONG" if last_z < 0 else "SHORT"
+            act = "BUY" if last_z < 0 else "SELL"
             # continuous score: base 0.5 then scale with additional z beyond threshold
             extra = max(0.0, (absz - zt) / max(1e-9, zt))
             score = min(1.0, 0.5 + 0.5 * extra)
-            conf = "HIGH" if absz >= (zt * 1.25) else "MEDIUM"
-            result.update({"action": act, "score": float(score), "confidence": conf})
+            conf = 0.8 if absz >= (zt * 1.25) else 0.5
+            result.update({"action": act, "score": float(score)})
         elif absz >= (zt * pre_pct):
             # pre-signal: no immediate action, small score for ensemble to use
-            result.update({"action": "HOLD", "score": float(max(0.05, 0.4 * (absz / zt))), "confidence": "MEDIUM"})
+            result.update({"action": "HOLD", "score": float(max(0.05, 0.4 * (absz / zt)))})
         else:
-            result.update({"action": "HOLD", "score": 0.0, "confidence": "LOW"})
+            result.update({"action": "HOLD", "score": 0.0})
         return result
 
     def _prepare_input_series(self, df: pd.DataFrame) -> pd.Series:
@@ -97,7 +97,7 @@ class ZScoreMeanReversion:
         """
         Main entry (keeps name compatible with prior project).
         Input: df (pandas DataFrame) with at least 'close'; optionally 'volume','high','low'.
-        Output: dict with keys: name, action(LONG/SHORT/HOLD), score, confidence, entry, stop, tp, context
+        Output: dict with keys: name, action(BUY/SELL/HOLD), score, entry, stop, tp, context
         """
         # basic checks
         if len(df) < max(self.config.min_history, self.config.window + 2):
@@ -106,7 +106,6 @@ class ZScoreMeanReversion:
                 "name": "ZSCORE_MEAN_REVERSION",
                 "action": "HOLD",
                 "score": 0.0,
-                "confidence": "LOW",
                 "entry": None,
                 "stop": None,
                 "tp": None,
@@ -119,7 +118,6 @@ class ZScoreMeanReversion:
                 "name": "ZSCORE_MEAN_REVERSION",
                 "action": "HOLD",
                 "score": 0.0,
-                "confidence": "LOW",
                 "entry": df["close"].iloc[-1],
                 "stop": None,
                 "tp": None,
@@ -134,7 +132,6 @@ class ZScoreMeanReversion:
                 "name": "ZSCORE_MEAN_REVERSION",
                 "action": "HOLD",
                 "score": 0.0,
-                "confidence": "LOW",
                 "entry": df["close"].iloc[-1] if "close" in df.columns else None,
                 "stop": None,
                 "tp": None,
@@ -173,21 +170,20 @@ class ZScoreMeanReversion:
         entry = last_price
         stop = None
         tp = None
-        if sig["action"] == "LONG":
+        if sig["action"] == "BUY":
             stop = entry - self.config.stop_atr_mult * atr
             tp = entry + (self.config.take_profit_atr_mult * atr if self.config.take_profit_atr_mult else None)
-        elif sig["action"] == "SHORT":
+        elif sig["action"] == "SELL":
             stop = entry + self.config.stop_atr_mult * atr
             tp = entry - (self.config.take_profit_atr_mult * atr if self.config.take_profit_atr_mult else None)
 
-        # map action to canonical LONG/SHORT/HOLD
+        # map action to canonical BUY/SELL/HOLD
         action = sig["action"]
 
         return {
             "name": "ZSCORE_MEAN_REVERSION",
             "action": action,
             "score": float(sig["score"]),
-            "confidence": sig["confidence"],
             "entry": float(entry),
             "stop": float(stop) if stop is not None else None,
             "tp": float(tp) if tp is not None else None,

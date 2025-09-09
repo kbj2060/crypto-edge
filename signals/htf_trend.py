@@ -56,11 +56,6 @@ class HTFTrend:
         tr = pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
         return tr.rolling(period, min_periods=1).mean()
 
-    def _conf_bucket(self, v: float) -> str:
-        if v >= 0.75: return "HIGH"
-        if v >= 0.50: return "MEDIUM"
-        return "LOW"
-
     def on_kline_close_15m(
         self,
         df_15m: pd.DataFrame,
@@ -71,15 +66,14 @@ class HTFTrend:
         트렌드 신호 생성
         
         Returns:
-            {'name','action'('LONG'/'SHORT'/'HOLD'),'score'(0..1),'confidence'(0..1),'entry','stop','context'}
+            {'name','action'('LONG'/'SHORT'/'HOLD'),'score'(0..1),'entry','stop','context'}
         """
         df_15m = self.ensure_index(df_15m)
         if len(df_15m) < max(30, self.config.lookback_15m + 2):
             return {
                 'name': 'HTF_TREND_15M', 
                 'action': 'HOLD', 
-                'score': 0.0, 
-                'confidence': 0.0,
+                'score': 0.0,
                 'context': {'reason': 'insufficient_15m', 'n': len(df_15m)}
             }
 
@@ -126,7 +120,6 @@ class HTFTrend:
             'name': 'HTF_TREND_15M',
             'action': action,
             'score': float(score),
-            'confidence': self._conf_bucket(float(conf)),
             'entry': float(entry) if entry is not None else None,
             'stop': float(stop) if stop is not None else None,
             'context': {'ema_trend': ema_trend, 'macd_hist': macd_hist, 'atr': atr_val}

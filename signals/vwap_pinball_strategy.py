@@ -49,11 +49,6 @@ class VWAPPinballStrategy:
         self.cfg = cfg
         self.tm = get_time_manager()
 
-    def _conf_bucket(self, v: float) -> str:
-        if v >= 0.75: return "HIGH"
-        if v >= 0.50: return "MEDIUM"
-        return "LOW"
-
     def _score_lin(self, x: float, lo: float, hi: float) -> float:
         if hi == lo: return 0.0
         return float(max(0.0, min(1.0, (x - lo) / (hi - lo))))
@@ -278,7 +273,7 @@ class VWAPPinballStrategy:
             })
         # === END SCORING (MODIFIED) ===
 
-        # apply threshold (LOW confidence suppressed)
+        # apply threshold
         scored_filtered = [s for s in scored if s["score"] >= float(self.cfg.score_threshold)]
         if not scored_filtered:
             print("not scored_filtered")
@@ -289,7 +284,6 @@ class VWAPPinballStrategy:
             return None
 
         best = sorted(scored_filtered, key=lambda x: x["score"], reverse=True)[0]
-        confidence = self._conf_bucket(best["score"])
         reasons = [
             f"sigma={best['sigma']:.2f} (dist_score={best['dist_score']:.2f})",
             f"bounce_score={best['bounce_score']:.2f}",
@@ -314,7 +308,6 @@ class VWAPPinballStrategy:
                 "sigma": float(best["sigma"])
             },
             "score": float(best["score"]),
-            "confidence": confidence,
             "reasons": reasons
         }
 

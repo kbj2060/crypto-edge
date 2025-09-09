@@ -24,7 +24,7 @@ class EMATrend15m:
     """15분 EMA 트렌드를 계산해 HTF 컨펌용 신호를 출력합니다.
     반환 포맷:
         {'name':'EMA_TREND_15m', 'action':'BUY'|'SELL'|None, 'score':0..1,
-        'confidence':'HIGH'|'MEDIUM'|'LOW', 'timestamp': datetime, 'context': {...}}
+        'timestamp': datetime, 'context': {...}}
     """
 
     def __init__(self, cfg: EMATrendConfig = EMATrendConfig()):
@@ -66,7 +66,7 @@ class EMATrend15m:
 
         score = 0.0
         action = "HOLD"
-        conf = 'LOW'
+        conf = 0.0
 
         thresh = self.cfg.score_scale
         if diff_pct >= thresh:
@@ -79,19 +79,13 @@ class EMATrend15m:
             action = None
             score = 0.0
 
-        if score >= 0.8:
-            conf = 'HIGH'
-        elif score >= 0.45:
-            conf = 'MEDIUM'
-        else:
-            conf = 'LOW'
+        conf = score
 
         
         return {
             'name': 'EMA_TREND_15m',
             'action': action,
             'score': float(score),
-            'confidence': conf,
             'timestamp': datetime.utcnow(),
             'context': {
                 'ema_short': float(ema_s),

@@ -91,11 +91,6 @@ def _cloud_state(price: float, sa: float, sb: float) -> str:
     else:
         return "INSIDE"
 
-def _confidence(score: float) -> str:
-    if score >= 0.8: return "HIGH"
-    if score >= 0.5: return "MEDIUM"
-    return "LOW"
-
 
 # --------- 설정 ---------
 @dataclass
@@ -282,7 +277,6 @@ class Ichimoku:
             "name": f"ICHIMOKU",
             "action": action,
             "score": score if action != "HOLD" else 0.0,
-            "confidence": _confidence(score),
             "timestamp": self.tm.get_current_time(),
             "context": {
                 "price": price,
@@ -300,10 +294,5 @@ class Ichimoku:
                 "tp_R2": tp2
             }
         }
-        # 레버리지 10~30배 환경에서 과도한 진입 방지용 추천 스케일(예: 세션/VPVR가 강한 동의일 때만 키움)
-        result["recommended_trade_scale"] = (
-            0.15 if result["confidence"] == "HIGH" and action != "HOLD" else
-            0.08 if result["confidence"] == "MEDIUM" and action != "HOLD" else
-            0.0
-        )
+        
         return result

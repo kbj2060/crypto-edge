@@ -54,13 +54,20 @@ class RSIDivergence:
     def _local_extrema_idxs(self, series: pd.Series, window: int, kind: str = "low"):
         idxs = []
         L = len(series)
+        # 기존: 완벽한 극값만 찾음 (너무 엄격)
+        # 수정: 약간 완화된 조건
         for i in range(window, L - window):
-            seg = series.iloc[i-window:i+window+1]
-            center = seg.iloc[window]
-            if kind == "low" and center == seg.min():
-                idxs.append(i)
-            if kind == "high" and center == seg.max():
-                idxs.append(i)
+            if kind == "low":
+                # 완화된 조건: 중심값이 양쪽 대부분보다 낮으면 OK
+                left_lower = sum(series.iloc[i] <= series.iloc[i-j] for j in range(1, window+1))
+                right_lower = sum(series.iloc[i] <= series.iloc[i+j] for j in range(1, window+1))
+                if left_lower >= (window * 0.7) and right_lower >= (window * 0.7):  # 70% 이상
+                    idxs.append(i)
+            else:  # "high"
+                left_higher = sum(series.iloc[i] >= series.iloc[i-j] for j in range(1, window+1))
+                right_higher = sum(series.iloc[i] >= series.iloc[i+j] for j in range(1, window+1))
+                if left_higher >= (window * 0.7) and right_higher >= (window * 0.7):
+                    idxs.append(i)
         return idxs
 
     def _score_divergence(self, price_prev, price_now, rsi_prev, rsi_now, vol_now=None, cfg=None):
@@ -88,7 +95,7 @@ class RSIDivergence:
         s = max(0.0, min(1.0, s))
         return s, price_pct, rsi_delta
 
-    def on_kline_close_htf(self) -> Optional[Dict[str, Any]]:
+    def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
         # fetch lookback bars
         df = self.data_manager.get_latest_data(self.cfg.lookback_bars)
         if df is None or len(df) < max(self.cfg.rsi_period + self.cfg.swing_window + 5, 30):
@@ -104,7 +111,7 @@ class RSIDivergence:
 
         action = "HOLD"
         score = 0.0
-        conf = "LOW"
+        conf = 0.0
         context = {}
 
         # bullish divergence: need at least two local lows (prev, curr)
@@ -157,22 +164,12 @@ class RSIDivergence:
                     "price_rise_pct": price_rise, "rsi_delta": rsi_delta
                 })
 
-        # confidence label
-        if score >= 0.75:
-            conf = "HIGH"
-        elif score >= 0.5:
-            conf = "MEDIUM"
-        else:
-            conf = "LOW"
-
-        if action == "HOLD":
-            return None
+        conf = score
 
         return {
             "name": "RSI_DIV",
             "action": action,
             "score": float(score),
-            "confidence": conf,
             "timestamp": self.tm.get_current_time(),
             "context": context
         }
