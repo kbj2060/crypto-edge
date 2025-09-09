@@ -44,7 +44,7 @@ class HTFRSIDivCfg:
     min_score: float = 0.15      # 0.25 -> 0.15 (완화)
     use_volume_filter: bool = False
     min_volume_multiplier: float = 0.3  # 0.5 -> 0.3 (완화)
-    debug: bool = True           # True로 변경 (디버깅 활성화)
+    debug: bool = False           # True로 변경 (디버깅 활성화)
 
 class RSIDivergence:
     def __init__(self, cfg: HTFRSIDivCfg = HTFRSIDivCfg()):

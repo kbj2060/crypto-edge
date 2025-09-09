@@ -28,7 +28,7 @@ class LiquidityGrabCfg:
     tp_R1: float = 2.5
     tp_R2: float = 4.0
     tick: float = 0.01
-    debug: bool = True                    # True로 변경 (디버깅 활성화)
+    debug: bool = False                    # True로 변경 (디버깅 활성화)
     
     # 점수 구성 가중치
     w_grab_quality: float = 0.30          # 0.35 -> 0.30

@@ -12,7 +12,7 @@ class TradeDecisionEngine:
     STRATEGY_CATEGORIES = {
         "SHORT_TERM": {  # 3분봉 기반, 5-30분 보유
             "strategies": ["MACD_HISTOGRAM", "RSI_DIV", "VOL_SPIKE", "ORDERFLOW_CVD", 
-                            "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL"],
+                            "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "VPVR_MICRO", "ZSCORE_MEAN_REVERSION"],
             "weight": 0.60,  # 전체 가중치의 60%
             "timeframe": "3m",
             "max_holding_minutes": 30,
@@ -162,6 +162,9 @@ class TradeDecisionEngine:
         for strategy in strategies:
             if strategy in category_signals:
                 weights[strategy] = weight_per_strategy
+            else:
+                # 디버깅: 신호가 없는 전략 로그 출력
+                print(f"[DEBUG] {strategy}: 신호 없음 (available signals: {list(category_signals.keys())})")
         
         return weights
     

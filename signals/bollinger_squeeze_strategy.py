@@ -56,7 +56,7 @@ class BBSqueezeCfg:
     tick: float = 0.01
     min_body_ratio: float = 0.06       # 몸통 비율 완화 (15분봉용)
     allow_wick_break: bool = True      # 위크 브레이크 허용 (15분봉용)
-    debug: bool = True                 # 디버깅 활성화
+    debug: bool = False                 # 디버깅 활성화
 
     # score composition weights (squeeze_strength, momentum, volume)
     w_squeeze: float = 0.50            # 스퀴즈 가중치 증가

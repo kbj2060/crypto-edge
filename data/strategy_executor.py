@@ -116,6 +116,8 @@ class StrategyExecutor:
         self._execute_vol_spike_strategy()
         self._execute_macd_histogram_strategy()
         self._execute_liquidity_grab_strategy()
+        self._execute_vpvr_micro_strategy()
+        self._execute_zscore_mean_reversion_strategy()
         # 15분봉 전략
         self._execute_htf_trend_15m_strategy()
         self._execute_oiDelta_strategy()
@@ -218,8 +220,7 @@ class StrategyExecutor:
         if not self.zscore_mean_reversion_strategy:
             return
 
-        df_3m = self.data_manager.get_latest_data(count=300)
-        result = self.zscore_mean_reversion_strategy.on_kline_close_3m(df_3m)
+        result = self.zscore_mean_reversion_strategy.on_kline_close_3m()
         
         if result:
             self.signals['ZSCORE_MEAN_REVERSION'] = {
