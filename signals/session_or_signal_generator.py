@@ -40,9 +40,7 @@ class SessionORSignalGenerator:
         tp1 = entry + self.cfg.tp_R1 * R
         tp2 = entry + self.cfg.tp_R2 * R
         
-        # 신뢰도 체크
-        low_conf = self._check_low_confidence(analysis_result, True)
-        trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
+        trade_scale = 1.0
         
         # 이유 생성
         reasons = self._generate_reasons(analysis_result, True)
@@ -64,10 +62,8 @@ class SessionORSignalGenerator:
                 "wick_break": analysis_result['wick_break_long'],
                 "vol_ratio": float(analysis_result.get('vol_ratio', 0)) if analysis_result.get('vol_ratio') else None
             },
-            "low_confidence": low_conf,
             "trade_size_scale": trade_scale,
             "score": float(analysis_result['score_long']),
-            "confidence": self._get_confidence_level(analysis_result['score_long']),
             "reasons": reasons
         }
 
@@ -85,9 +81,7 @@ class SessionORSignalGenerator:
         tp1 = entry - self.cfg.tp_R1 * R
         tp2 = entry - self.cfg.tp_R2 * R
         
-        # 신뢰도 체크
-        low_conf = self._check_low_confidence(analysis_result, False)
-        trade_scale = float(self.cfg.low_conf_trade_scale) if low_conf else 1.0
+        trade_scale = 1.0
         
         # 이유 생성
         reasons = self._generate_reasons(analysis_result, False)
@@ -109,31 +103,11 @@ class SessionORSignalGenerator:
                 "wick_break": analysis_result['wick_break_short'],
                 "vol_ratio": float(analysis_result.get('vol_ratio', 0)) if analysis_result.get('vol_ratio') else None
             },
-            "low_confidence": low_conf,
             "trade_size_scale": trade_scale,
             "score": float(analysis_result['score_short']),
-            "confidence": self._get_confidence_level(analysis_result['score_short']),
             "reasons": reasons
         }
 
-    def _check_low_confidence(self, analysis_result: Dict[str, Any], is_long: bool) -> bool:
-        """낮은 신뢰도 체크"""
-        if is_long:
-            if (not analysis_result['comp_break_long']) or \
-               (not analysis_result['touched_long'] and analysis_result['wick_break_long']):
-                if not analysis_result.get('vol_ok', True):
-                    return True
-                elif not analysis_result['touched_long']:
-                    return True
-        else:
-            if (not analysis_result['comp_break_short']) or \
-               (not analysis_result['touched_short'] and analysis_result['wick_break_short']):
-                if not analysis_result.get('vol_ok', True):
-                    return True
-                elif not analysis_result['touched_short']:
-                    return True
-        
-        return False
 
     def _generate_reasons(self, analysis_result: Dict[str, Any], is_long: bool) -> List[str]:
         """이유 생성"""
@@ -163,24 +137,13 @@ class SessionORSignalGenerator:
         
         return reasons
 
-    def _get_confidence_level(self, score: float) -> str:
-        """신뢰도 레벨 반환"""
-        if score >= 0.75:
-            return "HIGH"
-        elif score >= 0.5:
-            return "MEDIUM"
-        else:
-            return "LOW"
 
     def select_best_signal(self, signals: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
         """최적의 신호 선택"""
         if not signals:
             return None
         
-        # 낮은 신뢰도 우선, 그 다음 진입-스탑 거리로 정렬
-        signals_sorted = sorted(signals, key=lambda s: (
-            0 if not s.get("low_confidence", False) else 1,
-            -abs((s["entry"] - s["stop"]))
-        ))
+        # 진입-스탑 거리로 정렬
+        signals_sorted = sorted(signals, key=lambda s: -abs((s["entry"] - s["stop"])))
         
         return signals_sorted[0]

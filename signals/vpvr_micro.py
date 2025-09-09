@@ -16,7 +16,7 @@ class VPVRConfig:
 class VPVRMicro:
     """Volume Profile Volume Range Micro Bot - 클래스 기반"""
     
-    def __init__(self, config: VPVRConfig = None):
+    def __init__(self, config: VPVRConfig = VPVRConfig()):
         self.config = config or VPVRConfig()
     
     @staticmethod
@@ -53,18 +53,13 @@ class VPVRMicro:
         poc_idx = int(np.argmax(vol_hist))
         poc_price = float((bins[poc_idx] + bins[poc_idx + 1]) / 2.0)
         return bins, vol_hist, poc_price
-    
-    def _conf_bucket(self, v: float) -> str:
-        if v >= 0.75: return "HIGH"
-        if v >= 0.50: return "MEDIUM"
-        return "LOW"
 
     def on_kline_close_3m(self, df_3m: pd.DataFrame) -> Dict[str, Any]:
         """
         VPVR 기반 신호 생성
         
         Returns:
-            {'name','action'('BUY'/'SELL'/'HOLD'),'score'(0..1),'confidence'(0..1),'entry','stop','context'}
+            {'name','action'('BUY'/'SELL'/'HOLD'),'score'(0..1),'entry','stop','context'}
         """
         df_3m = self.ensure_index(df_3m)
         if len(df_3m) < max(self.config.lookback_bars, 10):
@@ -73,7 +68,6 @@ class VPVRMicro:
                 'name': 'VPVR_MICRO', 
                 'action': 'HOLD', 
                 'score': 0.0, 
-                'confidence': self._conf_bucket(float(0)), 
                 'context': {'reason': 'insufficient_bars'}
             }
 
@@ -84,8 +78,7 @@ class VPVRMicro:
             return {
                 'name': 'VPVR_MICRO', 
                 'action': 'HOLD', 
-                'score': 0.0, 
-                'confidence': self._conf_bucket(float(0)),
+                'score': 0.0,
                 'context': {'reason': 'vpvr_fail'}
             }
 
@@ -115,7 +108,6 @@ class VPVRMicro:
             'name': 'VPVR_MICRO',
             'action': action,
             'score': float(score),
-            'confidence': self._conf_bucket(float(conf)),
             'entry': float(entry) if entry is not None else None,
             'stop': float(stop) if stop is not None else None,
             'context': {

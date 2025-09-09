@@ -528,22 +528,18 @@ class LVNGoldenPocket:
         # floor if heavily relaxed
         if relaxed_level and score < 0.10:
             score = 0.10
-        if score >= 0.75:
-            confidence = 'HIGH'
-        elif score >= 0.5:
-            confidence = 'MEDIUM'
-        else:
-            confidence = 'LOW'
+
         components = {'zone':round(zone_comp,3),'poc':round(poc_comp,3),'lvn':round(lvn_comp,3),'pct':round(pct_comp,3),'relax_level':int(relaxed_level)}
-        # print(f"[VPVR_SCORE] score={score:.3f} conf={confidence} comps={components} pct_move={pct_move:.4f} relaxed_level={relaxed_level}")
+        # print(f"[VPVR_SCORE] score={score:.3f} comps={components} pct_move={pct_move:.4f} relaxed_level={relaxed_level}")
         # attach to ctx later by injecting into result
         # --- end SCORING ---
 
         result = {
             "stage": "ENTRY",
-            "action": action,
+            "action": action,   
             "entry": float(entry),
             "stop": float(stop),
+            "score": score,
             "targets": [float(tp1), float(tp2), float(poc_price)],
             "context": ctx
         }
@@ -551,11 +547,9 @@ class LVNGoldenPocket:
         # attach scoring metadata
         try:
             result['score'] = float(score)
-            result['confidence'] = confidence
             result['components'] = components
         except Exception:
             result['score'] = None
-            result['confidence'] = None
             result['components'] = None
 
         return result

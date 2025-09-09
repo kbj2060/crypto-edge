@@ -128,12 +128,10 @@ class BinanceWebSocket:
     
     async def _initialize_all_strategies(self):
         """첫 시작 시 모든 지표 업데이트 및 전략 실행"""
-            # 모든 전략 실행
         self.strategy_executor.execute_all_strategies()
-        print("✅ 모든 지표 및 전략 초기화 완료")
-
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals, leverage=30)
+        print("✅ 모든 지표 및 전략 초기화 완료")
         print_decision_interpretation(decision)
 
     async def worker(self):
@@ -171,8 +169,6 @@ class BinanceWebSocket:
         price_data = self.candle_creator.create_price_data(kline)
         series_3m = self.candle_creator.create_3min_series(price_data)
 
-        # is_event_blocking = self.event_manager.is_in_event_blocking_period()
-
         self.data_manager.update_with_candle(series_3m)
 
         if self.candle_creator.is_candle_close("15m"):
@@ -183,16 +179,10 @@ class BinanceWebSocket:
 
         self.global_manager.update_all_indicators(series_3m)
         self.strategy_executor.execute_all_strategies()
-        
-        # if not is_event_blocking:
-        
+                
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals, leverage=20)
         print_decision_interpretation(decision)
-
-        # decision["candle_data"] = price_data
-        # llm_decision = await self.llm_decider.decide_async(signals)
-        # print_llm_judgment(llm_decision)
 
         if decision.get("action") != "HOLD":
             send_telegram_message(decision)
