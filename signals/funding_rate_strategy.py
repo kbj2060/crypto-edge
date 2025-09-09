@@ -19,23 +19,22 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class FundingRateCfg:
     symbol: str = "ETHUSDT"
-    extreme_funding_threshold: float = 0.005    # 2% (연 8% = 극단적)
-    moderate_funding_threshold: float = 0.001  # 0.5% (연 2% = 보통)
-    funding_ma_period: int = 24               # 24시간 이동평균
-    lookback_hours: int = 72                  # 3일간 데이터
-    sentiment_multiplier: float = 2.0         # 심리 과열 배수
+    extreme_funding_threshold: float = 0.002    # 0.005 → 0.002 (완화)
+    moderate_funding_threshold: float = 0.0005  # 0.001 → 0.0005 (완화)
+    funding_ma_period: int = 12                 # 24 → 12 (더 민감하게)
+    lookback_hours: int = 48                    # 72 → 48 (단축)
+    sentiment_multiplier: float = 1.5           # 2.0 → 1.5 (완화)
     atr_stop_mult: float = 1.5
     tp_R1: float = 2.0
     tp_R2: float = 3.5
     tick: float = 0.01
     debug: bool = True
     
-    # 점수 구성 가중치
-    w_funding_extreme: float = 0.40
-    w_funding_trend: float = 0.25
-    w_volume_confirm: float = 0.20
-    w_price_momentum: float = 0.15
-
+    # 점수 구성 가중치 - 펀딩비율에 더 집중
+    w_funding_extreme: float = 0.50    # 0.40 → 0.50
+    w_funding_trend: float = 0.30      # 0.25 → 0.30
+    w_volume_confirm: float = 0.15     # 0.20 → 0.15
+    w_price_momentum: float = 0.05     # 0.15 → 0.05
 class FundingRateStrategy:
     """
     펀딩비율 기반 시장 심리 전략
@@ -109,50 +108,45 @@ class FundingRateStrategy:
             return []
     
     def _calculate_funding_sentiment(self, current_rate: float, history: List[Dict[str, Any]]) -> Dict[str, float]:
-        """펀딩비율 기반 시장 심리 계산"""
+        """완화된 펀딩비율 기반 시장 심리 계산"""
         if not history:
             return {'extreme_score': 0.0, 'trend_score': 0.0, 'sentiment': 'NEUTRAL'}
         
-        # 히스토리 데이터프레임 변환
         rates = [item['rate'] for item in history]
         rates_series = pd.Series(rates)
         
-        # 이동평균 계산
+        # 이동평균 계산 (기간 단축)
         funding_ma = float(rates_series.rolling(min(len(rates), self.cfg.funding_ma_period)).mean().iloc[-1])
         
-        # 극단값 점수 (절댓값 기준)
+        # 극단값 점수 (완화된 기준)
         abs_current = abs(current_rate)
         if abs_current >= self.cfg.extreme_funding_threshold:
             extreme_score = 1.0
         elif abs_current >= self.cfg.moderate_funding_threshold:
             extreme_score = (abs_current - self.cfg.moderate_funding_threshold) / \
-                          (self.cfg.extreme_funding_threshold - self.cfg.moderate_funding_threshold)
+                        (self.cfg.extreme_funding_threshold - self.cfg.moderate_funding_threshold)
         else:
-            extreme_score = 0.0
+            # 완화: 매우 작은 값도 일부 점수 부여
+            extreme_score = abs_current / self.cfg.moderate_funding_threshold * 0.3
         
-        # 트렌드 점수 (최근 추세)
-        if len(rates) >= 3:
-            recent_rates = rates[-3:]
-            if all(r > recent_rates[0] for r in recent_rates[1:]):
-                trend_score = 0.8  # 상승 트렌드
-            elif all(r < recent_rates[0] for r in recent_rates[1:]):
-                trend_score = 0.8  # 하락 트렌드
+        # 트렌드 점수 (완화)
+        if len(rates) >= 2:  # 3 → 2로 완화
+            recent_rates = rates[-2:]
+            if recent_rates[-1] > recent_rates[0]:
+                trend_score = 0.6  # 기본 트렌드 점수
             else:
-                trend_score = 0.3  # 횡보
+                trend_score = 0.6
         else:
-            trend_score = 0.0
+            trend_score = 0.3
         
-        # 시장 심리 판단
-        if current_rate > self.cfg.moderate_funding_threshold:
-            sentiment = 'LONG_OVERHEATED'  # 롱 과열 → 숏 신호
-        elif current_rate < -self.cfg.moderate_funding_threshold:
-            sentiment = 'SHORT_OVERHEATED'  # 숏 과열 → 롱 신호
+        # 시장 심리 판단 (완화된 기준)
+        threshold = self.cfg.moderate_funding_threshold * 0.5  # 기준을 절반으로 완화
+        if current_rate > threshold:
+            sentiment = 'LONG_OVERHEATED'
+        elif current_rate < -threshold:
+            sentiment = 'SHORT_OVERHEATED' 
         else:
             sentiment = 'NEUTRAL'
-        
-        if self.cfg.debug:
-            print(f"[FUNDING_RATE] 펀딩 분석 - 현재: {current_rate:.6f}, MA: {funding_ma:.6f}, "
-                  f"극단 점수: {extreme_score:.3f}, 트렌드 점수: {trend_score:.3f}, 심리: {sentiment}")
         
         return {
             'extreme_score': extreme_score,

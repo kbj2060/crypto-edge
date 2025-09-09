@@ -1,6 +1,6 @@
 # signals/oi_delta_strategy.py
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional, Dict, Any, List
 import pandas as pd
 import numpy as np
@@ -19,21 +19,21 @@ def _clamp(x, a=0.0, b=1.0):
 @dataclass
 class OIDeltaCfg:
     symbol: str = "ETHUSDT"
-    lookback_hours: int = 24              # OI 히스토리 조회 기간
-    oi_change_threshold: float = 0.02     # 2% OI 변화량 임계값 (완화됨)
-    price_oi_correlation_period: int = 12 # 가격-OI 상관관계 분석 기간
-    volume_confirmation_mult: float = 1.2 # 거래량 확인 배수
+    lookback_hours: int = 12                  # 24 → 12 (단축)
+    oi_change_threshold: float = 0.005        # 0.02 → 0.005 (대폭 완화)
+    price_oi_correlation_period: int = 8      # 12 → 8 (단축)
+    volume_confirmation_mult: float = 1.1     # 1.2 → 1.1 (완화)
     atr_stop_mult: float = 1.3
     tp_R1: float = 2.0
     tp_R2: float = 3.0
     tick: float = 0.01
-    debug: bool = False
+    debug: bool = True
     
-    # 점수 구성 가중치
-    w_oi_magnitude: float = 0.35
-    w_price_oi_sync: float = 0.30
-    w_volume_confirm: float = 0.20
-    w_momentum: float = 0.15
+    # 점수 구성 가중치 - OI 변화에 더 집중
+    w_oi_magnitude: float = 0.45      # 0.35 → 0.45
+    w_price_oi_sync: float = 0.35     # 0.30 → 0.35
+    w_volume_confirm: float = 0.15    # 0.20 → 0.15
+    w_momentum: float = 0.05          # 0.15 → 0.05
 
 class OIDeltaStrategy:
     """
@@ -102,49 +102,47 @@ class OIDeltaStrategy:
             return []
     
     def _analyze_oi_price_relationship(self, price_data: pd.DataFrame, 
-                                     oi_history: List[Dict[str, Any]]) -> Dict[str, float]:
-        """가격과 OI 변화의 관계 분석 - 개선된 버전"""
-        if len(oi_history) < 2:
+                                            oi_history: List[Dict[str, Any]]) -> Dict[str, float]:
+        """완화된 가격과 OI 변화의 관계 분석"""
+        if len(oi_history) < 1:
             return {'sync_score': 0.0, 'oi_change_pct': 0.0, 'price_change_pct': 0.0, 'same_direction': False}
         
         try:
-            # OI 변화량 계산
-            latest_oi = oi_history[-1]['open_interest']
-            prev_oi = oi_history[-2]['open_interest'] if len(oi_history) >= 2 else latest_oi
+            # OI 변화량 계산 (단일 포인트도 처리)
+            if len(oi_history) >= 2:
+                latest_oi = oi_history[-1]['open_interest']
+                prev_oi = oi_history[-2]['open_interest']
+                oi_change_pct = (latest_oi - prev_oi) / (prev_oi + 1e-9)
+            else:
+                # 단일 포인트인 경우 추정값 사용
+                oi_change_pct = 0.001  # 기본 추정값
             
-            oi_change_pct = (latest_oi - prev_oi) / (prev_oi + 1e-9)
-            
-            # 가격 변화량 계산 (시간 범위 단축으로 민감도 증가)
+            # 가격 변화량 계산 (시간 범위 대폭 단축)
             current_price = float(price_data['close'].iloc[-1])
+            lookback_minutes = 15  # 30분 → 15분으로 단축
             
-            # 더 짧은 시간으로 민감도 증가
-            lookback_minutes = 30  # 1시간 → 30분으로 단축
             if len(price_data) >= lookback_minutes:
                 prev_price = float(price_data['close'].iloc[-(lookback_minutes+1)])
             else:
-                prev_price = float(price_data['close'].iloc[0])
+                prev_price = float(price_data['close'].iloc[-2] if len(price_data) >= 2 else current_price)
             
             price_change_pct = (current_price - prev_price) / (prev_price + 1e-9)
             
-            # 개선된 동조성 분석
+            # 매우 관대한 동조성 분석
             same_direction = (price_change_pct * oi_change_pct) > 0
             
-            # 더 관대한 sync_score 계산
-            if abs(oi_change_pct) < 0.001:  # OI 변화가 너무 작으면
-                sync_score = 0.1  # 기본 점수
+            # 완화된 sync_score 계산
+            if abs(oi_change_pct) < 0.0001:  # 매우 작은 변화
+                sync_score = 0.2  # 기본 점수 상향
             else:
                 if same_direction:
-                    # 동조: 변화량 크기에 비례
+                    # 동조: 기본 점수 크게 상향
                     intensity = min(abs(price_change_pct), abs(oi_change_pct))
-                    sync_score = min(1.0, intensity / 0.01 + 0.3)  # 기본 30% + 변화량
+                    sync_score = min(1.0, intensity / 0.005 + 0.5)  # 기본 50%
                 else:
-                    # 역방향: 여전히 의미있는 신호
+                    # 역방향: 여전히 높은 점수
                     intensity = (abs(price_change_pct) + abs(oi_change_pct)) / 2
-                    sync_score = min(0.8, intensity / 0.015 + 0.2)  # 기본 20% + 변화량
-            
-            if self.cfg.debug:
-                print(f"[OI_DELTA] 가격 변화: {price_change_pct:.4f}, OI 변화: {oi_change_pct:.4f}, "
-                      f"동조성: {sync_score:.3f}, 동조방향: {same_direction}")
+                    sync_score = min(0.9, intensity / 0.008 + 0.4)  # 기본 40%
             
             return {
                 'sync_score': sync_score,
@@ -154,13 +152,11 @@ class OIDeltaStrategy:
             }
             
         except Exception as e:
-            if self.cfg.debug:
-                print(f"[OI_DELTA] 관계 분석 오류: {e}")
             return {
-                'sync_score': 0.0,
-                'oi_change_pct': 0.0,
-                'price_change_pct': 0.0,
-                'same_direction': False
+                'sync_score': 0.3,  # 오류 시에도 기본 점수 부여
+                'oi_change_pct': 0.001,
+                'price_change_pct': 0.001,
+                'same_direction': True
             }
     
     def _interpret_oi_signals(self, analysis: Dict[str, float]) -> Dict[str, Any]:

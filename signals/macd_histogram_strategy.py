@@ -1,6 +1,5 @@
 # signals/macd_histogram_strategy.py
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional, Dict, Any
 import pandas as pd
 import numpy as np
@@ -20,21 +19,21 @@ class MACDHistogramCfg:
     fast_period: int = 12
     slow_period: int = 26
     signal_period: int = 9
-    lookback_bars: int = 100
-    min_histogram_change: float = 0.00005  # 최소 히스토그램 변화량
-    divergence_lookback: int = 20
-    momentum_threshold: float = 0.08         # 모멘텀 임계값
+    lookback_bars: int = 80                # 100 → 80 (단축)
+    min_histogram_change: float = 0.00001  # 0.00005 → 0.00001 (대폭 완화)
+    divergence_lookback: int = 15          # 20 → 15 (단축)
+    momentum_threshold: float = 0.03       # 0.08 → 0.03 (대폭 완화)
     atr_stop_mult: float = 1.2
     tp_R1: float = 2.0
     tp_R2: float = 3.0
     tick: float = 0.01
     debug: bool = True
     
-    # 점수 구성 가중치
-    w_histogram: float = 0.50    # 0.40 → 0.50
-    w_momentum: float = 0.25     # 0.30 → 0.25  
-    w_divergence: float = 0.15   # 0.20 → 0.15
-    w_volume: float = 0.10
+    # 점수 구성 가중치 - 히스토그램에 더 집중
+    w_histogram: float = 0.60     # 0.50 → 0.60
+    w_momentum: float = 0.20      # 0.25 → 0.20
+    w_divergence: float = 0.10    # 0.15 → 0.10
+    w_volume: float = 0.10        # 유지
 
 class MACDHistogramStrategy:
     """

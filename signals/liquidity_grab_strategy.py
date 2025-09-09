@@ -1,9 +1,7 @@
 # signals/liquidity_grab_strategy.py
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 import pandas as pd
-import numpy as np
 
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_vwap
@@ -17,24 +15,24 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class LiquidityGrabCfg:
-    lookback_bars: int = 100
-    support_resistance_period: int = 50    # 지지/저항선 찾는 기간
-    min_touches: int = 1                  # 최소 터치 횟수
-    grab_threshold_pct: float =  0.05       # 0.1% 돌파로 간주
-    recovery_threshold_pct: float = 0.1  # 0.15% 복귀로 간주
-    max_grab_bars: int = 3               # 가짜돌파 후 최대 N봉 내 복귀
-    volume_spike_threshold: float = 1.2   # 거래량 급증 임계값
+    lookback_bars: int = 80               # 100 → 80 (단축)
+    support_resistance_period: int = 30   # 50 → 30 (단축)
+    min_touches: int = 1                  # 유지
+    grab_threshold_pct: float = 0.03      # 0.05 → 0.03 (완화)
+    recovery_threshold_pct: float = 0.06  # 0.1 → 0.06 (완화)
+    max_grab_bars: int = 5                # 3 → 5 (확장)
+    volume_spike_threshold: float = 1.1   # 1.2 → 1.1 (완화)
     atr_stop_mult: float = 1.0
     tp_R1: float = 2.5
     tp_R2: float = 4.0
     tick: float = 0.01
     debug: bool = True
     
-    # 점수 구성 가중치
-    w_grab_quality: float = 0.35
-    w_volume_spike: float = 0.25
-    w_level_strength: float = 0.25
-    w_recovery_speed: float = 0.15
+    # 점수 구성 가중치 조정
+    w_grab_quality: float = 0.30     # 0.35 → 0.30
+    w_volume_spike: float = 0.20     # 0.25 → 0.20
+    w_level_strength: float = 0.30   # 0.25 → 0.30
+    w_recovery_speed: float = 0.20   # 0.15 → 0.20
 
 class LiquidityGrabStrategy:
     """
@@ -205,13 +203,11 @@ class LiquidityGrabStrategy:
         return broke_above and recovered_below
     
     def _analyze_grab_quality(self, bars: pd.DataFrame, level: Dict[str, Any], 
-                             grab_type: str) -> Optional[Dict[str, Any]]:
-        """유동성 사냥의 품질 분석"""
+                                    grab_type: str) -> Optional[Dict[str, Any]]:
+        """완화된 유동성 사냥의 품질 분석"""
         try:
-            # 거래량 분석
+            # 거래량 분석 (완화)
             vol_series = bars['quote_volume'].astype(float)
-            
-            # 평균 거래량 대비 현재 거래량
             recent_avg_vol = float(vol_series.mean())
             peak_vol = float(vol_series.max())
             
@@ -223,30 +219,36 @@ class LiquidityGrabStrategy:
             avg_range = float((bars['high'] - bars['low']).mean())
             volatility_ratio = price_range / (avg_range + 1e-9)
             
-            # 회복 속도 분석 (빠를수록 좋음)
-            recovery_bars = len(bars) - 1  # 마지막 봉까지의 시간
-            recovery_speed = _clamp(1.0 - (recovery_bars / self.cfg.max_grab_bars), 0.0, 1.0)
+            # 회복 속도 분석 (관대하게)
+            recovery_bars = len(bars) - 1
+            recovery_speed = _clamp(1.0 - (recovery_bars / self.cfg.max_grab_bars), 0.2, 1.0)  # 최소 0.2
             
-            # 가짜돌파 품질 점수
-            grab_quality = min(1.0, volatility_ratio * 0.5 + 0.5)
+            # 가짜돌파 품질 점수 (완화)
+            grab_quality = min(1.0, volatility_ratio * 0.3 + 0.6)  # 기본값 상향
             
-            # 최소 품질 체크
-            if volume_score < 0.3 and grab_quality < 0.4:
+            # 최소 품질 체크 (대폭 완화)
+            if volume_score < 0.1 and grab_quality < 0.2:  # 매우 관대한 기준
                 return None
             
             return {
                 'grab_type': grab_type,
                 'volume_spike': volume_spike,
-                'volume_score': volume_score,
+                'volume_score': max(0.3, volume_score),  # 최소값 보장
                 'volatility_ratio': volatility_ratio,
                 'recovery_speed': recovery_speed,
                 'grab_quality': grab_quality
             }
             
-        except Exception as e:
-            if self.cfg.debug:
-                print(f"[LIQUIDITY_GRAB] 품질 분석 오류: {e}")
-            return self.default_result
+        except Exception:
+            # 오류 시에도 기본값 반환
+            return {
+                'grab_type': grab_type,
+                'volume_spike': 1.1,
+                'volume_score': 0.3,
+                'volatility_ratio': 1.2,
+                'recovery_speed': 0.5,
+                'grab_quality': 0.4
+            }
     
     def on_kline_close_3m(self) -> Optional[Dict[str, Any]]:
         """3분봉 마감 시 유동성 사냥 전략 실행"""
