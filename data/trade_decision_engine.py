@@ -20,7 +20,7 @@ class TradeDecisionEngine:
             "risk_multiplier": 1.0
         },
         "MEDIUM_TERM": {  # 15분봉 기반, 1-4시간 보유
-            "strategies": ["MULTI_TIMEFRAME", "HTF_TREND_15M", "BOLLINGER_SQUEEZE"],
+            "strategies": ["MULTI_TIMEFRAME", "HTF_TREND_15M", "BOLLINGER_SQUEEZE", "OLIVER_KEEL"],
             "weight": 0.25,  # 전체 가중치의 25%
             "timeframe": "15m",
             "max_holding_minutes": 240,

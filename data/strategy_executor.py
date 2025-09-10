@@ -5,6 +5,7 @@ from signals.multitimeframe_strategy import MultiTimeframeStrategy
 from signals.oi_delta_strategy import OIDeltaStrategy
 from signals.liquidity_grab_strategy import LiquidityGrabStrategy
 from signals.macd_histogram_strategy import MACDHistogramStrategy
+from signals.oliverkeel import OliverKeelStrategy
 from signals.vpvr_micro import VPVRConfig
 from signals.vwap_pinball_strategy import VWAPPinballCfg
 from utils.time_manager import get_time_manager
@@ -75,6 +76,7 @@ class StrategyExecutor:
 
         self.multitimeframe_strategy = MultiTimeframeStrategy()
 
+        self.oliverkeel_strategy = OliverKeelStrategy()
         print("🎯 모든 전략 초기화 완료")
 
 
@@ -123,6 +125,19 @@ class StrategyExecutor:
         self._execute_oiDelta_strategy()
         self._execute_funding_rate_strategy()
         self._execute_multitimeframe_strategy()
+        self._execute_oliverkeel_strategy()
+
+    def _execute_oliverkeel_strategy(self):
+        """Oliver Keel 전략 실행"""
+        if not self.oliverkeel_strategy:
+            return
+        result = self.oliverkeel_strategy.on_kline_close_15m()
+        if result:
+            self.signals['OLIVER_KEEL'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
     def _execute_multitimeframe_strategy(self):
         """Multi-Timeframe 전략 실행"""
