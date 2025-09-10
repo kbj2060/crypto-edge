@@ -20,6 +20,7 @@ from indicators.global_indicators import get_global_indicator_manager
 from utils.display_utils import print_decision_interpretation, print_llm_judgment
 from utils.telegram import send_telegram_message
 from utils.time_manager import get_time_manager
+from utils.decision_logger import get_decision_logger
 from data.binance_dataloader import BinanceDataLoader
 
 class BinanceWebSocket:
@@ -49,6 +50,7 @@ class BinanceWebSocket:
         self.data_manager = get_data_manager()
         self.data_loader = BinanceDataLoader()
         self.llm_decider = LLMDecider()
+        self.decision_logger = get_decision_logger(symbol)
 
         # 데이터 저장소
         self.liquidation_bucket = []
@@ -182,6 +184,10 @@ class BinanceWebSocket:
                 
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals)
+        
+        # Decision 로그에 저장
+        self.decision_logger.log_decision(decision)
+        
         print_decision_interpretation(decision)
 
         if decision.get("action") != "HOLD":
