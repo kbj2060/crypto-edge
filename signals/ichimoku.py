@@ -23,6 +23,7 @@ import numpy as np
 
 # 프로젝트 내 기존 유틸 사용 (당신의 다른 전략 파일들과 동일한 방식)
 from data.binance_dataloader import BinanceDataLoader
+from data.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 
@@ -131,24 +132,51 @@ class Ichimoku:
         self.cfg = cfg
         self.loader = BinanceDataLoader()
         self.tm = get_time_manager()
+        self.dataloader = BinanceDataLoader()
 
     def _load_ohlcv(self, interval: str, days: int) -> Optional[pd.DataFrame]:
-        end_time = self.tm.get_current_time()
-        start_time = end_time - timedelta(days=days)
-        df = self.loader.fetch_data(
+        """
+        data_manager를 사용하여 데이터를 가져옵니다.
+        days를 봉 개수로 변환하여 필요한 만큼의 데이터를 가져옵니다.
+        """
+        # days를 봉 개수로 변환 (안전 마진 포함)
+        required_candles = max(self.cfg.kijun, self.cfg.senkou_b) + self.cfg.shift + 10
+        
+        # interval에 따른 봉 개수 계산
+        if interval == "4h":
+            # 4시간봉: 1일 = 6개 봉
+            candles_per_day = 6
+        elif interval == "1d":
+            # 1일봉: 1일 = 1개 봉
+            candles_per_day = 1
+        else:
+            # 기본값으로 4시간봉 기준
+            candles_per_day = 480
+        
+        # 필요한 봉 개수 계산 (days * 하루 봉 개수 + 안전 마진)
+        needed_candles = days * candles_per_day + required_candles
+        
+        # dataloader에서 데이터 가져오기
+        df = self.dataloader.fetch_data(
             interval=interval,
             symbol=self.cfg.symbol,
-            start_time=start_time,
-            end_time=end_time
+            limit=needed_candles
         )
-        if df is None or len(df) < max(self.cfg.kijun, self.cfg.senkou_b) + self.cfg.shift + 10:
+        
+        if df is None or df.empty or len(df) < required_candles:
             return None
+        
+        # 필요한 만큼의 최신 데이터만 가져오기
+        if len(df) > needed_candles:
+            df = df.tail(needed_candles)
+        
         # 보정: 인덱스 정리
         df = df.copy()
         df["open"] = pd.to_numeric(df["open"].astype(float))
         df["high"] = pd.to_numeric(df["high"].astype(float))
         df["low"] = pd.to_numeric(df["low"].astype(float))
         df["close"] = pd.to_numeric(df["close"].astype(float))
+
         return df
 
     def _score_direction(self, price: float, ichi: Dict[str, pd.Series]) -> Dict[str, Any]:
@@ -258,6 +286,7 @@ class Ichimoku:
         
         # 1) 메인 TF(4h) 로드 및 일목 계산 (완성된 봉만 사용)
         df_main = self._load_ohlcv(self.cfg.main_interval, self.cfg.main_lookback_days)
+
         if df_main is None:
             if self.cfg.debug:
                 print(f"[ICHIMOKU] 4시간봉 데이터 로드 실패")
@@ -303,6 +332,7 @@ class Ichimoku:
         if self.cfg.confirm_interval:
             is_confirm_close = self._is_hour_candle_close(hours=self.cfg.confirm_interval)
             df_c = self._load_ohlcv(self.cfg.confirm_interval, self.cfg.confirm_lookback_days)
+
             if df_c is not None:
                 # 현재 마감 시간이 아니면 마지막 데이터 제거 (진행 중인 봉 제거)
                 if not is_confirm_close:

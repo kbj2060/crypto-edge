@@ -68,7 +68,6 @@ class DataManager:
                 limit=300
             )
             
-            
             if df_3m is not None and not df_3m.empty:
                 self.data = df_3m.copy()
                 self.data_15m = df_15m.copy()
