@@ -1,6 +1,7 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import math
+from signals.short_term_synergy import ShortTermSynergyEngine, integrate_with_existing_system
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_atr
 
@@ -11,8 +12,8 @@ class TradeDecisionEngine:
     # 전략 카테고리 정의
     STRATEGY_CATEGORIES = {
         "SHORT_TERM": {  # 3분봉 기반, 5-30분 보유
-            "strategies": ["MACD_HISTOGRAM", "RSI_DIV", "VOL_SPIKE", "ORDERFLOW_CVD", 
-                            "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "VPVR_MICRO", "ZSCORE_MEAN_REVERSION"],
+            "strategies": [ "VOL_SPIKE", "ORDERFLOW_CVD", "VPVR_MICRO"
+                            "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "ZSCORE_MEAN_REVERSION"],
             "weight": 0.60,  # 전체 가중치의 60%
             "timeframe": "3m",
             "max_holding_minutes": 30,
@@ -20,7 +21,7 @@ class TradeDecisionEngine:
             "risk_multiplier": 1.0
         },
         "MEDIUM_TERM": {  # 15분봉 기반, 1-4시간 보유
-            "strategies": ["MULTI_TIMEFRAME", "HTF_TREND_15M", "BOLLINGER_SQUEEZE", "OLIVER_KEEL"],
+            "strategies": ["MULTI_TIMEFRAME", "HTF_TREND", "BOLLINGER_SQUEEZE", "SUPPORT_RESISTANCE", "EMA_CONFLUENCE"],
             "weight": 0.25,  # 전체 가중치의 25%
             "timeframe": "15m",
             "max_holding_minutes": 240,
@@ -28,7 +29,7 @@ class TradeDecisionEngine:
             "risk_multiplier": 0.7
         },
         "LONG_TERM": {  # 1시간봉+ 기반, 4-24시간 보유
-            "strategies": ["OI_DELTA", "FUNDING_RATE", "VPVR", "ICHIMOKU"],
+            "strategies": ["OI_DELTA", "VPVR", "ICHIMOKU", "FUNDING_RATE"],
             "weight": 0.15,  # 전체 가중치의 15%
             "timeframe": "1h+",
             "max_holding_minutes": 1440,

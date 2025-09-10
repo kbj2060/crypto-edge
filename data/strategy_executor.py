@@ -1,11 +1,13 @@
 from typing import Dict, Any
 from data.data_manager import get_data_manager
+from signals.ema_confluence_15m import EMAConfluence
 from signals.funding_rate_strategy import FundingRateStrategy
 from signals.multitimeframe_strategy import MultiTimeframeStrategy
 from signals.oi_delta_strategy import OIDeltaStrategy
 from signals.liquidity_grab_strategy import LiquidityGrabStrategy
 from signals.macd_histogram_strategy import MACDHistogramStrategy
 from signals.oliverkeel import OliverKeelStrategy
+from signals.support_resistance_15m import SupportResistance
 from signals.vpvr_micro import VPVRConfig
 from signals.vwap_pinball_strategy import VWAPPinballCfg
 from utils.time_manager import get_time_manager
@@ -52,7 +54,7 @@ class StrategyExecutor:
         self.ichimoku_strategy = Ichimoku()
         
         # HTF 트렌드 전략
-        self.htf_trend_15m_strategy = HTFTrend()
+        self.htf_trend_strategy = HTFTrend()
         
         # 오더플로우 CVD 전략
         self.orderflow_cvd_strategy = OrderflowCVD()
@@ -76,7 +78,8 @@ class StrategyExecutor:
 
         self.multitimeframe_strategy = MultiTimeframeStrategy()
 
-        self.oliverkeel_strategy = OliverKeelStrategy()
+        self.support_resistance_strategy = SupportResistance()
+        self.ema_confluence_strategy = EMAConfluence()
         print("🎯 모든 전략 초기화 완료")
 
 
@@ -95,7 +98,7 @@ class StrategyExecutor:
     #         'vol_spike_strategy': 'Vol Spike 전략',
     #         'vpvr_micro_strategy': 'VPVR Micro 전략',
     #         'zscore_mean_reversion_strategy': 'ZScore Mean Reversion 전략',
-    #         'htf_trend_15m_strategy': 'HTF Trend 15m 전략',
+    #         'htf_trend_strategy': 'HTF Trend 15m 전략',
     #     }
         
     #     # 전략 설정
@@ -112,20 +115,43 @@ class StrategyExecutor:
         self._execute_vpvr_golden_strategy()
         self._execute_bollinger_squeeze_strategy()
         self._execute_orderflow_cvd_strategy()
-        self._execute_rsi_divergence_strategy()
         self._execute_ichimoku_strategy()
         self._execute_vwap_pinball_strategy()
         self._execute_vol_spike_strategy()
-        self._execute_macd_histogram_strategy()
         self._execute_liquidity_grab_strategy()
         self._execute_vpvr_micro_strategy()
         self._execute_zscore_mean_reversion_strategy()
         # 15분봉 전략
-        self._execute_htf_trend_15m_strategy()
+        self._execute_htf_trend_strategy()
         self._execute_oiDelta_strategy()
         self._execute_funding_rate_strategy()
         self._execute_multitimeframe_strategy()
-        self._execute_oliverkeel_strategy()
+        self._execute_support_resistance_strategy()
+        self._execute_ema_confluence_strategy()
+
+    def _execute_support_resistance_strategy(self):
+        """Support Resistance 전략 실행"""
+        if not self.support_resistance_strategy:
+            return
+        result = self.support_resistance_strategy.on_kline_close_15m()
+        if result:
+            self.signals['SUPPORT_RESISTANCE'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
+
+    def _execute_ema_confluence_strategy(self):
+        """EMA Confluence 전략 실행"""
+        if not self.ema_confluence_strategy:
+            return
+        result = self.ema_confluence_strategy.on_kline_close_15m()
+        if result:
+            self.signals['EMA_CONFLUENCE'] = {
+                'action': result.get('action', 'UNKNOWN'),
+                'score': result.get('score', 0),
+                'timestamp': self.time_manager.get_current_time()
+            }
 
     def _execute_oliverkeel_strategy(self):
         """Oliver Keel 전략 실행"""
@@ -199,16 +225,16 @@ class StrategyExecutor:
                 'timestamp': self.time_manager.get_current_time()
             }
 
-    def _execute_htf_trend_15m_strategy(self):
+    def _execute_htf_trend_strategy(self):
         """HTF Trend 15m 전략 실행"""
-        if not self.htf_trend_15m_strategy:
+        if not self.htf_trend_strategy:
             return
         df_15m = self.data_manager.get_latest_data_15m(count=300)
         df_1h = self.data_manager.get_latest_data_1h(count=300)
-        result = self.htf_trend_15m_strategy.on_kline_close_15m(df_15m=df_15m, df_1h=df_1h)
+        result = self.htf_trend_strategy.on_kline_close_15m(df_15m=df_15m, df_1h=df_1h)
         
         if result:
-            self.signals['HTF_TREND_15M'] = {
+            self.signals['HTF_TREND'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
                 'timestamp': self.time_manager.get_current_time()
