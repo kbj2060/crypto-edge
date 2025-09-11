@@ -136,7 +136,7 @@ def print_decision_interpretation(decision: dict) -> None:
             for (name, contrib, act, score, weight) in contributions:
                 sign_sym = "+" if contrib > 0 else ("-" if contrib < 0 else " ")
                 act_emoji = {"BUY": "🟢", "SELL": "🔴", "HOLD": "🟡"}.get(act, "⚪")
-                print(f"   {act_emoji} {name:15s} | score={score:.3f} weight={weight:.3f} | contrib={sign_sym}{abs(contrib):.4f}")
+                print(f"  {act_emoji} {name:15s}  | score={score:.3f} weight={weight:.3f} | contrib={sign_sym}{abs(contrib):.4f}")
 
     # 충돌 정보 출력
     if conflicts.get("has_conflicts", False):
@@ -150,6 +150,29 @@ def print_decision_interpretation(decision: dict) -> None:
         print("💡 권고: 반대 방향 포지션은 리스크 관리에 주의하세요.")
     else:
         print(f"\n✅ 포지션 충돌 없음")
+
+    # 카테고리별 신호 요약 (한 줄로)
+    print("\n📊 신호 요약:")
+    signal_summary = []
+    
+    for category_name, category_decision in decisions.items():
+        action = category_decision.get("action", "HOLD")
+        net_score = category_decision.get("net_score", 0.0)
+        
+        # 액션에 따른 이모지
+        action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
+        
+        # 카테고리별 약어
+        category_short = {
+            "SHORT_TERM": "단기",
+            "MEDIUM_TERM": "중기", 
+            "LONG_TERM": "장기",
+            "SCALPING": "스캔핑"
+        }.get(category_name, category_name)
+        
+        signal_summary.append(f"{category_short}  {action_emoji} ({net_score:.2f})")
+    
+    print("   " + " | ".join(signal_summary))
 
     print("=" * 80)
     print("")  # blank line for spacing

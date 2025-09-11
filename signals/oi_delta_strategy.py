@@ -349,7 +349,6 @@ class OIDeltaStrategy:
                     'name': 'OI_DELTA',
                     'action': action,
                     'score': 0.35,  # 0.25 -> 0.35 (증가)
-                    'confidence': 'MEDIUM',  # LOW -> MEDIUM
                     'timestamp': self.time_manager.get_current_time(),
                     'context': {
                         'mode': 'OI_DELTA_SINGLE_POINT',
@@ -412,14 +411,6 @@ class OIDeltaStrategy:
                 print(f"[OI_DELTA] 점수 부족: {total_score:.3f} < 0.15")
             return self._no_signal_result()
         
-        # 신뢰도 설정
-        if total_score >= 0.7:
-            confidence = 'HIGH'
-        elif total_score >= 0.4:
-            confidence = 'MEDIUM'
-        else:
-            confidence = 'LOW'
-        
         # 진입/손절/목표가 계산
         current_price = float(df['close'].iloc[-1])
         atr = get_atr()
@@ -447,7 +438,6 @@ class OIDeltaStrategy:
             'name': 'OI_DELTA',
             'action': action,
             'score': float(total_score),
-            'confidence': confidence,
             'entry': float(entry),
             'stop': float(stop),
             'targets': [float(tp1), float(tp2)],

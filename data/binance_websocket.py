@@ -184,8 +184,6 @@ class BinanceWebSocket:
                 
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals)
-
-        # print(decision)
         
         # Decision 로그에 저장
         self.decision_logger.log_decision(decision)

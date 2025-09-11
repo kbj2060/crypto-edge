@@ -41,47 +41,48 @@ class DataManager:
         self._initialized = True
 
     
-    def load_initial_data(self, symbol: str = 'ETHUSDC') -> bool:
+    def load_initial_data(self, symbol: str = 'ETHUSDC', df_3m: Optional[pd.DataFrame] = None, df_15m: Optional[pd.DataFrame] = None, df_1h: Optional[pd.DataFrame] = None) -> bool:
         """초기 데이터 로딩 (전날 00시부터 현재까지)"""
         try:
             # 전날 00시부터 현재까지 데이터 가져오기
             current_time = self.time_manager.get_current_time()
             yesterday_start = current_time.replace(hour=0, minute=0, second=0, microsecond=0) - timedelta(days=1)
 
-            # 3분봉 데이터 직접 가져오기 (긴 기간은 자동으로 여러 번에 나누어 요청)
-            df_3m = self.dataloader.fetch_data(
-                interval="3m",
-                symbol=symbol,
-                start_time=yesterday_start,
-                end_time=current_time
-            )
-            
-            df_15m = self.dataloader.fetch_data(
-                interval="15m",
-                symbol=symbol,
-                limit=400
-            )
-            
-            df_1h = self.dataloader.fetch_data(
-                interval="1h",
-                symbol=symbol,
-                limit=300
-            )
-            
-            if df_3m is not None and not df_3m.empty:
+            if df_3m is None:
+                # 3분봉 데이터 직접 가져오기 (긴 기간은 자동으로 여러 번에 나누어 요청)
+                df_3m = self.dataloader.fetch_data(
+                    interval="3m",
+                    symbol=symbol,
+                    start_time=yesterday_start,
+                    end_time=current_time
+                )
+                
+                df_15m = self.dataloader.fetch_data(
+                    interval="15m",
+                    symbol=symbol,
+                    limit=400
+                )
+                
+                df_1h = self.dataloader.fetch_data(
+                    interval="1h",
+                    symbol=symbol,
+                    limit=300
+                )
+                
+                if df_3m is not None and not df_3m.empty:
+                    self.data = df_3m.copy()
+                    self.data_15m = df_15m.copy()
+                    self.data_1h = df_1h.copy()
+                
+                self._data_loaded = True
+                return True
+            else:   
                 self.data = df_3m.copy()
                 self.data_15m = df_15m.copy()
                 self.data_1h = df_1h.copy()
                 
-                # 마지막 3분봉 타임스탬프 설정
-                if not self.data.empty:
-                    pass
-                
                 self._data_loaded = True
                 return True
-            else:
-                return False
-        
         except Exception as e:
             return False
     

@@ -8,7 +8,7 @@ ATR (Average True Range) 지표
 - 세션과 관계없이 연속 롤링 계산
 """
 
-from typing import Dict
+from typing import Dict, Optional
 import datetime as dt
 from collections import deque
 
@@ -20,7 +20,7 @@ from utils.time_manager import get_time_manager
 class ATR3M:
     """3분봉 실시간 ATR 관리 클래스 - 연속 롤링 방식"""
     
-    def __init__(self, length: int = 14, max_candles: int = 100):
+    def __init__(self, length: int = 14, max_candles: int = 100, init_data: Optional[pd.DataFrame] = None):
         self.length = length
         self.max_candles = max_candles
         
@@ -34,11 +34,15 @@ class ATR3M:
 
         self.time_manager = get_time_manager()
 
-        self._initialize_atr()
+        self._initialize_atr(init_data)
 
     
-    def _initialize_atr(self):
-        df = self.get_data()
+    def _initialize_atr(self, init_data: Optional[pd.DataFrame] = None):
+        if init_data is not None:
+            df = init_data[-self.length:]
+        else:
+            df = self.get_data()
+
         self.current_atr = self.calculate_atr_from_dataframe(df)
 
     def get_data(self) -> pd.DataFrame:

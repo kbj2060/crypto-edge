@@ -122,20 +122,6 @@ class VolSpike:
         raw_score = score_vol * 0.5 + score_z * 0.25 + score_legacy * 0.15 + score_price * 0.10
         score = _clamp(raw_score, 0.0, 1.0)
 
-        # Confidence: boost when multiple criteria align
-        conf = 0.0
-        cnt = 0
-        if is_spike_dynamic:
-            conf += 0.5; cnt += 1
-        if is_spike_legacy:
-            conf += 0.3; cnt += 1
-        if price_break_up or price_break_down:
-            conf += 0.25; cnt += 1
-        if cnt > 0:
-            conf = _clamp(conf / (1.0 + 0.2 * (cnt - 1)))
-        else:
-            conf = 0.0
-
         # Decide action
         action = "HOLD"
         if is_spike:

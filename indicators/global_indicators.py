@@ -155,6 +155,7 @@ class GlobalIndicatorManager:
             
         print(f"✅ 전체 지표 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
         print(f"")
+        
     def get_indicator(self, name: str):
         """특정 지표 반환"""
         if not self._initialized:
