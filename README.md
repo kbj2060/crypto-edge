@@ -11,7 +11,7 @@
 - **시간대별 청산 패턴** 분석
 
 ### 📊 **하이브리드 전략**
-- **5분봉 + 15분봉** 기술적 분석
+- **3분봉 + 15분봉 + 1시간봉** 기술적 분석
 - **VPVR (Volume Profile Visible Range)** 레벨 활용
 - **EMA, RSI, 볼린저 밴드** 등 다중 지표 통합
 - **스캘핑 최적화** (0.1% 가격 변동 감지)
@@ -22,11 +22,17 @@
 - **리스크-리워드 비율** 자동 계산
 - **포지션 관리** 자동화
 
+### 🔮 **미래 예측 시각화**
+- **3분봉 데이터**와 **단기/중기/장기 전략** 예측 통합
+- **실시간 미래 가격 움직임** 시각화
+- **전략별 신뢰도** 히트맵 표시
+- **시장 상황별** 예측 정확도 분석
+
 ### ⚡ **실시간 성능**
 - **WebSocket 기반** 실시간 데이터 처리
 - **API 제한 보호** (분당 1200회 제한)
-- **10초마다** 기술적 분석
-- **30초마다** 거래량 급증 요약
+- **3분마다** 기술적 분석 및 예측 업데이트
+- **실시간 대시보드** 웹 인터페이스
 
 ## 🏗️ **프로젝트 구조**
 
@@ -37,7 +43,13 @@ crypto-edge/
 ├── 📁 data/
 │   ├── binance_client.py             # 바이낸스 API 클라이언트
 │   ├── binance_websocket.py          # 실시간 웹소켓 연결
+│   ├── binance_dataloader.py         # 3분봉 데이터 로더
 │   └── loader.py                     # 데이터 로딩 유틸리티
+├── 📁 engines/
+│   ├── short_term_synergy_engine.py  # 단기 전략 시너지 엔진
+│   ├── medium_term_synergy_engine.py # 중기 전략 시너지 엔진
+│   ├── long_term_synergy_engine.py   # 장기 전략 시너지 엔진
+│   └── trade_decision_engine.py      # 거래 의사결정 엔진
 ├── 📁 indicators/
 │   ├── atr.py                        # ATR (Average True Range)
 │   ├── bollinger.py                  # 볼린저 밴드
@@ -46,12 +58,20 @@ crypto-edge/
 │   ├── stoch_rsi.py                  # Stochastic RSI
 │   └── vpvr.py                       # VPVR (Volume Profile)
 ├── 📁 signals/
-│   ├── hybrid_strategy.py            # 하이브리드 전략 (5분봉 기반)
+│   ├── hybrid_strategy.py            # 하이브리드 전략 (3분봉 기반)
 │   ├── integrated_strategy.py        # 통합 전략 관리
 │   ├── liquidation_prediction.py     # 청산 예측 전략
 │   ├── liquidation_strategy.py       # 청산 기반 신호 전략
 │   └── timing_strategy.py            # 포지션 타이밍 전략
-├── integrated_smart_trader.py        # 🎯 메인 트레이더 (리팩토링 완료)
+├── 📁 utils/
+│   ├── future_predictor.py           # 미래 예측 시각화 도구
+│   ├── integrated_predictor.py       # 통합 예측 시스템
+│   ├── realtime_dashboard.py         # 실시간 웹 대시보드
+│   └── display_utils.py              # 표시 유틸리티
+├── integrated_smart_trader.py        # 🎯 메인 트레이더
+├── run_future_prediction.py          # 미래 예측 실행 스크립트
+├── simple_future_demo.py             # 간단한 예측 데모
+├── advanced_future_demo.py           # 고급 예측 데모
 ├── requirements.txt                   # Python 의존성
 └── README.md                         # 프로젝트 문서
 ```
@@ -62,6 +82,9 @@ crypto-edge/
 ```bash
 # Python 3.8+ 설치 필요
 pip install -r requirements.txt
+
+# 미래 예측을 위한 추가 패키지
+pip install matplotlib seaborn plotly flask flask-socketio
 ```
 
 ### **2. 설정 파일 수정**
@@ -75,9 +98,31 @@ class IntegratedConfig:
     liquidation_min_confidence: float = 0.6    # 청산 신호 최소 신뢰도
 ```
 
-### **3. 실행**
+### **3. 실행 옵션**
+
+#### **기본 트레이더 실행**
 ```bash
 python integrated_smart_trader.py
+```
+
+#### **미래 예측 데모 실행**
+```bash
+# 간단한 데모
+python simple_future_demo.py
+
+# 고급 데모 (실제 바이낸스 데이터 사용)
+python advanced_future_demo.py
+
+# 통합 예측 시스템
+python run_future_prediction.py demo
+python run_future_prediction.py predictor
+python run_future_prediction.py dashboard
+```
+
+#### **웹 대시보드 실행**
+```bash
+python run_future_prediction.py dashboard
+# 브라우저에서 http://localhost:5000 접속
 ```
 
 ## 🔧 **설정 옵션**
@@ -109,7 +154,7 @@ python integrated_smart_trader.py
 ## 📈 **신호 유형**
 
 ### **🎯 HYBRID 신호**
-- **5분봉 + 15분봉** 기술적 분석 기반
+- **3분봉 + 15분봉 + 1시간봉** 기술적 분석 기반
 - **VPVR 레벨** 근처에서의 진입점
 - **EMA, RSI, 볼린저 밴드** 통합 분석
 
@@ -127,6 +172,31 @@ python integrated_smart_trader.py
 - **여러 전략의 신호가 일치**할 때
 - **높은 신뢰도**와 **좋은 리스크-리워드**
 - **우선순위가 높은** 신호
+
+## 🔮 **미래 예측 기능**
+
+### **📊 예측 시스템 구성**
+- **단기 전략** (1시간 예측): VWAP, 유동성 그랩, Z-Score 평균회귀
+- **중기 전략** (4시간 예측): HTF 트렌드, 다중 시간대, 지지/저항
+- **장기 전략** (24시간 예측): OI 델타, VPVR, 이치모쿠, 펀딩비
+
+### **🎯 예측 시각화**
+- **실시간 가격 차트** + **미래 예측 포인트**
+- **전략별 신뢰도** 히트맵
+- **시장 상황별** 분석 차트
+- **예측 정확도** 통계
+
+### **⚡ 실시간 업데이트**
+- **3분마다** 자동 예측 업데이트
+- **웹 대시보드** 실시간 모니터링
+- **WebSocket** 기반 실시간 데이터 수신
+- **자동 차트 생성** 및 저장
+
+### **📈 예측 정확도 향상**
+- **시너지 엔진** 기반 신호 통합
+- **시장 상황별** 가중치 조정
+- **충돌 감지** 및 페널티 적용
+- **시간에 따른** 신뢰도 감소 모델링
 
 ## 🛡️ **리스크 관리**
 

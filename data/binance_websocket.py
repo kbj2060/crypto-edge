@@ -9,8 +9,8 @@ import pandas as pd
 # 리팩토링된 컴포넌트들
 from data.strategy_executor import StrategyExecutor
 from data.candle_creator import CandleCreator
-from data.trade_decision_engine import TradeDecisionEngine
 from data.event_manager import EventManager
+from engines.trade_decision_engine import TradeDecisionEngine
 
 # 기존 imports
 from llm.LLM_decider import LLMDecider

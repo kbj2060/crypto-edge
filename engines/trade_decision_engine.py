@@ -1,9 +1,11 @@
 from typing import Dict, Any, Optional, List
 from datetime import datetime
 import math
-from signals.short_term_synergy import ShortTermSynergyEngine, integrate_with_existing_system
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_atr
+from engines.short_term_synergy_engine import ShortTermSynergyEngine, SynergyConfig
+from engines.medium_term_synergy_engine import MediumTermSynergyEngine, MediumTermConfig
+from engines.long_term_synergy_engine import LongTermSynergyEngine, LongTermConfig
 
 
 class TradeDecisionEngine:
@@ -12,7 +14,7 @@ class TradeDecisionEngine:
     # 전략 카테고리 정의
     STRATEGY_CATEGORIES = {
         "SHORT_TERM": {  # 3분봉 기반, 5-30분 보유
-            "strategies": [ "VOL_SPIKE", "ORDERFLOW_CVD", "VPVR_MICRO"
+            "strategies": [ "VOL_SPIKE", "ORDERFLOW_CVD", "VPVR_MICRO",
                             "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "ZSCORE_MEAN_REVERSION"],
             "weight": 0.60,  # 전체 가중치의 60%
             "timeframe": "3m",
@@ -40,6 +42,10 @@ class TradeDecisionEngine:
     
     def __init__(self):
         self.time_manager = get_time_manager()
+        # 각 카테고리별 시너지 엔진 초기화
+        self.short_term_engine = ShortTermSynergyEngine(SynergyConfig())
+        self.medium_term_engine = MediumTermSynergyEngine(MediumTermConfig())
+        self.long_term_engine = LongTermSynergyEngine(LongTermConfig())
 
     def decide_trade_realtime(
         self,
@@ -103,6 +109,27 @@ class TradeDecisionEngine:
         if not category_signals:
             return self._create_category_hold_decision(category_name, category_config)
         
+        # 각 카테고리별 시너지 엔진 사용
+        if category_name == "SHORT_TERM":
+            return self._decide_short_term_with_synergy(
+                category_signals, category_config, account_balance, base_risk_pct,
+                open_threshold, immediate_threshold, confirm_threshold, confirm_window_sec,
+                session_priority, news_event
+            )
+        elif category_name == "MEDIUM_TERM":
+            return self._decide_medium_term_with_synergy(
+                category_signals, category_config, account_balance, base_risk_pct,
+                open_threshold, immediate_threshold, confirm_threshold, confirm_window_sec,
+                session_priority, news_event
+            )
+        elif category_name == "LONG_TERM":
+            return self._decide_long_term_with_synergy(
+                category_signals, category_config, account_balance, base_risk_pct,
+                open_threshold, immediate_threshold, confirm_threshold, confirm_window_sec,
+                session_priority, news_event
+            )
+        
+        # 다른 카테고리는 기존 로직 사용
         # 카테고리 내 가중치 계산
         category_weights = self._calculate_category_weights(category_signals, category_config)
         
@@ -148,6 +175,259 @@ class TradeDecisionEngine:
                 "timestamp_utc": now.isoformat(),
                 "used_weight_sum": used_weight_sum,
                 "timeframe": category_config["timeframe"]
+            }
+        }
+    
+    def _decide_short_term_with_synergy(
+        self,
+        category_signals: Dict[str, Dict[str, Any]],
+        category_config: Dict[str, Any],
+        account_balance: float,
+        base_risk_pct: float,
+        open_threshold: float,
+        immediate_threshold: float,
+        confirm_threshold: float,
+        confirm_window_sec: int,
+        session_priority: bool,
+        news_event: bool
+    ) -> Dict[str, Any]:
+        """ShortTermSynergyEngine을 사용한 단기 전략 결정"""
+        
+        # ShortTermSynergyEngine에 신호 전달
+        synergy_result = self.short_term_engine.calculate_synergy_score(category_signals)
+        
+        # 결과 변환
+        action = synergy_result['action']
+        net_score = synergy_result['net_score']
+        confidence = synergy_result['confidence']
+        market_context = synergy_result['market_context']
+        conflicts_detected = synergy_result['conflicts_detected']
+        
+        # 세션 오버라이드 체크 (기존 로직 유지)
+        session_override = False
+        session_action = None
+        if session_priority:
+            # synergy_result에서 raw 신호 재구성
+            raw_signals = {}
+            for name, signal_data in category_signals.items():
+                raw_signals[name] = {
+                    "action": signal_data.get("action"),
+                    "score": signal_data.get("score"),
+                    "weight": 1.0,  # 시너지 엔진에서 이미 가중치 적용됨
+                    "entry": signal_data.get("entry"),
+                    "stop": signal_data.get("stop"),
+                    "timestamp": self.time_manager.get_current_time()
+                }
+            
+            session_override, session_action = self._check_session_override(
+                raw_signals, session_priority, immediate_threshold
+            )
+        
+        # 최종 액션 결정
+        if session_override and session_action is not None:
+            final_action = "LONG" if session_action == "BUY" else "SHORT"
+            reason = [f"SESSION strong override (score={raw_signals.get('SESSION', {}).get('score', 'N/A')})"]
+        else:
+            # 시너지 엔진 결과 사용
+            if action == 'BUY':
+                final_action = 'LONG'
+                reason = [f"synergy BUY: net_score={net_score:.3f}, confidence={confidence}"]
+            elif action == 'SELL':
+                final_action = 'SHORT'
+                reason = [f"synergy SELL: net_score={net_score:.3f}, confidence={confidence}"]
+            else:
+                final_action = 'HOLD'
+                reason = [f"synergy HOLD: net_score={net_score:.3f}, confidence={confidence}"]
+        
+        # 포지션 크기 계산 (기존 로직 사용)
+        raw_signals = {}
+        for name, signal_data in category_signals.items():
+            raw_signals[name] = {
+                "action": signal_data.get("action"),
+                "score": signal_data.get("score"),
+                "entry": signal_data.get("entry"),
+                "stop": signal_data.get("stop")
+            }
+        
+        sizing = self._calculate_category_sizing(
+            final_action, raw_signals, category_config, account_balance, base_risk_pct
+        )
+        
+        return {
+            "action": final_action,
+            "category": "SHORT_TERM",
+            "net_score": round(net_score, 4),
+            "raw": raw_signals,
+            "reason": "; ".join(reason),
+            "sizing": sizing,
+            "max_holding_minutes": category_config["max_holding_minutes"],
+            "leverage": category_config["leverage"],
+            "strategies_used": list(category_signals.keys()),
+            "meta": {
+                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
+                "timeframe": category_config["timeframe"],
+                "synergy_meta": {
+                    "confidence": confidence,
+                    "market_context": market_context,
+                    "conflicts_detected": conflicts_detected,
+                    "buy_score": synergy_result.get('buy_score', 0),
+                    "sell_score": synergy_result.get('sell_score', 0),
+                    "signals_used": synergy_result.get('signals_used', 0)
+                }
+            }
+        }
+    
+    def _decide_medium_term_with_synergy(
+        self,
+        category_signals: Dict[str, Dict[str, Any]],
+        category_config: Dict[str, Any],
+        account_balance: float,
+        base_risk_pct: float,
+        open_threshold: float,
+        immediate_threshold: float,
+        confirm_threshold: float,
+        confirm_window_sec: int,
+        session_priority: bool,
+        news_event: bool
+    ) -> Dict[str, Any]:
+        """MediumTermSynergyEngine을 사용한 중기 전략 결정"""
+        
+        # MediumTermSynergyEngine에 신호 전달
+        synergy_result = self.medium_term_engine.calculate_synergy_score(category_signals)
+        
+        # 결과 변환
+        action = synergy_result['action']
+        net_score = synergy_result['net_score']
+        confidence = synergy_result['confidence']
+        market_context = synergy_result['market_context']
+        conflicts_detected = synergy_result['conflicts_detected']
+        bonuses_applied = synergy_result.get('bonuses_applied', [])
+        
+        # 최종 액션 결정
+        if action == 'BUY':
+            final_action = 'LONG'
+            reason = [f"medium synergy BUY: net_score={net_score:.3f}, confidence={confidence}"]
+        elif action == 'SELL':
+            final_action = 'SHORT'
+            reason = [f"medium synergy SELL: net_score={net_score:.3f}, confidence={confidence}"]
+        else:
+            final_action = 'HOLD'
+            reason = [f"medium synergy HOLD: net_score={net_score:.3f}, confidence={confidence}"]
+        
+        # 포지션 크기 계산
+        raw_signals = {}
+        for name, signal_data in category_signals.items():
+            raw_signals[name] = {
+                "action": signal_data.get("action"),
+                "score": signal_data.get("score"),
+                "entry": signal_data.get("entry"),
+                "stop": signal_data.get("stop")
+            }
+        
+        sizing = self._calculate_category_sizing(
+            final_action, raw_signals, category_config, account_balance, base_risk_pct
+        )
+        
+        return {
+            "action": final_action,
+            "category": "MEDIUM_TERM",
+            "net_score": round(net_score, 4),
+            "raw": raw_signals,
+            "reason": "; ".join(reason),
+            "sizing": sizing,
+            "max_holding_minutes": category_config["max_holding_minutes"],
+            "leverage": category_config["leverage"],
+            "strategies_used": list(category_signals.keys()),
+            "meta": {
+                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
+                "timeframe": category_config["timeframe"],
+                "synergy_meta": {
+                    "confidence": confidence,
+                    "market_context": market_context,
+                    "conflicts_detected": conflicts_detected,
+                    "bonuses_applied": bonuses_applied,
+                    "buy_score": synergy_result.get('buy_score', 0),
+                    "sell_score": synergy_result.get('sell_score', 0),
+                    "signals_used": synergy_result.get('signals_used', 0)
+                }
+            }
+        }
+    
+    def _decide_long_term_with_synergy(
+        self,
+        category_signals: Dict[str, Dict[str, Any]],
+        category_config: Dict[str, Any],
+        account_balance: float,
+        base_risk_pct: float,
+        open_threshold: float,
+        immediate_threshold: float,
+        confirm_threshold: float,
+        confirm_window_sec: int,
+        session_priority: bool,
+        news_event: bool
+    ) -> Dict[str, Any]:
+        """LongTermSynergyEngine을 사용한 장기 전략 결정"""
+        
+        # LongTermSynergyEngine에 신호 전달
+        synergy_result = self.long_term_engine.calculate_synergy_score(category_signals)
+        
+        # 결과 변환
+        action = synergy_result['action']
+        net_score = synergy_result['net_score']
+        confidence = synergy_result['confidence']
+        market_context = synergy_result['market_context']
+        conflicts_detected = synergy_result['conflicts_detected']
+        bonuses_applied = synergy_result.get('bonuses_applied', [])
+        
+        # 최종 액션 결정
+        if action == 'BUY':
+            final_action = 'LONG'
+            reason = [f"long synergy BUY: net_score={net_score:.3f}, confidence={confidence}"]
+        elif action == 'SELL':
+            final_action = 'SHORT'
+            reason = [f"long synergy SELL: net_score={net_score:.3f}, confidence={confidence}"]
+        else:
+            final_action = 'HOLD'
+            reason = [f"long synergy HOLD: net_score={net_score:.3f}, confidence={confidence}"]
+        
+        # 포지션 크기 계산
+        raw_signals = {}
+        for name, signal_data in category_signals.items():
+            raw_signals[name] = {
+                "action": signal_data.get("action"),
+                "score": signal_data.get("score"),
+                "entry": signal_data.get("entry"),
+                "stop": signal_data.get("stop")
+            }
+        
+        sizing = self._calculate_category_sizing(
+            final_action, raw_signals, category_config, account_balance, base_risk_pct
+        )
+        
+        return {
+            "action": final_action,
+            "category": "LONG_TERM",
+            "net_score": round(net_score, 4),
+            "raw": raw_signals,
+            "reason": "; ".join(reason),
+            "sizing": sizing,
+            "max_holding_minutes": category_config["max_holding_minutes"],
+            "leverage": category_config["leverage"],
+            "strategies_used": list(category_signals.keys()),
+            "meta": {
+                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
+                "timeframe": category_config["timeframe"],
+                "synergy_meta": {
+                    "confidence": confidence,
+                    "market_context": market_context,
+                    "conflicts_detected": conflicts_detected,
+                    "bonuses_applied": bonuses_applied,
+                    "buy_score": synergy_result.get('buy_score', 0),
+                    "sell_score": synergy_result.get('sell_score', 0),
+                    "signals_used": synergy_result.get('signals_used', 0),
+                    "institutional_bias": synergy_result.get('meta', {}).get('institutional_bias', 'NEUTRAL'),
+                    "macro_trend_strength": synergy_result.get('meta', {}).get('macro_trend_strength', 'WEAK')
+                }
             }
         }
     

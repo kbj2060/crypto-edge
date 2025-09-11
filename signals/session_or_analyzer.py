@@ -142,12 +142,8 @@ class SessionORAnalyzer:
         vol_ratio = None
         
         try:
-            if 'quote_volume' in df3.columns:
-                v_series = df3['quote_volume'].astype(float)
-            elif 'volume' in df3.columns and 'close' in df3.columns:
-                v_series = (df3['volume'].astype(float) * df3['close'].astype(float))
-            else:
-                v_series = None
+            v_series = df3['quote_volume'].astype(float)
+            
 
             if v_series is not None:
                 ma = v_series.rolling(20, min_periods=1).mean().iloc[-1]
@@ -162,7 +158,7 @@ class SessionORAnalyzer:
             vol_ok = True
             vol_ratio = None
             if getattr(self.cfg, 'debug_print', False):
-                print('[SESSION_OR] volume calc error:', repr(e))
+                print('[SESSION] volume calc error:', repr(e))
 
         return {
             "vol_ok": vol_ok,

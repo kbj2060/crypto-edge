@@ -46,7 +46,7 @@ class SessionORSignalGenerator:
         reasons = self._generate_reasons(analysis_result, True)
         
         return {
-            "stage": "ENTRY",
+            "name": "SESSION",
             "action": "BUY",
             "entry": float(entry),
             "stop": float(stop),
@@ -87,7 +87,7 @@ class SessionORSignalGenerator:
         reasons = self._generate_reasons(analysis_result, False)
         
         return {
-            "stage": "ENTRY",
+            "name": "SESSION",
             "action": "SELL",
             "entry": float(entry),
             "stop": float(stop),

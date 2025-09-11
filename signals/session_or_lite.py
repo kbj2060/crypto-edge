@@ -105,6 +105,6 @@ class SessionORLite:
         chosen_signal = self.signal_generator.select_best_signal(signals)
 
         if not chosen_signal and self.cfg.debug_print:
-            print("[SESSION_OR] no signals generated")
+            print("[SESSION] no signals generated")
 
         return chosen_signal

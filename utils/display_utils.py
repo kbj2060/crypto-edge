@@ -66,8 +66,56 @@ def print_decision_interpretation(decision: dict) -> None:
                 if entry and stop:
                     print(f"📊 진입가: {entry:.4f} | 손절가: {stop:.4f}")
 
-        # 전략별 기여도 출력
-        if raw:
+        # 시너지 엔진 분석 결과 출력
+        if "synergy_meta" in category_decision.get("meta", {}):
+            synergy_meta = category_decision["meta"]["synergy_meta"]
+            
+            if category_name == "SHORT_TERM":
+                print("🧠 ShortTermSynergyEngine 분석:")
+            elif category_name == "MEDIUM_TERM":
+                print("🔍 MediumTermSynergyEngine 분석:")
+            elif category_name == "LONG_TERM":
+                print("📈 LongTermSynergyEngine 분석:")
+            
+            print(f"   🎯 신뢰도: {synergy_meta.get('confidence', 'UNKNOWN')}")
+            print(f"   📊 시장 상황: {synergy_meta.get('market_context', 'UNKNOWN')}")
+            print(f"   ⚖️ 매수 점수: {synergy_meta.get('buy_score', 0):.3f}")
+            print(f"   ⚖️ 매도 점수: {synergy_meta.get('sell_score', 0):.3f}")
+            print(f"   🔍 사용된 신호: {synergy_meta.get('signals_used', 0)}개")
+            
+            # 충돌 감지 결과
+            detected_conflicts = synergy_meta.get('conflicts_detected', [])
+            if detected_conflicts:
+                print(f"   ⚠️ 충돌 감지: {', '.join(detected_conflicts)}")
+            else:
+                print(f"   ✅ 충돌 없음")
+            
+            # 보너스 적용 결과 (중기, 장기)
+            bonuses_applied = synergy_meta.get('bonuses_applied', [])
+            if bonuses_applied:
+                print(f"   🎁 보너스 적용: {', '.join(bonuses_applied)}")
+            
+            # 장기 전략 특별 정보
+            if category_name == "LONG_TERM":
+                institutional_bias = synergy_meta.get('institutional_bias', 'NEUTRAL')
+                macro_trend = synergy_meta.get('macro_trend_strength', 'WEAK')
+                print(f"   🏛️ 기관 편향: {institutional_bias}")
+                print(f"   🌍 거시 트렌드: {macro_trend}")
+            
+            # breakdown 정보가 있으면 출력
+            if 'breakdown' in synergy_meta:
+                breakdown = synergy_meta['breakdown']
+                if breakdown.get('buy_signals'):
+                    print("   🟢 매수 신호:")
+                    for signal in breakdown['buy_signals']:
+                        print(f"      - {signal['name']}: {signal['score']:.3f}")
+                if breakdown.get('sell_signals'):
+                    print("   🔴 매도 신호:")
+                    for signal in breakdown['sell_signals']:
+                        print(f"      - {signal['name']}: {signal['score']:.3f}")
+        
+        # 전략별 기여도 출력 (기존 로직)
+        elif raw:
             print("📊 전략별 기여도:")
             contributions = []
             
@@ -173,7 +221,29 @@ def print_trading_summary(signals: Dict[str, Any], decision: Dict[str, Any], jud
         strategies_count = len(category_decision.get("strategies_used", []))
         
         action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
-        print(f"   {action_emoji} {category_name}: {action} (점수: {net_score:.3f}, 레버리지: {leverage}x, 전략: {strategies_count}개)")
+        
+        # 시너지 엔진 분석 정보
+        if "synergy_meta" in category_decision.get("meta", {}):
+            synergy_meta = category_decision["meta"]["synergy_meta"]
+            confidence = synergy_meta.get('confidence', 'UNKNOWN')
+            market_context = synergy_meta.get('market_context', 'UNKNOWN')
+            
+            if category_name == "SHORT_TERM":
+                print(f"   {action_emoji} {category_name}: {action} (점수: {net_score:.3f}, 레버리지: {leverage}x, 전략: {strategies_count}개)")
+                print(f"      🧠 단기 시너지: {confidence} 신뢰도, {market_context} 시장상황")
+            elif category_name == "MEDIUM_TERM":
+                bonuses = synergy_meta.get('bonuses_applied', [])
+                bonus_info = f", 보너스: {len(bonuses)}개" if bonuses else ""
+                print(f"   {action_emoji} {category_name}: {action} (점수: {net_score:.3f}, 레버리지: {leverage}x, 전략: {strategies_count}개)")
+                print(f"      🔍 중기 시너지: {confidence} 신뢰도, {market_context} 시장상황{bonus_info}")
+            elif category_name == "LONG_TERM":
+                institutional_bias = synergy_meta.get('institutional_bias', 'NEUTRAL')
+                macro_trend = synergy_meta.get('macro_trend_strength', 'WEAK')
+                print(f"   {action_emoji} {category_name}: {action} (점수: {net_score:.3f}, 레버리지: {leverage}x, 전략: {strategies_count}개)")
+                print(f"      📈 장기 시너지: {confidence} 신뢰도, {market_context} 시장상황")
+                print(f"      🏛️ 기관편향: {institutional_bias}, 거시트렌드: {macro_trend}")
+        else:
+            print(f"   {action_emoji} {category_name}: {action} (점수: {net_score:.3f}, 레버리지: {leverage}x, 전략: {strategies_count}개)")
     
     # 활성 포지션 요약
     active_positions = meta.get("active_positions", 0)

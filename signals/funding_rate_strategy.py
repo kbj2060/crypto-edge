@@ -50,6 +50,7 @@ class FundingRateStrategy:
         self.time_manager = get_time_manager()
         self.funding_data_cache = []
         self.last_fetch_time = None
+        self.time_manager = get_time_manager()
         
     def _fetch_funding_rate(self) -> Optional[float]:
         """바이낸스에서 현재 펀딩비율 가져오기"""
@@ -114,7 +115,7 @@ class FundingRateStrategy:
             'name': 'FUNDING_RATE',
             'action': 'HOLD',
             'score': 0.0,
-            'timestamp': self.tm.get_current_time(),
+            'timestamp': self.time_manager.get_current_time(),
             'context': kwargs
         }
 
