@@ -44,7 +44,7 @@ class OpeningRange:
         
         print(f"🚀 OpeningRange 초기화 완료 (OR 분: {or_minutes}분)")
         
-    def _initialize_or(self):
+    def _initialize_or(self, target_time: Optional[datetime] = None):
         """OR 계산"""
         current_session_start = self._get_or_time()
 
@@ -64,11 +64,11 @@ class OpeningRange:
                 )
         return True
 
-    def _get_or_time(self):
+    def _get_or_time(self, target_time: Optional[datetime] = None):
         """세션 상태 초기화"""
         try:
-            current_time = self.time_manager.get_current_time()
-            session_open_time = self.time_manager.get_current_session_info().open_time
+            current_time = target_time if target_time is not None else self.time_manager.get_current_time()
+            session_open_time = self.time_manager.get_current_session_info(current_time).open_time
 
             if session_open_time is None:
                 session_open_time = self.time_manager.get_previous_session_close()

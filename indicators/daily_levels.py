@@ -48,9 +48,9 @@ class DailyLevels:
         """새로운 캔들로 업데이트 (하루가 바뀌면 데이터 갱신)"""
         try:
             # 하루가 바뀌었는지 확인
-            if self._is_new_day(candle_data['timestamp']):
+            if self._is_new_day(candle_data.name):
                 print("🔄 새로운 날이 되었습니다. Daily Levels 데이터를 갱신합니다.")
-                data_now = candle_data['timestamp']
+                data_now = candle_data.name
                 df = self.get_data(data_now)
                 self.prev_day_high = float(df['high'].max())
                 self.prev_day_low = float(df['low'].min())

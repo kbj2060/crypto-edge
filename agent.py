@@ -764,8 +764,6 @@ def load_ethusdc_data():
         df_3m['timestamp'] = pd.to_datetime(df_3m['timestamp'])
         df_3m = df_3m.set_index('timestamp')
         
-      
-        
         df_15m = pd.read_csv('data/ETHUSDC_15m_historical_data.csv')
         df_15m['timestamp'] = pd.to_datetime(df_15m['timestamp'])
         df_15m = df_15m.set_index('timestamp')
@@ -780,6 +778,7 @@ def load_ethusdc_data():
         print(f"✅ ETHUSDC 1시간봉 데이터 생성 완료: {len(df_1h)}개 캔들")
         
         return df_3m, df_15m, df_1h
+
     except FileNotFoundError as e:
         print(f"❌ 데이터 파일을 찾을 수 없습니다: {e}")
         return None, None, None, None
@@ -800,7 +799,6 @@ def generate_signal_data_with_indicators(price_data: pd.DataFrame, price_data_15
     # 컴포넌트 초기화
     strategy_executor = StrategyExecutor()
     decision_engine = TradeDecisionEngine()
-    candle_creator = CandleCreator("ETHUSDC")
     global_manager = get_global_indicator_manager()
     time_manager = get_time_manager()
     

@@ -65,7 +65,7 @@ class BinanceWebSocket:
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
-        self.time_manager.update_session_status()
+        self.time_manager.update_session()
         self._session_activated = self.time_manager.is_session_active()
 
     def add_callback(self, event_type: str, callback: Callable):
@@ -156,6 +156,7 @@ class BinanceWebSocket:
         """3분봉 Kline 데이터 처리 (오류 처리 강화)"""
         if not data.get('k', {}).get('x', True):
             return
+            
         kline = data['k']
         
         await asyncio.sleep(1)
