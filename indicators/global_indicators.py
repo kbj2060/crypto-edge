@@ -32,42 +32,38 @@ class GlobalIndicatorManager:
     - 싱글톤 패턴으로 전역 접근
     """
     
-    def __init__(self):
+    def __init__(self, target_time: Optional[datetime] = None):
         """글로벌 지표 관리자 초기화"""
         self._indicators = {}
         self._initialized = False
         self._lock = threading.Lock()  # 스레드 안전성
         self._data_manager = None  # DataManager 인스턴스 (지연 초기화)
-        
+
         # 지표 설정
         self.indicator_configs = {
             'vpvr': {
                 'class': SessionVPVR,
-                'bins': 50,
-                'price_bin_size': 0.05,
-                'lookback': 400
+                'target_time': target_time,
             },
             'atr': {
                 'class': ATR3M,
-                'length': 14,
-                'max_candles': 300
+                'target_time': target_time,
             },
             'daily_levels': {
                 'class': DailyLevels,
-                'symbol': 'ETHUSDC',
+                'target_time': target_time,
             },
             'vwap': {
                 'class': SessionVWAP,
-                'symbol': 'ETHUSDC'
+                'target_time': target_time,
             },
             'opening_range': {
                 'class': OpeningRange,
+                'target_time': target_time,
             }
         }
         
-
-    
-    def _initialize_indicator(self, name: str):
+    def _initialize_indicator(self, name: str, target_time: Optional[datetime] = None):
         """지표 초기화 - 공통 메서드"""
         try:
             config = self.indicator_configs[name]
@@ -75,24 +71,29 @@ class GlobalIndicatorManager:
             
             if name == 'vpvr':
                 self._indicators[name] = indicator_class(
-                    bins=config['bins'],
-                    price_bin_size=config['price_bin_size'],
-                    lookback=config['lookback']
+                    target_time=target_time,
                 )
             elif name == 'atr':
                 self._indicators[name] = indicator_class(
-                    length=config['length'],
-                    max_candles=config['max_candles']
+                    target_time=target_time,
                 )
             elif name == 'vwap':
                 self._indicators[name] = indicator_class(
-                    symbol=config['symbol']
+                    target_time=target_time,
                 )
             elif name == 'opening_range':
-                self._indicators[name] = indicator_class(or_minutes=30)
+                self._indicators[name] = indicator_class(
+                    target_time=target_time,
+                )
+            elif name == 'daily_levels':
+                self._indicators[name] = indicator_class(
+                    target_time=target_time,
+                )
             else:
                 # 기본 초기화 (매개변수 없음)
-                self._indicators[name] = indicator_class()
+                self._indicators[name] = indicator_class(
+                    target_time=target_time,
+                )
                 
         except Exception as e:
             import traceback
@@ -100,7 +101,7 @@ class GlobalIndicatorManager:
             print(f"❌ 상세 오류: {traceback.format_exc()}")
             self._indicators[name] = None
 
-    def initialize_indicators(self):
+    def initialize_indicators(self, target_time: Optional[datetime] = None):
         """모든 지표 초기화"""
         with self._lock:
             if self._initialized:
@@ -116,7 +117,7 @@ class GlobalIndicatorManager:
                 
                 # 모든 지표를 순차적으로 초기화
                 for indicator_name in self.indicator_configs.keys():
-                    self._initialize_indicator(indicator_name)
+                    self._initialize_indicator(indicator_name, target_time)
                 
                 self._initialized = True
                 print("🎯 모든 전역 지표 초기화 완료!")

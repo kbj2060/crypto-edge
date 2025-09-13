@@ -1,4 +1,4 @@
-timestamp,open,high,low,close,volume,close_time,quote_asset_volume,number_of_trades,taker_buy_base_asset_volume,taker_buy_quote_asset_volume,ignore
+timestamp,open,high,low,close,volume,close_time,quote_volume,number_of_trades,taker_buy_base_asset_volume,taker_buy_quote_asset_volume,ignore
 2024-09-01 18:00:00,2470.77,2498.79,2468.34,2493.44,608.207,2024-09-01 18:59:59.999,1512192.597842,3301,275.3397,684755.656914,0
 2024-09-01 19:00:00,2493.6,2514.19,2491.37,2501.61,903.6775,2024-09-01 19:59:59.999,2260092.304629,4542,440.4197,1101405.462038,0
 2024-09-01 20:00:00,2501.54,2515.8,2500.13,2501.96,431.1334,2024-09-01 20:59:59.999,1081077.475607,2271,200.0618,501558.096309,0

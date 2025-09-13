@@ -14,10 +14,10 @@ from typing import Dict, Optional, Any, List
 import datetime as dt
 
 from utils.time_manager import get_time_manager
+from utils.session_manager import get_session_manager
 from data.data_manager import get_data_manager
 from indicators.atr import ATR3M
-
-
+from datetime import datetime
 class SessionVPVR:
     """
     세션 기반 실시간 VPVR 관리 클래스 (개선판)
@@ -25,10 +25,12 @@ class SessionVPVR:
     - 세션 시작 시 bin_size 계산(고정)
     - 캔들 도착 시 bin으로 누적 (bin center 사용)
     - POC/HVN/LVN 계산 개선 및 디버그 출력
+    - VPVR GOLDEN STRATEGY (장기)에 쓰이고 VPVR MICRO (단기)에 쓰이지 않음
     """
 
     def __init__(
         self,
+        target_time: Optional[datetime] = None,
         bins: int = 50,
         price_bin_size: float = 0.05,
         lookback: int = 300,
@@ -72,19 +74,19 @@ class SessionVPVR:
 
         # dependencies
         self.time_manager = get_time_manager()
-        self.atr = ATR3M(length=14)
+        self.session_manager = get_session_manager()
+        self.atr = ATR3M(length=14, target_time=target_time)
 
         # initialize
-        self._initialize_vpvr()
+        self._initialize_vpvr(target_time)
 
     # -----------------------
     # Initialization / Loading
     # -----------------------
-    def _initialize_vpvr(self):
+    def _initialize_vpvr(self, target_time: Optional[datetime] = None):
         """세션 설정 확인 후 초기 데이터 로드 및 bin_size 계산"""
-        session_config = self.time_manager.get_indicator_mode_config()
 
-        self._load_lookback_data()
+        self._load_lookback_data(target_time)
 
         # determine initial sample price for bin_size calculation
         if self.price_bins:
@@ -96,19 +98,20 @@ class SessionVPVR:
         # compute and fix bin_size for this session
         self.bin_size = self._calculate_dynamic_bin_size(self._bin_sample_price, force=True)
 
-        self.last_update_time = dt.datetime.now(dt.timezone.utc)
+        self.last_update_time = target_time if target_time is not None else dt.datetime.now(dt.timezone.utc)
 
         # after initialization, compute vpvr result
         self._update_vpvr_result()
 
-    def _load_lookback_data(self):
+    def _load_lookback_data(self, target_time: Optional[datetime] = None):
         """lookback 기간만큼 과거부터 현재까지 데이터 로딩 (간이 모드)"""
         try:
             hours_needed = max(1, int(self.lookback * 3 / 60))  # heuristic
+            current_time = target_time if target_time is not None else dt.datetime.now(dt.timezone.utc)
             data_manager = get_data_manager()
             df = data_manager.get_data_range(
-                dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours_needed),
-                dt.datetime.now(dt.timezone.utc)
+                current_time - dt.timedelta(hours=hours_needed),
+                current_time
             )
 
             if df is None or df.empty:
@@ -208,7 +211,8 @@ class SessionVPVR:
     # -----------------------
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들 데이터로 VPVR 업데이트 (실시간 경로)"""
-        session_config = self.time_manager.get_indicator_mode_config()
+        current_time = candle_data.name
+        session_config = self.session_manager.get_indicator_mode_config(current_time)
         # self._check_session_reset(session_config)
         
         self.atr.update_with_candle(candle_data)
@@ -228,12 +232,12 @@ class SessionVPVR:
 
         self.volume_histogram[bin_key] += quote_volume
         self.processed_candle_count += 1
-        self.last_update_time = dt.datetime.now(dt.timezone.utc)
+        self.last_update_time = current_time
 
         # VPVR 결과 갱신
-        self._update_vpvr_result()
-        print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] VPVR 업데이트 POC: {self.cached_result['poc']:.2f} HVN: {self.cached_result['hvn']:.2f} LVN: {self.cached_result['lvn']:.2f}")
-        print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] ATR 업데이트 {self.atr.current_atr:.2f}")
+        self._update_vpvr_result(current_time)
+        print(f"✅ [{current_time.strftime('%H:%M:%S')}] VPVR 업데이트 POC: {self.cached_result['poc']:.2f} HVN: {self.cached_result['hvn']:.2f} LVN: {self.cached_result['lvn']:.2f}")
+        print(f"✅ [{current_time.strftime('%H:%M:%S')}] ATR 업데이트 {self.atr.current_atr:.2f}")
 
     def _process_candle_data(self, row: pd.Series, timestamp):
         """배치 로드 시 캔들 데이터 처리 (update_with_candle과 거의 동일)"""
@@ -266,7 +270,7 @@ class SessionVPVR:
     # -----------------------
     # VPVR 계산 (POC/HVN/LVN)
     # -----------------------
-    def _update_vpvr_result(self):
+    def _update_vpvr_result(self, target_time: Optional[datetime] = None):
         """현재 누적된 데이터로 VPVR 결과 업데이트 (개선된 HVN/LVN 계산)"""
         try:
             if not self.volume_histogram:
@@ -381,7 +385,7 @@ class SessionVPVR:
             lvn_price = self.price_bins.get(lvn_bin, poc_price)
 
             # ---------------------------------------------------------------------------------------
-
+            current_time = target_time if target_time is not None else dt.datetime.now(dt.timezone.utc)
             result = {
                 "poc": poc_price,
                 "poc_bin": poc_bin,
@@ -399,11 +403,11 @@ class SessionVPVR:
                 "hvn_threshold": hvn_threshold,
                 "lvn_threshold": lvn_threshold,
                 "min_vol_threshold": min_vol_threshold,
-                "last_update": dt.datetime.now(dt.timezone.utc).isoformat(),
+                "last_update": current_time.isoformat(),
             }
 
             self.cached_result = result
-            self.last_update_time = dt.datetime.now(dt.timezone.utc)
+            self.last_update_time = current_time
 
         except Exception as e:
             print(f"❌ VPVR 결과 업데이트 오류: {e}")
@@ -418,10 +422,10 @@ class SessionVPVR:
     def _get_processed_candle_count(self) -> int:
         return self.processed_candle_count
 
-    def get_status(self) -> Dict[str, Any]:
+    def get_status(self, target_time: Optional[datetime] = None) -> Dict[str, Any]:
         """현재 VPVR 상태 정보 반환 (POC 포함)"""
         try:
-            session_config = self.time_manager.get_indicator_mode_config()
+            session_config = self.session_manager.get_indicator_mode_config(target_time)
             status = {
                 'is_session_active': session_config.get('use_session_mode', False),
                 'current_session': session_config.get('session_name'),

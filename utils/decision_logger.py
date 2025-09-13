@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 from utils.time_manager import get_time_manager
+from utils.session_manager import get_session_manager
 
 
 class DecisionLogger:
@@ -26,6 +27,7 @@ class DecisionLogger:
         self.logs_dir = Path(logs_dir)
         self.logs_dir.mkdir(exist_ok=True)
         self.time_manager = get_time_manager()
+        self.session_manager = get_session_manager()
         
         # 한국 시간대 (UTC+9)
         self.kst_timezone = timezone(timedelta(hours=9))
@@ -56,6 +58,9 @@ class DecisionLogger:
             if log_file.exists():
                 try:
                     existing_df = pd.read_parquet(log_file)
+                    # timestamp 컬럼을 datetime 타입으로 변환
+                    if 'timestamp' in existing_df.columns:
+                        existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
                     self.decision_buffer = existing_df.to_dict('records')
                     print(f"📂 기존 로그 파일 로드: {log_file} ({len(self.decision_buffer)}개 기록)")
                 except Exception as e:
@@ -84,7 +89,7 @@ class DecisionLogger:
             kst_time = utc_time.astimezone(self.kst_timezone)
             
             decision_with_timestamp = {
-                'timestamp': kst_time.isoformat(),  # ISO 형식 문자열로 저장 (예: 2025-01-06T15:30:00+09:00)
+                'timestamp': kst_time,  # datetime 객체로 저장
                 'symbol': self.symbol,
                 **decision
             }
@@ -95,7 +100,11 @@ class DecisionLogger:
             # DataFrame으로 변환
             df = pd.DataFrame(self.decision_buffer)
             
-            # Parquet으로 저장
+            # timestamp 컬럼을 datetime 타입으로 명시적 변환
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+            
+            # Parquet으로 저장 (datetime 타입 보존)
             log_file = self._get_log_file_path()
             df.to_parquet(log_file, index=False, engine='pyarrow')
             
@@ -111,7 +120,11 @@ class DecisionLogger:
         try:
             log_file = self._get_log_file_path()
             if log_file.exists():
-                return pd.read_parquet(log_file)
+                df = pd.read_parquet(log_file)
+                # timestamp 컬럼을 datetime 타입으로 변환
+                if 'timestamp' in df.columns:
+                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                return df
             else:
                 return pd.DataFrame()
         except Exception as e:

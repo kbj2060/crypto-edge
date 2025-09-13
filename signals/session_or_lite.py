@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any
 import pandas as pd
 
 from data.data_manager import get_data_manager
+from utils.session_manager import get_session_manager
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_opening_range
 from signals.session_or_analyzer import SessionORAnalyzer
@@ -35,6 +36,7 @@ class SessionORLite:
         self.session_open: Optional[datetime] = None
         self.or_high: Optional[float] = None
         self.or_low: Optional[float] = None
+        self.session_manager = get_session_manager()
         self.time_manager = get_time_manager()
         self.data_manager = get_data_manager()
         
@@ -45,10 +47,10 @@ class SessionORLite:
     def on_kline_close_3m(self, df3: pd.DataFrame, vwap_prev: Optional[float] = None, now: Optional[datetime] = None) -> Optional[Dict[str, Any]]:
         """3분봉 마감 시 세션 오프닝 레인지 전략 실행"""
         now = now or self.time_manager.get_current_time()
-        session_activated = self.time_manager.is_session_active()
+        session_activated = self.session_manager.is_session_active()
         
         if session_activated:
-            self.session_open = self.time_manager.get_current_session_info().open_time
+            self.session_open = self.session_manager.get_current_session_info().open_time
 
         # 오프닝 레인지 레벨 가져오기
         self.or_high, self.or_low = get_opening_range()

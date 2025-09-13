@@ -13,14 +13,14 @@ import datetime as dt
 from collections import deque
 
 import pandas as pd
-
+from datetime import datetime, timedelta
 from data.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 class ATR3M:
     """3분봉 실시간 ATR 관리 클래스 - 연속 롤링 방식"""
     
-    def __init__(self, length: int = 14, max_candles: int = 100, init_data: Optional[pd.DataFrame] = None):
+    def __init__(self, length: int = 14, max_candles: int = 100, init_data: Optional[pd.DataFrame] = None, target_time: Optional[datetime] = None):
         self.length = length
         self.max_candles = max_candles
         
@@ -34,26 +34,19 @@ class ATR3M:
 
         self.time_manager = get_time_manager()
 
-        self._initialize_atr(init_data)
+        self._initialize_atr(init_data, target_time)
 
     
-    def _initialize_atr(self, init_data: Optional[pd.DataFrame] = None):
-        if init_data is not None:
-            df = init_data[-self.length:]
-        else:
-            df = self.get_data()
+    def _initialize_atr(self, target_time: Optional[datetime] = None):
+        df = self.get_data(target_time)
 
         self.current_atr = self.calculate_atr_from_dataframe(df)
 
-    def get_data(self) -> pd.DataFrame:
+    def get_data(self, target_time: Optional[datetime] = None) -> pd.DataFrame:
         """OR 시간 정보 반환"""
         data_manager = get_data_manager()
-        
-        if not data_manager.is_ready():
-
-            return {}
-        
-        df = data_manager.get_latest_data(self.max_candles)
+        target_time = target_time if target_time is not None else self.time_manager.get_current_time()
+        df = data_manager.get_data_range(target_time - timedelta(minutes=self.max_candles * 3), target_time)
         return df.copy()
     
     def update_with_candle(self, candle_data: pd.Series):

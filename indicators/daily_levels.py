@@ -16,21 +16,21 @@ from utils.time_manager import get_time_manager
 class DailyLevels:
     """어제 3분봉 데이터의 high, low만 관리하는 간단한 클래스"""
     
-    def __init__(self, init_data: Optional[pd.DataFrame] = None):
+    def __init__(self, init_data: Optional[pd.DataFrame] = None, target_time: Optional[datetime] = None):
         self.time_manager = get_time_manager()
         self.prev_day_high = 0.0
         self.prev_day_low = 0.0
         self.last_update_date = None  # 마지막 업데이트 날짜 저장
         
         # 자동으로 데이터 로드
-        self._initialize_levels(init_data)
+        self._initialize_levels(init_data, target_time)
     
     def _is_new_day(self, data_now: datetime = None) -> bool:
         """하루가 바뀌었는지 확인"""
         current_date = data_now.date()
         return self.last_update_date != current_date
     
-    def _initialize_levels(self, init_data: Optional[pd.DataFrame] = None):
+    def _initialize_levels(self, init_data: Optional[pd.DataFrame] = None, target_time: Optional[datetime] = None):
         # high, low만 계산
         if init_data is not None:
             data_now = init_data.iloc[-1]['timestamp']
@@ -59,7 +59,7 @@ class DailyLevels:
         except Exception as e:
             print(f"❌ Daily Levels 업데이트 오류: {e}")
     
-    def get_data(self, data_now: datetime = None) -> pd.DataFrame:
+    def get_data(self, target_time: Optional[datetime] = None) -> pd.DataFrame:
         """OR 시간 정보 반환"""
         data_manager = get_data_manager()
         
@@ -67,7 +67,7 @@ class DailyLevels:
             print("⚠️ DataManager가 준비되지 않았습니다")
             return {}
         
-        utc_now = data_now if data_now is not None else datetime.now(timezone.utc)
+        utc_now = target_time if target_time is not None else self.time_manager.get_current_time()
         prev_day = utc_now - timedelta(days=1)
         
         start_time = prev_day.replace(hour=0, minute=0, second=0, microsecond=0)
@@ -75,14 +75,15 @@ class DailyLevels:
 
         start_utc = self.time_manager.ensure_utc(start_time)
         end_utc = self.time_manager.ensure_utc(end_time)
+        df = data_manager.get_data_range(start_utc, end_utc)
 
-        if data_now is not None:
-            mask = (data_now.index >= start_time) & (data_now.index <= end_time)
-            df = data_now[mask]
+        if target_time is not None:
+            mask = (target_time.index >= start_time) & (target_time.index <= end_time)
+            df_mask = df[mask].copy()
         else:
-            df = data_manager.get_data_range(start_utc, end_utc)
+            df_mask = df.copy()
 
-        return df.copy()
+        return df_mask
     
     def get_status(self) -> Dict[str, Any]:
         """어제 고가/저가 및 업데이트 정보 반환"""

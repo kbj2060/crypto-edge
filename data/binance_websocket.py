@@ -20,6 +20,7 @@ from indicators.global_indicators import get_global_indicator_manager
 from utils.display_utils import print_decision_interpretation, print_llm_judgment
 from utils.telegram import send_telegram_message
 from utils.time_manager import get_time_manager
+from utils.session_manager import get_session_manager
 from utils.decision_logger import get_decision_logger
 from data.binance_dataloader import BinanceDataLoader
 
@@ -46,6 +47,7 @@ class BinanceWebSocket:
         
         # 기존 매니저들
         self.time_manager = get_time_manager()
+        self.session_manager = get_session_manager()
         self.global_manager = get_global_indicator_manager()
         self.data_manager = get_data_manager()
         self.data_loader = BinanceDataLoader()
@@ -57,7 +59,7 @@ class BinanceWebSocket:
         self.max_liquidations = 1000
         
         # 세션 상태
-        self._session_activated = self.time_manager.is_session_active()
+        self._session_activated = self.session_manager.is_session_active()
         self.queue = asyncio.Queue()
 
         # 카운트다운 태스크
@@ -65,8 +67,8 @@ class BinanceWebSocket:
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
-        self.time_manager.update_session()
-        self._session_activated = self.time_manager.is_session_active()
+        self.session_manager.update_session()
+        self._session_activated = self.session_manager.is_session_active()
 
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 등록"""
