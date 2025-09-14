@@ -17,16 +17,17 @@ class TimeManager:
     _instance = None
     _initialized = False
     
-    def __new__(cls):
+    def __new__(cls, target_time: Optional[datetime] = None):
         if cls._instance is None:
             cls._instance = super(TimeManager, cls).__new__(cls)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, target_time: Optional[datetime] = None):
         if not self._initialized:
             self._initialized = True
             self._timezone = timezone.utc
-    
+            self.target_time = target_time if target_time is not None else datetime.now(self._timezone)
+
     def normalize_minute(self, target_time: datetime) -> datetime:
         """초 반올림해서 분에 +1 해주는 함수"""
         try:
@@ -41,10 +42,14 @@ class TimeManager:
     # =============================================================================
     # 기본 시간 관리 메서드
     # =============================================================================
+    def update_with_candle(self, candle_data: pd.Series):
+        """새로운 캔들로 업데이트"""
+        self.target_time = self.ensure_utc(candle_data.name)
     
     def get_current_time(self) -> datetime:
         """현재 시간을 UTC로 반환"""
-        return datetime.now(self._timezone)
+        # return datetime.now(self._timezone)
+        return self.target_time
     
     def ensure_utc(self, dt: datetime) -> datetime:
         """datetime을 UTC로 변환 (이미 UTC면 그대로 반환)"""
@@ -83,11 +88,11 @@ class TimeManager:
 # 전역 TimeManager 인스턴스
 _global_time_manager: Optional[TimeManager] = None
 
-def get_time_manager() -> TimeManager:
+def get_time_manager(target_time: Optional[datetime] = None) -> TimeManager:
     """전역 TimeManager 인스턴스 반환 (싱글톤 패턴)"""
     global _global_time_manager
-    
+
     if _global_time_manager is None:
-        _global_time_manager = TimeManager()
+        _global_time_manager = TimeManager(target_time )
     
     return _global_time_manager

@@ -64,19 +64,19 @@ class SessionManager:
     _instance = None
     _initialized = False
     
-    def __new__(cls):
+    def __new__(cls, target_time: Optional[datetime] = None):
         if cls._instance is None:
             cls._instance = super(SessionManager, cls).__new__(cls)
         return cls._instance
     
-    def __init__(self):
+    def __init__(self, target_time: Optional[datetime] = None):
         if not self._initialized:
             self._initialized = True
             self._timezone = timezone.utc
             self.current_session_info: Optional[SessionInfo] = None
             self.last_update_time: Optional[datetime] = None
             self.session_history: Dict[str, Dict[str, Any]] = {}
-        
+            self.target_time = target_time
             # 세션 시간 정보를 미리 저장
             self._session_times_cache: Dict[str, Dict[str, datetime]] = {}
             self._last_cache_update_date: Optional[datetime.date] = None
@@ -84,18 +84,18 @@ class SessionManager:
             # 초기 세션 시간 계산
             self.update_session()
                 
-    def _get_cached_session_times(self, target_time: Optional[datetime] = None) -> Dict[str, datetime]:
+    def _get_cached_session_times(self) -> Dict[str, datetime]:
         """캐시된 세션 시간 반환"""
-        if target_time is None:
+        if self.target_time is None:
             return self._session_times_cache['today']
         
-        if target_time.date() == self.get_current_time().date():
+        if self.target_time.date() == self.get_current_time().date():
             return self._session_times_cache['today']
-        elif target_time.date() == self.get_current_time().date() - timedelta(days=1):
+        elif self.target_time.date() == self.get_current_time().date() - timedelta(days=1):
             return self._session_times_cache['yesterday']
         else:
             # 캐시에 없는 날짜는 실시간 계산
-            return self._calculate_session_times_for_date(target_time.date())
+            return self._calculate_session_times_for_date(self.target_time.date())
     
     def _calculate_session_times_for_date(self, target_date: datetime.date) -> Dict[str, datetime]:
         """특정 날짜의 세션 시간을 실시간으로 계산"""
@@ -112,7 +112,7 @@ class SessionManager:
     
     def get_current_time(self) -> datetime:
         """현재 시간을 UTC로 반환"""
-        return datetime.now(self._timezone)
+        return self.target_time
     
     def ensure_utc(self, dt: datetime) -> datetime:
         """datetime을 UTC로 변환 (이미 UTC면 그대로 반환)"""
@@ -136,7 +136,7 @@ class SessionManager:
     # 세션 관리 메서드
     # =============================================================================
     
-    def get_all_session_times(self, target_time: Optional[datetime] = None) -> List[Tuple[datetime, str, str]]:
+    def get_all_session_times(self) -> List[Tuple[datetime, str, str]]:
         """
         모든 세션 시간 반환 (시간순 정렬)
         
@@ -145,16 +145,15 @@ class SessionManager:
         """
         return self._session_times_cache.get('all_sessions')
     
-    def get_current_session_info(self, target_time: Optional[datetime] = None) -> SessionTimeInfo:
+    def get_current_session_info(self) -> SessionTimeInfo:
         """현재 세션 정보 반환 (TimeManager 스타일)"""
-        current_time = target_time if target_time is not None else self.get_current_time()
-        session_times = self._get_cached_session_times(current_time)
+        session_times = self._get_cached_session_times()
         
         # 유럽 세션 활성 확인
-        if session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= current_time < session_times['europe_close']:
-            elapsed = self._calculate_elapsed_minutes(current_time, session_times['europe_open'])
-            remaining = self._calculate_remaining_minutes(current_time, session_times['europe_open'], 
-                                                      (session_times['europe_close'] - session_times['europe_open']).total_seconds() / 60)
+        if session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= self.target_time < session_times['europe_close']:
+            elapsed = self._calculate_elapsed_minutes(self.target_time, session_times['europe_open'])
+            remaining = self._calculate_remaining_minutes(self.target_time, session_times['europe_open'], 
+                                                        (session_times['europe_close'] - session_times['europe_open']).total_seconds() / 60)
             
             return SessionTimeInfo(
                 session_name=SESSION_EUROPE,
@@ -167,9 +166,9 @@ class SessionManager:
             )
         
         # 미국 세션 활성 확인
-        elif session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= current_time < session_times['us_close']:
-            elapsed = self._calculate_elapsed_minutes(current_time, session_times['us_open'])
-            remaining = self._calculate_remaining_minutes(current_time, session_times['us_open'],
+        elif session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= self.target_time < session_times['us_close']:
+            elapsed = self._calculate_elapsed_minutes(self.target_time, session_times['us_open'])
+            remaining = self._calculate_remaining_minutes(self.target_time, session_times['us_open'],
                                                       (session_times['us_close'] - session_times['us_open']).total_seconds() / 60)
             
             return SessionTimeInfo(
@@ -193,16 +192,13 @@ class SessionManager:
             is_active=False
         )
     
-    def get_session_info(self, target_time: Optional[datetime] = None) -> SessionInfo:
+    def get_session_info(self) -> SessionInfo:
         """현재 세션 정보 반환 (opening_range.py 스타일)"""
-        current_time = target_time if target_time is not None else self.get_current_time()
-        
-        current_utc = self.ensure_utc(current_time)
-        session_times = self._get_cached_session_times(current_utc)
+        session_times = self._get_cached_session_times()
         
         # 세션 활성 상태 직접 확인
-        is_europe_active = session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= current_utc < session_times['europe_close']
-        is_us_active = session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= current_utc < session_times['us_close']
+        is_europe_active = session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= self.target_time < session_times['europe_close']
+        is_us_active = session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= self.target_time < session_times['us_close']
         
         if not (is_europe_active or is_us_active):
             return SessionInfo(
@@ -216,9 +212,9 @@ class SessionManager:
                 status=STATUS_NO_SESSION
             )
         
-        if session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= current_utc < session_times['us_close']:
-            elapsed_minutes = self._calculate_elapsed_minutes(current_utc, session_times['us_open'])
-            remaining_minutes = self._calculate_remaining_minutes(current_utc, session_times['us_open'],
+        if session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= self.target_time < session_times['us_close']:
+            elapsed_minutes = self._calculate_elapsed_minutes(self.target_time, session_times['us_open'])
+            remaining_minutes = self._calculate_remaining_minutes(self.target_time, session_times['us_open'],
                                                                 (session_times['us_close'] - session_times['us_open']).total_seconds() / 60)
             
             return SessionInfo(
@@ -233,9 +229,9 @@ class SessionManager:
             )
 
         # 유럽 세션 활성
-        elif session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= current_utc < session_times['europe_close']:
-            elapsed_minutes = self._calculate_elapsed_minutes(current_utc, session_times['europe_open'])
-            remaining_minutes = self._calculate_remaining_minutes(current_utc, session_times['europe_open'], 
+        elif session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= self.target_time < session_times['europe_close']:
+            elapsed_minutes = self._calculate_elapsed_minutes(self.target_time, session_times['europe_open'])
+            remaining_minutes = self._calculate_remaining_minutes(self.target_time, session_times['europe_open'], 
                                                                 (session_times['europe_close'] - session_times['europe_open']).total_seconds() / 60)
             
             return SessionInfo(
@@ -260,45 +256,39 @@ class SessionManager:
             status=STATUS_UNKNOWN
         )
     
-    def is_session_active(self, target_time: Optional[datetime] = None) -> bool:
+    def is_session_active(self) -> bool:
         """현재 활성 세션이 있는지 확인"""
-        target_time = target_time if target_time is not None else self.get_current_time()
-        session_times = self._get_cached_session_times(target_time)
+        session_times = self._get_cached_session_times()
 
         # 세션 활성 상태 확인
-        is_europe_active = session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= target_time < session_times['europe_close']
-        is_us_active = session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= target_time < session_times['us_close']
+        is_europe_active = session_times.get('europe_open') and session_times.get('europe_close') and session_times['europe_open'] <= self.target_time < session_times['europe_close']
+        is_us_active = session_times.get('us_open') and session_times.get('us_close') and session_times['us_open'] <= self.target_time < session_times['us_close']
         
         return is_europe_active or is_us_active
 
     
-    def get_previous_session_open(self, target_time: Optional[datetime] = None) -> Tuple[datetime, str]:
+    def get_previous_session_open(self) -> Tuple[datetime, str]:
         """과거 바로 이전 세션의 오픈 시간과 이름 반환"""
-        current_time = target_time if target_time is not None else self.get_current_time()
         
-        current_utc = self.ensure_utc(current_time)
         all_sessions = self._session_times_cache.get('all_sessions')
         
         # 현재 시간보다 이전이면서 가장 가까운 세션 찾기
-        past_sessions = [(time, name) for time, name, date in all_sessions if time <= current_utc]
+        past_sessions = [(time, name) for time, name, date in all_sessions if time <= self.target_time]
         
         if not past_sessions:
             # 모든 세션이 미래인 경우 (새벽 시간대)
-            today = current_utc.date()
+            today = self.target_time.date()
             return (self.create_session_time(today, EUROPE_OPEN_HOUR, EUROPE_OPEN_MINUTE), SESSION_EUROPE)
         
         # 가장 가까운 세션 반환
         return max(past_sessions, key=lambda x: x[0])
     
-    def get_previous_session_close(self, target_time: Optional[datetime] = None) -> Optional[datetime]:
+    def get_previous_session_close(self) -> Optional[datetime]:
         """과거 바로 이전 세션의 종료 시간 반환"""
-        current_time = target_time if target_time is not None else self.get_current_time()
         
-        current_utc = self.ensure_utc(current_time)
         all_sessions = self._session_times_cache.get('all_sessions', [])
-        
         # 현재 시간 이전의 세션 중 가장 늦은 시간
-        past_sessions = [s for s in all_sessions if s[0] < current_utc]
+        past_sessions = [s for s in all_sessions if s[0] < self.target_time]
         
         if not past_sessions:
             return None
@@ -317,19 +307,22 @@ class SessionManager:
     # =============================================================================
     # 세션 상태 관리 메서드 (SessionManager 스타일)
     # =============================================================================
+    def update_with_candle(self, candle_data: pd.Series):
+        """새로운 캔들로 세션 상태 업데이트"""
+        self.target_time = self.ensure_utc(candle_data.name)
+        self.update_session()
     
-    def update_session(self, target_time: Optional[datetime] = None) -> Dict[str, Any]:
+    def update_session(self) -> Dict[str, Any]:
         """세션 시간 캐시와 세션 상태를 통합 업데이트"""
-        target_time = target_time if target_time is not None else self.get_current_time()
         # 1. 세션 시간 캐시 업데이트
-        target_date = target_time.date()
+        target_date = self.target_time.date()
         
         # 캐시가 최신이면 업데이트하지 않음
         if (self._last_cache_update_date and 
             self._last_cache_update_date == target_date):
             pass  # 캐시는 최신이므로 건너뛰기
         else:
-            # 오늘과 어제의 세션 시간 계산
+            # 오늘과 어제의 세션 시간 계산  
             today = target_date
             yesterday = today - timedelta(days=1)
             
@@ -363,8 +356,8 @@ class SessionManager:
             self._last_cache_update_date = target_date
         
         # 2. 세션 정보 업데이트
-        self.current_session_info = self.get_session_info(target_time)
-        self.last_update_time = target_time
+        self.current_session_info = self.get_session_info()
+        self.last_update_time = self.target_time
         
         # 3. 세션 전환 이력 저장 (날짜와 세션 이름으로 고유 ID 생성)
         if self.current_session_info.current_session:
@@ -376,35 +369,33 @@ class SessionManager:
                     'session_date': self.current_session_info.session_date,
                     'start_time': self.current_session_info.session_open_time,
                     'end_time': self.current_session_info.session_close_time,
-                    'first_seen': target_time,
-                    'last_seen': target_time,
+                    'first_seen': self.target_time,
+                    'last_seen': self.target_time,
                     'status': self.current_session_info.status,
                     'elapsed_minutes': self.current_session_info.elapsed_minutes
                 }
             else:
                 # 기존 세션 정보 업데이트
-                self.session_history[session_id]['last_seen'] = target_time
+                self.session_history[session_id]['last_seen'] = self.target_time
                 self.session_history[session_id]['elapsed_minutes'] = self.current_session_info.elapsed_minutes
         
         return self.current_session_info.__dict__
             
-    def get_session_status(self, target_time: Optional[datetime] = None) -> Dict[str, Any]:
+    def get_session_status(self) -> Dict[str, Any]:
         """현재 세션 상태 반환 (캐시된 정보)"""
-        current_time = target_time if target_time is not None else self.get_current_time()
-        
         if self.current_session_info is None:
-            return self.update_session(current_time)
+            return self.update_session()
         
         return self.current_session_info.__dict__
     
-    def get_current_session_name(self, target_time: Optional[datetime] = None) -> Optional[str]:
+    def get_current_session_name(self) -> Optional[str]:
         """현재 세션 이름 반환"""
-        session_info = self.get_session_status(target_time)
+        session_info = self.get_session_status()
         return session_info.get('current_session')
     
-    def get_session_open_time_from_status(self, target_time: Optional[datetime] = None) -> Optional[datetime]:
+    def get_session_open_time_from_status(self) -> Optional[datetime]:
         """현재 세션 시작 시간 반환 (상태에서)"""
-        session_info = self.get_session_status(target_time)
+        session_info = self.get_session_status()
         session_open = session_info.get('session_open_time')
         
         if session_open:
@@ -414,26 +405,25 @@ class SessionManager:
         
         return None
     
-    def should_use_session_mode(self, target_time: Optional[datetime] = None) -> bool:
+    def should_use_session_mode(self) -> bool:
         """indicator가 세션 모드를 사용해야 하는지 판단"""
-        return self.is_session_active(target_time)
+        return self.is_session_active()
     
-    def get_session_elapsed_minutes(self, target_time: Optional[datetime] = None) -> float:
+    def get_session_elapsed_minutes(self) -> float:
         """현재 세션 경과 시간 (분)"""
-        session_info = self.get_session_status(target_time)
+        session_info = self.get_session_status()
         return session_info.get('elapsed_minutes', 0.0)
     
-    def get_indicator_mode_config(self, target_time: Optional[datetime] = None) -> Dict[str, Any]:
+    def get_indicator_mode_config(self) -> Dict[str, Any]:
         """indicator들이 사용할 모드 설정 정보 반환"""
-        session_info = self.get_session_status(target_time)
-        
+        session_info = self.get_session_status()
         return {
-            'use_session_mode': self.should_use_session_mode(target_time),
-            'session_name': self.get_current_session_name(target_time),
-            'session_start_time': self.get_session_open_time_from_status(target_time),
-            'elapsed_minutes': self.get_session_elapsed_minutes(target_time),
+            'use_session_mode': self.should_use_session_mode(),
+            'session_name': self.get_current_session_name(),
+            'start_time': self.get_session_open_time_from_status(),
+            'elapsed_minutes': self.get_session_elapsed_minutes(),
             'session_status': session_info.get('status', STATUS_UNKNOWN),
-            'mode': 'session' if self.should_use_session_mode(target_time) else 'lookback'
+            'mode': 'session' if self.should_use_session_mode() else 'lookback'
         }
     
     # =============================================================================
@@ -452,12 +442,12 @@ class SessionManager:
 # 전역 SessionManager 인스턴스
 _global_session_manager: Optional[SessionManager] = None
 
-def get_session_manager() -> SessionManager:
+def get_session_manager(target_time: Optional[datetime] = None) -> SessionManager:
     """전역 SessionManager 인스턴스 반환 (싱글톤 패턴)"""
     global _global_session_manager
     
     if _global_session_manager is None:
-        _global_session_manager = SessionManager()
+        _global_session_manager = SessionManager(target_time)   
     
     return _global_session_manager
 
@@ -465,10 +455,10 @@ def get_session_manager() -> SessionManager:
 # 호환성을 위한 별칭 함수들
 # =============================================================================
 
-def get_current_session_info(current_time: Optional[datetime] = None) -> SessionInfo:
+def get_current_session_info() -> SessionInfo:
     """opening_range.py 호환성을 위한 별칭"""
-    return get_session_manager().get_session_info(current_time)
+    return get_session_manager().get_session_info()
 
-def is_session_active(current_time: Optional[datetime] = None) -> bool:
+def is_session_active() -> bool:
     """opening_range.py 호환성을 위한 별칭"""
-    return get_session_manager().is_session_active(current_time)
+    return get_session_manager().is_session_active()

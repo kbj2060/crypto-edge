@@ -41,20 +41,20 @@ class OpeningRange:
         self.data_manager = get_data_manager()
         self._current_session_start = None
         self._or = {}
+        self.target_time = target_time if target_time is not None else self.time_manager.get_current_time()
 
-        self.is_initialized = self._initialize_or(target_time)
+        self.is_initialized = self._initialize_or()
         
         print(f"🚀 OpeningRange 초기화 완료 (OR 분: {or_minutes}분)")
         
-    def _initialize_or(self, target_time: Optional[datetime] = None):
+    def _initialize_or(self):
         """OR 계산"""
-        current_session_start = self._get_or_time(target_time)
-        current_time = target_time if target_time is not None else self.time_manager.get_current_time()
+        current_session_start = self._get_or_time()
 
-        if current_session_start <= current_time <= current_session_start + timedelta(minutes=self.or_minutes):
+        if current_session_start <= self.target_time <= current_session_start + timedelta(minutes=self.or_minutes):
             self.calculate_opening_range(
                 current_session_start + timedelta(seconds=1), 
-                current_time
+                self.target_time
                 )
 
         if current_session_start:
@@ -63,23 +63,22 @@ class OpeningRange:
                 current_session_start + timedelta(minutes=self.or_minutes)
                 )
         else:
-            prev_session_close = self.session_manager.get_previous_session_close(self.time_manager.get_current_time())
+            prev_session_close = self.session_manager.get_previous_session_close()
             self.calculate_opening_range(
                 prev_session_close + timedelta(seconds=1), 
                 prev_session_close + timedelta(minutes=self.or_minutes)
                 )
         return True
 
-    def _get_or_time(self, target_time: Optional[datetime] = None):
+    def _get_or_time(self):
         """세션 상태 초기화"""
         try:
-            current_time = target_time if target_time is not None else self.time_manager.get_current_time()
-            is_active = self.session_manager.is_session_active(current_time)
+            is_active = self.session_manager.is_session_active()
 
             if is_active:
-                session_open_time = self.session_manager.get_current_session_info(current_time).open_time
+                session_open_time = self.session_manager.get_current_session_info().open_time
             else:
-                session_open_time = self.session_manager.get_previous_session_close(current_time)
+                session_open_time = self.session_manager.get_previous_session_close()
 
             return session_open_time
         
@@ -95,11 +94,12 @@ class OpeningRange:
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 캔들로 업데이트 (호환성용)"""
         try:
-            self.is_initialized = self._initialize_or(candle_data.name)   
-            if self.is_initialized and self._or and 'high' in self._or and 'low' in self._or:
-                print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
-            else:
-                print(f"❌ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 현재 진행 중..")
+            self.target_time = self.time_manager.ensure_utc(candle_data.name)
+            self.is_initialized = self._initialize_or()   
+            # if self.is_initialized and self._or and 'high' in self._or and 'low' in self._or:
+            #     print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
+            # else:
+            #     print(f"❌ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 현재 진행 중..")
         except Exception as e:
             print(f"❌ OR 업데이트 오류: {e}")
             

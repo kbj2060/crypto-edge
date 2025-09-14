@@ -75,18 +75,20 @@ class SessionVPVR:
         # dependencies
         self.time_manager = get_time_manager()
         self.session_manager = get_session_manager()
+        self.target_time = target_time if target_time is not None else self.time_manager.get_current_time()
         self.atr = ATR3M(length=14, target_time=target_time)
+        self.candles = []
 
         # initialize
-        self._initialize_vpvr(target_time)
+        self._initialize_vpvr()
 
     # -----------------------
     # Initialization / Loading
     # -----------------------
-    def _initialize_vpvr(self, target_time: Optional[datetime] = None):
+    def _initialize_vpvr(self):
         """세션 설정 확인 후 초기 데이터 로드 및 bin_size 계산"""
 
-        self._load_lookback_data(target_time)
+        self._load_lookback_data()
 
         # determine initial sample price for bin_size calculation
         if self.price_bins:
@@ -98,20 +100,19 @@ class SessionVPVR:
         # compute and fix bin_size for this session
         self.bin_size = self._calculate_dynamic_bin_size(self._bin_sample_price, force=True)
 
-        self.last_update_time = target_time if target_time is not None else dt.datetime.now(dt.timezone.utc)
+        self.last_update_time = self.target_time
 
         # after initialization, compute vpvr result
         self._update_vpvr_result()
 
-    def _load_lookback_data(self, target_time: Optional[datetime] = None):
+    def _load_lookback_data(self):
         """lookback 기간만큼 과거부터 현재까지 데이터 로딩 (간이 모드)"""
         try:
             hours_needed = max(1, int(self.lookback * 3 / 60))  # heuristic
-            current_time = target_time if target_time is not None else dt.datetime.now(dt.timezone.utc)
             data_manager = get_data_manager()
             df = data_manager.get_data_range(
-                current_time - dt.timedelta(hours=hours_needed),
-                current_time
+                self.target_time - dt.timedelta(hours=hours_needed),
+                self.target_time
             )
 
             if df is None or df.empty:
@@ -121,7 +122,11 @@ class SessionVPVR:
                 df = df.tail(self.lookback)
 
             for timestamp, row in df.iterrows():
-                self._process_candle_data(row, timestamp)
+                # DataFrame의 인덱스(timestamp)를 Series의 name으로 설정
+                row_with_timestamp = row.copy()
+                row_with_timestamp.name = timestamp
+                self.candles.append(row_with_timestamp)
+                self.update_with_candle(row_with_timestamp)
 
             self.processed_candle_count = len(df)
 
@@ -210,96 +215,92 @@ class SessionVPVR:
     # Candle processing
     # -----------------------
     def update_with_candle(self, candle_data: pd.Series):
-        """새로운 캔들 데이터로 VPVR 업데이트 (실시간 경로)"""
-        current_time = candle_data.name
-        session_config = self.session_manager.get_indicator_mode_config(current_time)
-        # self._check_session_reset(session_config)
+        """새로운 캔들 데이터로 VPVR 업데이트 (lookback 기간만큼만 계산)"""
+        self.target_time = self.time_manager.ensure_utc(candle_data.name)
         
-        self.atr.update_with_candle(candle_data)
-
-        # price
-        close_price = float(candle_data.get('close'))
-
-        vol_val = candle_data.get(self.volume_field)
-        quote_volume = float(vol_val)
-
-        bin_key = self._get_price_bin_key(close_price)
-
-        if bin_key not in self.volume_histogram:
-            self.volume_histogram[bin_key] = 0.0
-            if bin_key not in self.price_bins:
-                self.price_bins[bin_key] = (int(math.floor(close_price / self.bin_size)) * self.bin_size + self.bin_size / 2)
-
-        self.volume_histogram[bin_key] += quote_volume
-        self.processed_candle_count += 1
-        self.last_update_time = current_time
-
-        # VPVR 결과 갱신
-        self._update_vpvr_result(current_time)
-        print(f"✅ [{current_time.strftime('%H:%M:%S')}] VPVR 업데이트 POC: {self.cached_result['poc']:.2f} HVN: {self.cached_result['hvn']:.2f} LVN: {self.cached_result['lvn']:.2f}")
-        print(f"✅ [{current_time.strftime('%H:%M:%S')}] ATR 업데이트 {self.atr.current_atr:.2f}")
-
-    def _process_candle_data(self, row: pd.Series, timestamp):
-        """배치 로드 시 캔들 데이터 처리 (update_with_candle과 거의 동일)"""
-        try:
-            try:
-                if hasattr(self.atr, 'update_with_candle'):
-                    self.atr.update_with_candle(row)
-            except Exception:
-                pass
-
-            close_price = float(row.get('close', row.get('price', row.get('last'))))
-            vol_val = row.get(self.volume_field, None)
-            if vol_val is None:
-                vol_val = row.get('volume', row.get('base_volume', 0.0))
-            try:
-                quote_volume = float(vol_val)
-            except Exception:
-                quote_volume = 0.0
-
+        # 새로운 캔들 추가
+        self.candles.append(candle_data)
+        
+        # lookback 기간을 초과하면 오래된 캔들 제거
+        if len(self.candles) > self.lookback:
+            self.candles = self.candles[-self.lookback:]
+        
+        # 전체 히스토그램 초기화 후 lookback 기간만큼 재계산
+        self.volume_histogram.clear()
+        self.price_bins.clear()
+        self.processed_candle_count = 0
+        
+        # lookback 기간의 모든 캔들로 히스토그램 재구성
+        for candle in self.candles:
+            self.atr.update_with_candle(candle)
+            
+            close_price = float(candle.get('close'))
+            vol_val = candle.get(self.volume_field)
+            quote_volume = float(vol_val)
             bin_key = self._get_price_bin_key(close_price)
+
             if bin_key not in self.volume_histogram:
                 self.volume_histogram[bin_key] = 0.0
                 if bin_key not in self.price_bins:
                     self.price_bins[bin_key] = (int(math.floor(close_price / self.bin_size)) * self.bin_size + self.bin_size / 2)
-            self.volume_histogram[bin_key] += quote_volume
 
-        except Exception as e:
-            print(f"❌ 캔들 처리 오류: {e}")
+            self.volume_histogram[bin_key] += quote_volume
+            self.processed_candle_count += 1
+
+        self.last_update_time = self.target_time
+
+        # VPVR 결과 갱신
+        self._update_vpvr_result()
 
     # -----------------------
     # VPVR 계산 (POC/HVN/LVN)
     # -----------------------
-    def _update_vpvr_result(self, target_time: Optional[datetime] = None):
+    def _update_vpvr_result(self):
         """현재 누적된 데이터로 VPVR 결과 업데이트 (개선된 HVN/LVN 계산)"""
         try:
             if not self.volume_histogram:
+                print(f"❌ VPVR 결과 업데이트 오류: 누적된 데이터가 없습니다")
                 self.cached_result = None
                 return
 
             active_bins = {k: v for k, v in self.volume_histogram.items() if v > 0}
             if not active_bins:
+                print(f"❌ VPVR 결과 업데이트 오류: 활성 바이너리가 없습니다")
                 self.cached_result = None
                 return
 
             total_volume = float(sum(active_bins.values()))
             if total_volume <= 0:
+                print(f"❌ VPVR 결과 업데이트 오류: 총 볼륨이 0입니다")
                 self.cached_result = None
                 return
 
             # POC
             poc_bin = max(active_bins, key=active_bins.get)
             poc_price = self.price_bins.get(poc_bin)
+            if poc_price is None:
+                print(f"❌ VPVR 결과 업데이트 오류: POC 가격이 없습니다")
+                self.cached_result = None
+                return
 
             # ratios
             volume_ratios = {k: (v / total_volume) for k, v in active_bins.items()}
             ratios_arr = np.array(list(volume_ratios.values()))
+            if len(ratios_arr) == 0:
+                print(f"❌ VPVR 결과 업데이트 오류: 볼륨 비율이 없습니다")
+                self.cached_result = None
+                return
+
             mean_ratio = float(np.mean(ratios_arr))
             std_ratio = float(np.std(ratios_arr))
 
             # thresholds
             hvn_threshold = mean_ratio + (self.hvn_sigma_factor * std_ratio)
             lvn_threshold = mean_ratio - (self.lvn_sigma_factor * std_ratio)
+            if hvn_threshold is None or lvn_threshold is None:
+                print(f"❌ VPVR 결과 업데이트 오류: HVN/LVN 임계값이 없습니다")
+                self.cached_result = None
+                return
 
             # initial candidates excluding POC
             hvn_candidates = [k for k, r in volume_ratios.items() if (r > hvn_threshold and k != poc_bin)]
@@ -380,12 +381,10 @@ class SessionVPVR:
             if lvn_local:
                 lvn_bin = min(lvn_local, key=lambda k: active_bins.get(k, float('inf')))
             else:
-                # choose smallest volume among filtered
                 lvn_bin = min(lvn_filtered, key=lambda k: active_bins.get(k, float('inf'))) if lvn_filtered else poc_bin
             lvn_price = self.price_bins.get(lvn_bin, poc_price)
 
             # ---------------------------------------------------------------------------------------
-            current_time = target_time if target_time is not None else dt.datetime.now(dt.timezone.utc)
             result = {
                 "poc": poc_price,
                 "poc_bin": poc_bin,
@@ -403,11 +402,11 @@ class SessionVPVR:
                 "hvn_threshold": hvn_threshold,
                 "lvn_threshold": lvn_threshold,
                 "min_vol_threshold": min_vol_threshold,
-                "last_update": current_time.isoformat(),
+                "last_update": self.target_time.isoformat(),
             }
 
             self.cached_result = result
-            self.last_update_time = current_time
+            self.last_update_time = self.target_time
 
         except Exception as e:
             print(f"❌ VPVR 결과 업데이트 오류: {e}")
@@ -422,19 +421,19 @@ class SessionVPVR:
     def _get_processed_candle_count(self) -> int:
         return self.processed_candle_count
 
-    def get_status(self, target_time: Optional[datetime] = None) -> Dict[str, Any]:
+    def get_status(self) -> Dict[str, Any]:
         """현재 VPVR 상태 정보 반환 (POC 포함)"""
         try:
-            session_config = self.session_manager.get_indicator_mode_config(target_time)
+            session_config = self.session_manager.get_indicator_mode_config()
             status = {
                 'is_session_active': session_config.get('use_session_mode', False),
                 'current_session': session_config.get('session_name'),
-                'session_start': (session_config.get('session_start_time').isoformat()
-                                    if isinstance(session_config.get('session_start_time'), dt.datetime)
-                                    else session_config.get('session_start_time')),
+                'session_start': (session_config.get('start_time').isoformat()
+                                    if isinstance(session_config.get('start_time'), dt.datetime)
+                                    else session_config.get('start_time')),
                 'mode': session_config.get('mode'),
                 'data_count': self._get_processed_candle_count(),
-                'last_update': self.last_update_time.isoformat() if self.last_update_time else None,
+                'last_update': self.target_time.isoformat() if self.last_update_time else None,
                 'elapsed_minutes': session_config.get('elapsed_minutes'),
                 'session_status': session_config.get('session_status', 'UNKNOWN'),
                 'bin_size': self.bin_size,

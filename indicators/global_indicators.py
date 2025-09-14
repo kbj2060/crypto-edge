@@ -22,6 +22,8 @@ from indicators.atr import ATR3M
 from indicators.daily_levels import DailyLevels
 from indicators.vwap import SessionVWAP
 from data.data_manager import get_data_manager
+from utils.session_manager import get_session_manager
+from utils.time_manager import get_time_manager
 
 
 class GlobalIndicatorManager:
@@ -38,61 +40,64 @@ class GlobalIndicatorManager:
         self._initialized = False
         self._lock = threading.Lock()  # 스레드 안전성
         self._data_manager = None  # DataManager 인스턴스 (지연 초기화)
+        self.target_time = target_time if target_time is not None else datetime.now(timezone.utc)
+        self.time_manager = get_time_manager(self.target_time)
+        self.session_manager = get_session_manager(self.target_time)
 
         # 지표 설정
         self.indicator_configs = {
             'vpvr': {
                 'class': SessionVPVR,
-                'target_time': target_time,
+                'target_time': self.target_time,
             },
             'atr': {
                 'class': ATR3M,
-                'target_time': target_time,
+                'target_time': self.target_time,
             },
             'daily_levels': {
                 'class': DailyLevels,
-                'target_time': target_time,
+                'target_time': self.target_time,
             },
             'vwap': {
                 'class': SessionVWAP,
-                'target_time': target_time,
+                'target_time': self.target_time,
             },
             'opening_range': {
                 'class': OpeningRange,
-                'target_time': target_time,
+                'target_time': self.target_time,
             }
         }
         
-    def _initialize_indicator(self, name: str, target_time: Optional[datetime] = None):
+    def _initialize_indicator(self, name: str):
         """지표 초기화 - 공통 메서드"""
         try:
             config = self.indicator_configs[name]
             indicator_class = config['class']
-            
+
             if name == 'vpvr':
                 self._indicators[name] = indicator_class(
-                    target_time=target_time,
+                    target_time=self.target_time,
                 )
             elif name == 'atr':
                 self._indicators[name] = indicator_class(
-                    target_time=target_time,
+                    target_time=self.target_time,
                 )
             elif name == 'vwap':
                 self._indicators[name] = indicator_class(
-                    target_time=target_time,
+                    target_time=self.target_time,
                 )
             elif name == 'opening_range':
                 self._indicators[name] = indicator_class(
-                    target_time=target_time,
+                    target_time=self.target_time,
                 )
             elif name == 'daily_levels':
                 self._indicators[name] = indicator_class(
-                    target_time=target_time,
+                    target_time=self.target_time,
                 )
             else:
                 # 기본 초기화 (매개변수 없음)
                 self._indicators[name] = indicator_class(
-                    target_time=target_time,
+                    target_time=self.target_time,
                 )
                 
         except Exception as e:
@@ -101,25 +106,28 @@ class GlobalIndicatorManager:
             print(f"❌ 상세 오류: {traceback.format_exc()}")
             self._indicators[name] = None
 
-    def initialize_indicators(self, target_time: Optional[datetime] = None):
+    def initialize_indicators(self):
         """모든 지표 초기화"""
         with self._lock:
             if self._initialized:
                 print("🔄 전역 지표 이미 초기화됨")
                 return
             
+            self.session_manager = get_session_manager(self.target_time)
+            self.time_manager = get_time_manager(self.target_time)
+            
             try:
                 data_manager = self.get_data_manager()
                 if not data_manager.is_ready():
                     print("🔄 DataManager 준비 안됨")
                     return
-                                
+
                 # 🚀 2단계: 나머지 지표들 초기화 (DataManager 완료 후)
                 print("\n🔥 2단계: 나머지 지표들 초기화 시작...")
                 
                 # 모든 지표를 순차적으로 초기화
                 for indicator_name in self.indicator_configs.keys():
-                    self._initialize_indicator(indicator_name, target_time)
+                    self._initialize_indicator(indicator_name)
                 
                 self._initialized = True
                 print("🎯 모든 전역 지표 초기화 완료!")
@@ -137,27 +145,35 @@ class GlobalIndicatorManager:
         if not self._initialized:
             return
 
+        self.session_manager.update_with_candle(candle_data)
+        self.time_manager.update_with_candle(candle_data)
+        
         # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
         if 'atr' in self._indicators and self._indicators['atr'] is not None:
             self._indicators['atr'].update_with_candle(candle_data)
-        
+            #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]ATR 업데이트 완료: {self._indicators['atr'].get_status().get('atr')} ")
+
         # 2. VPVR 업데이트
         if 'vpvr' in self._indicators and self._indicators['vpvr'] is not None:
             self._indicators['vpvr'].update_with_candle(candle_data)
+            #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]VPVR 업데이트 완료: {self._indicators['vpvr'].get_status().get('poc')} {self._indicators['vpvr'].get_status().get('hvn')} {self._indicators['vpvr'].get_status().get('lvn')}")
         
         # 3. VWAP 업데이트
         if 'vwap' in self._indicators and self._indicators['vwap'] is not None:
             self._indicators['vwap'].update_with_candle(candle_data)
+            #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]VWAP 업데이트 완료: {self._indicators['vwap'].get_status().get('vwap')} {self._indicators['vwap'].get_status().get('vwap_std')}")
         
         # 4. Daily Levels는 자동 업데이트 (어제 데이터이므로)
         if 'daily_levels' in self._indicators and self._indicators['daily_levels'] is not None:
             self._indicators['daily_levels'].update_with_candle(candle_data)
+            #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]Daily Levels 업데이트 완료: {self._indicators['daily_levels'].get_status().get('prev_day_high')} {self._indicators['daily_levels'].get_status().get('prev_day_low')}")
         
         if 'opening_range' in self._indicators and self._indicators['opening_range'] is not None:
             self._indicators['opening_range'].update_with_candle(candle_data)
-            
-        print(f"✅ 전체 지표 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
-        print(f"")
+            #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]Opening Range 업데이트 완료: {self._indicators['opening_range'].get_status().get('high')} {self._indicators['opening_range'].get_status().get('low')}")
+
+        #print(f"✅ 전체 지표 업데이트 완료: {candle_data.name.strftime('%H:%M:%S')}")
+        #print(f"")
         
     def get_indicator(self, name: str):
         """특정 지표 반환"""
@@ -192,7 +208,7 @@ class GlobalIndicatorManager:
 _global_indicator_manager = None
 
 
-def get_global_indicator_manager() -> GlobalIndicatorManager:
+def get_global_indicator_manager(target_time: Optional[datetime] = None) -> GlobalIndicatorManager:
     """
     전역 지표 관리자 인스턴스 반환 (싱글톤 패턴)
     
@@ -202,7 +218,7 @@ def get_global_indicator_manager() -> GlobalIndicatorManager:
     global _global_indicator_manager
     
     if _global_indicator_manager is None:
-        _global_indicator_manager = GlobalIndicatorManager()
+        _global_indicator_manager = GlobalIndicatorManager(target_time)
     
     return _global_indicator_manager
 

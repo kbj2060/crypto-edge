@@ -64,8 +64,8 @@ class BinanceDataCollector:
         # 종료 시간 (현재 시간)
         end_time = int(datetime.now().timestamp() * 1000)
         
-        # 시작 시간 (days_back일 전)
-        start_time = int((datetime.now() - timedelta(days=days_back)).timestamp() * 1000)
+        # 시작 시간 (days_back일 전의 0시 0분)
+        start_time = int((datetime.now() - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
         
         all_data = []
         current_end_time = end_time
@@ -95,9 +95,13 @@ class BinanceDataCollector:
             'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume', 'ignore'
         ])
         
-        # 데이터 타입 변환
-        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms')
-        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms')
+        # 데이터 타입 변환 (UTC 시간)
+        df['timestamp'] = pd.to_datetime(df['timestamp'], unit='ms', utc=True)
+        df['close_time'] = pd.to_datetime(df['close_time'], unit='ms', utc=True)
+        
+        # 한국 시간으로 변환 (선택사항)
+        # df['timestamp'] = df['timestamp'].dt.tz_convert('Asia/Seoul')
+        # df['close_time'] = df['close_time'].dt.tz_convert('Asia/Seoul')
         
         numeric_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_asset_volume', 
                           'number_of_trades', 'taker_buy_base_asset_volume', 'taker_buy_quote_asset_volume']
@@ -129,7 +133,7 @@ def main():
     
     # 수집할 거래쌍과 시간 간격
     symbols = ['ETHUSDC']
-    intervals = [ '1h']
+    intervals = [ '1h', '3m', '15m']
     
     # 수집할 기간 (일)
     days_back = 365  # 1년치 데이터

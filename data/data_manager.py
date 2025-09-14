@@ -118,14 +118,17 @@ class DataManager:
             if len(self.data) > 1000:
                 self.data = self.data.tail(1000)
 
-            print(f"✅ 3분봉 데이터 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+            #print(f"✅ 3분봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
         except Exception as e:
             pass
 
-    def update_with_candle_15m(self, symbol: str = 'ETHUSDC') -> None:
+    def update_with_candle_15m(self, symbol: str = 'ETHUSDC', data: pd.DataFrame = None) -> None:
         # 웹소켓으로 받은 데이터가 아닌 api 로 1개만 받아 추가
-        new = self.dataloader.fetch_data(interval="15m", symbol=symbol, limit=1)
-
+        if data is None:
+            new = self.dataloader.fetch_data(interval="15m", symbol=symbol, limit=1)
+        else:
+            new = data
+            
         self.data_15m = pd.concat([self.data_15m, new], ignore_index=False)
         self.data_15m = self.data_15m[~self.data_15m.index.duplicated(keep='last')]
         self.data_15m = self.data_15m.drop_duplicates()
@@ -133,10 +136,14 @@ class DataManager:
         if len(self.data_15m) > 400:
             self.data_15m = self.data_15m.tail(400)
 
-        print(f"✅ 15분봉 데이터 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+        #print(f"✅ 15분봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
 
-    def update_with_candle_1h(self, symbol: str = 'ETHUSDC') -> None:
-        new = self.dataloader.fetch_data(interval="1h", symbol=symbol, limit=1)
+    def update_with_candle_1h(self, symbol: str = 'ETHUSDC', data: pd.DataFrame = None) -> None:
+        if data is None:
+            new = self.dataloader.fetch_data(interval="1h", symbol=symbol, limit=1)
+        else:
+            new = data
+            
         self.data_1h = pd.concat([self.data_1h, new], ignore_index=False)
         self.data_1h = self.data_1h[~self.data_1h.index.duplicated(keep='last')]
         self.data_1h = self.data_1h.drop_duplicates()
@@ -144,7 +151,7 @@ class DataManager:
         if len(self.data_1h) > 300:
             self.data_1h = self.data_1h.tail(300)
 
-        print(f"✅ 1시간봉 데이터 업데이트 완료: {datetime.now(timezone.utc).strftime('%H:%M:%S')}")
+        #print(f"✅ 1시간봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
     
     def get_dataframe(self) -> pd.DataFrame:
         """전체 3분봉 데이터를 DataFrame으로 반환"""
@@ -206,16 +213,10 @@ class DataManager:
             if self.data.empty:
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
             
-            # 시간대 변환
-            if start_time.tzinfo is None:
-                start_time = self.time_manager.convert_to_utc(start_time)
-            if end_time.tzinfo is None:
-                end_time = self.time_manager.convert_to_utc(end_time)
-            
             # DataFrame 인덱스로 시간 범위 필터링
             mask = (self.data.index >= start_time) & (self.data.index <= end_time)
             filtered_df = self.data[mask]
-            
+
             return filtered_df.copy()
             
         except Exception as e:

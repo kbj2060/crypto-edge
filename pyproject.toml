@@ -24,6 +24,7 @@ dependencies = [
   "flask>=3.1.2",
   "plotly>=6.3.0",
   "flask-socketio>=5.5.1",
+  "gym>=0.26.2",
 ]
 
 [project.scripts]

@@ -33,24 +33,24 @@ class ATR3M:
         self.last_update_time = None
 
         self.time_manager = get_time_manager()
+        self.target_time = target_time if target_time is not None else self.time_manager.get_current_time()
 
-        self._initialize_atr(init_data, target_time)
+        self._initialize_atr()
 
     
-    def _initialize_atr(self, target_time: Optional[datetime] = None):
-        df = self.get_data(target_time)
+    def _initialize_atr(self):
+        df = self.get_data()
         self.current_atr = self.calculate_atr_from_dataframe(df)
 
-
-    def get_data(self, target_time: Optional[datetime] = None) -> pd.DataFrame:
+    def get_data(self) -> pd.DataFrame:
         """OR 시간 정보 반환"""
         data_manager = get_data_manager()
-        target_time = target_time if target_time is not None else self.time_manager.get_current_time()
-        df = data_manager.get_data_range(target_time - timedelta(minutes=self.max_candles * 3), target_time)
+        df = data_manager.get_data_range(self.target_time - timedelta(minutes=self.max_candles * 3), self.target_time)
         return df.copy()
     
     def update_with_candle(self, candle_data: pd.Series):
         """새로운 3분봉으로 ATR 업데이트 - 연속 롤링"""
+        self.target_time = self.time_manager.ensure_utc(candle_data.name)
 
         if hasattr(candle_data, 'name') and candle_data.name is not None:
             timestamp = candle_data.name
@@ -58,7 +58,7 @@ class ATR3M:
             timestamp = candle_data.index[0]
         else:
             # 기본값으로 현재 시간 사용
-            timestamp = dt.datetime.now(dt.timezone.utc)
+            timestamp = self.target_time
 
         # 캔들 데이터 저장
         candle_df = pd.DataFrame([{
@@ -92,7 +92,7 @@ class ATR3M:
             
             # ATR 계산
             self._calculate_atr()
-            self.last_update_time = dt.datetime.now(dt.timezone.utc)
+            self.last_update_time = candle_data.name
     
     def _calculate_atr(self):
         """Wilder's smoothing으로 ATR 계산"""

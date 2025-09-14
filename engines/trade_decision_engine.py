@@ -195,7 +195,6 @@ class TradeDecisionEngine:
         
         # ShortTermSynergyEngine에 신호 전달
         synergy_result = self.short_term_engine.calculate_synergy_score(category_signals)
-        
         # 결과 변환
         action = synergy_result['action']
         net_score = synergy_result['net_score']

@@ -172,7 +172,18 @@ class ShortTermSynergyEngine:
         filtered_signals = [s for s in adjusted_signals if s['score'] >= self.config.min_score_threshold]
         
         if not filtered_signals:
-            return {'action': 'HOLD', 'score': 0.0, 'confidence': 'LOW', 'context': market_context}
+            return {
+                'action': 'HOLD', 
+                'score': 0.0, 
+                'net_score': 0.0,
+                'buy_score': 0.0,
+                'sell_score': 0.0,
+                'confidence': 'LOW', 
+                'market_context': market_context,
+                'conflicts_detected': [],
+                'signals_used': 0,
+                'breakdown': {'buy_signals': [], 'sell_signals': []}
+            }
         
         # 4. 충돌 감지 및 페널티 적용
         conflicts = self.detect_conflicts(filtered_signals)
