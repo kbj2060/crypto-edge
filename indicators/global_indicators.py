@@ -105,11 +105,13 @@ class GlobalIndicatorManager:
         """모든 지표 초기화"""
         with self._lock:
             if self._initialized:
+                print("🔄 전역 지표 이미 초기화됨")
                 return
             
             try:
                 data_manager = self.get_data_manager()
                 if not data_manager.is_ready():
+                    print("🔄 DataManager 준비 안됨")
                     return
                                 
                 # 🚀 2단계: 나머지 지표들 초기화 (DataManager 완료 후)

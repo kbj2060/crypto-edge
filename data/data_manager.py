@@ -11,7 +11,7 @@ import threading
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone, timedelta
 from collections import deque
-from agent_example import DataCfg
+from config.integrated_config import IntegratedConfig
 from utils.time_manager import get_time_manager
 from data.binance_dataloader import BinanceDataLoader
 
@@ -161,10 +161,10 @@ class DataManager:
     def get_init_data(self) -> pd.DataFrame:
         """초기 데이터를 DataFrame으로 반환"""
         try:
-            config = DataCfg()
+            config = IntegratedConfig()
             if self.data.empty:
                 return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
-            return self.data.head(config.ready_num).copy()
+            return self.data.head(config.agent_start_idx).copy()
         except Exception as e:
             return pd.DataFrame(columns=['timestamp', 'open', 'high', 'low', 'close', 'volume', 'quote_volume'])
     

@@ -39,8 +39,8 @@ class ATR3M:
     
     def _initialize_atr(self, target_time: Optional[datetime] = None):
         df = self.get_data(target_time)
-
         self.current_atr = self.calculate_atr_from_dataframe(df)
+
 
     def get_data(self, target_time: Optional[datetime] = None) -> pd.DataFrame:
         """OR 시간 정보 반환"""

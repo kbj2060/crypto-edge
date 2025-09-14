@@ -21,3 +21,5 @@ class IntegratedConfig:
         self.external_server_url = "http://158.180.82.65"  # 외부 서버 URL
         self.external_api_key = None  # 외부 서버 API 키 (필요시 설정)
         self.initial_data_hours = 24  # 초기 데이터 로딩 시 몇 시간 전까지 가져올지
+
+        self.agent_start_idx = 500

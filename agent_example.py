@@ -10,9 +10,9 @@ from datetime import datetime, timedelta
 import json
 from typing import Dict, List, Tuple, Any, Optional
 
-@dataclass
-class DataCfg:
-    ready_num: int = 500
+from config.integrated_config import IntegratedConfig
+from data.data_manager import get_data_manager
+
 
 def load_ethusdc_data():
     """ETHUSDC CSV 데이터 로드 - 3분, 15분, 1시간봉"""
@@ -63,7 +63,8 @@ def generate_signal_data_with_indicators(price_data: pd.DataFrame, price_data_15
     decision_engine = TradeDecisionEngine()
     global_manager = get_global_indicator_manager()
     time_manager = get_time_manager()
-    
+    data_manager = get_data_manager()
+
     signal_data = []
     
     print("🔄 CSV 데이터로 지표 업데이트 및 전략 실행 중...")
@@ -72,9 +73,13 @@ def generate_signal_data_with_indicators(price_data: pd.DataFrame, price_data_15
     print(f"   - 1시간봉: {len(price_data_1h)}개 캔들")
     
     # 최근 데이터부터 처리 (최대 max_periods개)
-    start_idx = DataCfg().ready_num
+    config = IntegratedConfig()
+    start_idx = config.agent_start_idx
+
+    data_manager.load_initial_data(symbol='ETHUSDC', df_3m=price_data[:start_idx], df_15m=price_data_15m[:start_idx], df_1h=price_data_1h[:start_idx])
     global_manager.initialize_indicators(target_time=price_data.iloc[start_idx].name)
-    
+
+    print(global_manager.get_indicator('atr'))
     for i in range(start_idx, len(price_data)):
         # 현재 캔들 데이터
         series_3m = price_data.iloc[i]
@@ -117,7 +122,6 @@ def main_example():
     # price_data = price_data.rename(columns={'timestamp': 'timestamp'})
     
     # 필요한 컬럼만 선택
-    print(price_data)
     
     print(f"📊 가격 데이터 정보:")
     print(f"   - 총 캔들 수: {len(price_data)}개")
