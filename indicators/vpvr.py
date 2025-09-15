@@ -278,12 +278,12 @@ class SessionVPVR:
                 # fallback: sigma 기반으로 찾지 못하면 상위/하위 N개 사용
                 if not hvn_candidates:
                     sorted_desc = sorted(((k, v) for k, v in active_bins.items() if k != poc_bin), 
-                                       key=lambda x: x[1], reverse=True)
+                                        key=lambda x: x[1], reverse=True)
                     hvn_candidates = [k for k, _ in sorted_desc[:self.top_n]]
                 
                 if not lvn_candidates:
                     sorted_asc = sorted(((k, v) for k, v in active_bins.items() if k != poc_bin), 
-                                      key=lambda x: x[1])
+                                        key=lambda x: x[1])
                     lvn_candidates = [k for k, _ in sorted_asc[:self.bottom_n]]
                 
                 # 최종 HVN/LVN 선택
@@ -291,7 +291,7 @@ class SessionVPVR:
                 hvn_price = self.price_bins.get(hvn_bin, poc_price)
                 
                 lvn_bin = (min(lvn_candidates, key=lambda k: active_bins.get(k, float('inf'))) 
-                          if lvn_candidates else poc_bin)
+                            if lvn_candidates else poc_bin)
                 lvn_price = self.price_bins.get(lvn_bin, poc_price)
                 
             else:
@@ -315,7 +315,7 @@ class SessionVPVR:
                 "price_range": [self.price_min, self.price_max],
                 "last_update": self.target_time.isoformat(),
             }
-            
+            print(f"VPVR 결과: {poc_price:.2f}, {hvn_price:.2f}, {lvn_price:.2f}")
             self.last_update_time = self.target_time
             
         except Exception as e:

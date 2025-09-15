@@ -395,14 +395,14 @@ class LVNGoldenPocket:
 
         # 3) Swing & Golden Pocket zone
         swing = self._detect_last_swing(df, self.gp.swing_lookback)
-        # if swing is None:
-        #     print(f"[VPVR] swing detection failed -> no signal (lookback={self.gp.swing_lookback}, df_len={len(df)})")
-        #     return {
-        #         "name": "VPVR",
-        #         "action": "HOLD",   
-        #         "timestamp": self.tm.get_current_time(),
-        #         "score": 0.0,
-        #     }
+        if swing is None:
+            # print(f"[VPVR] swing detection failed -> no signal (lookback={self.gp.swing_lookback}, df_len={len(df)})")
+            return {
+                "name": "VPVR",
+                "action": "HOLD",   
+                "timestamp": self.tm.get_current_time(),
+                "score": 0.0,
+            }
         # else:
         #     print(f"[VPVR] swing detected ✓ (swing={swing})")
             
@@ -414,11 +414,9 @@ class LVNGoldenPocket:
 
         # 4) Volume dry-up
         dryup_result = self._volume_dryup(df, self.gp.dryup_lookback, self.gp.dryup_window, self.gp.dryup_frac, self.gp.dryup_k)
-        # if not dryup_result:
-        #     print(f"[VPVR] volume dry-up failed -> no signal (lookback={self.gp.dryup_lookback}, window={self.gp.dryup_window}, frac={self.gp.dryup_frac}, k={self.gp.dryup_k})")
-        #     return self._no_signal_result()
-        # else:
-        #     print(f"[VPVR] volume dry-up passed ✓")
+        if not dryup_result:
+            # print(f"[VPVR] volume dry-up failed -> no signal (lookback={self.gp.dryup_lookback}, window={self.gp.dryup_window}, frac={self.gp.dryup_frac}, k={self.gp.dryup_k})")
+            return self._no_signal_result()
 
         # 5) Rejection confirmation
                 # --- Extra diagnostics: print GP/LVN/tol and df tail for manual inspection ---
@@ -468,7 +466,7 @@ class LVNGoldenPocket:
                     ok = True
                     break
             if not ok_relaxed:
-                print('[VPVR] all relaxed rejection_confirm attempts failed -> no signal')
+                # print('[VPVR] all relaxed rejection_confirm attempts failed -> no signal')
                 return self._no_signal_result()
 
         # 6) Orders
