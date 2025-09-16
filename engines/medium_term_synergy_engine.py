@@ -226,8 +226,8 @@ class MediumTermSynergyEngine:
         # 2. 상황별 가중치 적용
         adjusted_signals = self.apply_context_weights(signals, market_context)
         
-        # 3. 최소 임계값 필터링 (중기는 0.5 이상)
-        filtered_signals = [s for s in adjusted_signals if s['score'] >= 0.5]
+        # 3. 최소 임계값 필터링 (중기는 0.3 이상으로 완화)
+        filtered_signals = [s for s in adjusted_signals if s['score'] >= 0.3]
         
         if not filtered_signals:
             return self._create_hold_result('MEDIUM_TERM', market_context)

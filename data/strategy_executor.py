@@ -249,10 +249,12 @@ class StrategyExecutor:
         df_3m = self.data_manager.get_latest_data(count=config.lookback_bars)
         result = self.vpvr_micro_strategy.on_kline_close_3m(df_3m)
         
-        if result:
+        if result and result.get('action') != 'HOLD':
             self.signals['VPVR_MICRO'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
+                'entry': result.get('entry'),
+                'stop': result.get('stop'),
                 'timestamp': self.time_manager.get_current_time()
             }
 

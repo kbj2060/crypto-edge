@@ -1,5 +1,6 @@
 import json
 import asyncio
+from datetime import timezone
 import websockets
 import threading
 from typing import Any, Dict, Callable, Optional
@@ -105,7 +106,7 @@ class BinanceWebSocket:
         """다음 3분봉까지 남은 시간 카운트다운"""
         try:
             while self.running:
-                current_time = self.time_manager.get_current_time()
+                current_time = datetime.now(timezone.utc)
                 current_minute = current_time.minute
                 
                 # 다음 3분봉까지 남은 초 계산

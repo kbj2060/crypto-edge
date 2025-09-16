@@ -291,8 +291,8 @@ class FundingRateStrategy:
         
         total_score = _clamp(total_score, 0.0, 1.0)
         
-        # 🔥 최소 점수 체크 (0.4 → 0.25로 완화)
-        min_score_threshold = 0.25
+        # 🔥 최소 점수 체크 (0.25 → 0.15로 더 완화)
+        min_score_threshold = 0.15
         if total_score < min_score_threshold:
             if self.cfg.debug:
                 print(f"[FUNDING_RATE] 점수 부족: {total_score:.3f} < {min_score_threshold}")

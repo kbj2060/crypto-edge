@@ -60,7 +60,7 @@ class VPVRMicro:
     @staticmethod
     def compute_vpvr(df: pd.DataFrame, n_bins: int = 64):
         """
-        Volume Profile Volume Range 계산
+        Volume Profile Volume Range 계산 - 개선된 버전
         
         Returns:
             bins: 가격 구간 배열
@@ -69,19 +69,37 @@ class VPVRMicro:
         """
         prices = df['close'].astype(float).values
         vols = df['quote_volume'].astype(float).values
+        
         if len(prices) == 0:
             return None, None, None
+            
         p_min, p_max = float(np.min(prices)), float(np.max(prices))
+        
+        # 가격 범위가 너무 작으면 확장
+        price_range = p_max - p_min
+        if price_range < p_min * 0.001:  # 0.1% 미만이면
+            expansion = p_min * 0.002  # 0.2% 확장
+            p_min = max(0, p_min - expansion)
+            p_max = p_max + expansion
+        
         if p_max == p_min:
             return None, None, None
+            
         bins = np.linspace(p_min, p_max, n_bins + 1)
         vol_hist = np.zeros(n_bins)
         bin_idx = np.digitize(prices, bins) - 1
         bin_idx = np.clip(bin_idx, 0, n_bins - 1)
+        
         for i, b in enumerate(bin_idx):
             vol_hist[b] += vols[i]
+        
+        # POC 계산 - 더 안정적
+        if np.sum(vol_hist) == 0:
+            return None, None, None
+            
         poc_idx = int(np.argmax(vol_hist))
         poc_price = float((bins[poc_idx] + bins[poc_idx + 1]) / 2.0)
+        
         return bins, vol_hist, poc_price
 
     def on_kline_close_3m(self, df_3m: pd.DataFrame) -> Dict[str, Any]:
@@ -138,17 +156,27 @@ class VPVRMicro:
             if within or retest:
                 last_close = recent_close
                 
-                # 방향 결정
+                # 방향 결정 - 개선된 로직
                 if self.config.side_bias == 'LONG':
                     action, score, conf = 'BUY', 0.8, 0.7
                 elif self.config.side_bias == 'SHORT':
                     action, score, conf = 'SELL', 0.8, 0.7
                 else:
-                    # POC 대비 현재가 위치로 방향 결정
-                    if last_close >= poc:
+                    # POC 근처에서의 가격 움직임과 거래량 패턴으로 방향 결정
+                    price_diff_pct = (last_close - poc) / poc
+                    
+                    # POC 근처 (±0.5% 이내)에서는 중립
+                    if abs(price_diff_pct) <= 0.005:
+                        action, score, conf = 'HOLD', 0.0, 0.0
+                    # POC 위에서 강한 상승 모멘텀이 있으면 BUY
+                    elif price_diff_pct > 0.005 and last_close > df_3m['close'].iloc[-2]:
                         action, score, conf = 'BUY', 0.75, 0.6
-                    else:
+                    # POC 아래에서 강한 하락 모멘텀이 있으면 SELL  
+                    elif price_diff_pct < -0.005 and last_close < df_3m['close'].iloc[-2]:
                         action, score, conf = 'SELL', 0.75, 0.6
+                    # 그 외에는 중립
+                    else:
+                        action, score, conf = 'HOLD', 0.0, 0.0
                 
                 entry = last_close
                 
@@ -165,6 +193,10 @@ class VPVRMicro:
                     print(f"[VPVR_MICRO] 신호 생성: {action} at {entry:.4f}, POC={poc:.4f}, "
                           f"within={within}, retest={retest}, vol_sum={vol_sum:.1f}, ATR={atr:.4f}")
 
+        # HOLD 신호인 경우 None 반환 (다른 전략들이 처리하도록)
+        if action == 'HOLD':
+            return None
+            
         return {
             'name': 'VPVR_MICRO',
             'action': action,

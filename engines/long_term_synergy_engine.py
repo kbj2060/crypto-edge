@@ -329,8 +329,8 @@ class LongTermSynergyEngine:
         # 2. 상황별 가중치 적용
         adjusted_signals = self.apply_context_weights(signals, market_context)
         
-        # 3. 최소 임계값 필터링 (장기는 0.6 이상)
-        filtered_signals = [s for s in adjusted_signals if s['score'] >= 0.6]
+        # 3. 최소 임계값 필터링 (장기는 0.4 이상으로 완화)
+        filtered_signals = [s for s in adjusted_signals if s['score'] >= 0.4]
         
         if not filtered_signals:
             return self._create_hold_result('LONG_TERM', market_context)

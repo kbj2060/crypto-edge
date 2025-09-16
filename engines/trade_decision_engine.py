@@ -53,7 +53,7 @@ class TradeDecisionEngine:
         *,
         account_balance: float = 10000.0,
         base_risk_pct: float = 0.005,
-        open_threshold: float = 0.25,
+        open_threshold: float = 0.15,  # 0.25 -> 0.15 (완화)
         immediate_threshold: float = 0.75,
         confirm_threshold: float = 0.3,
         confirm_window_sec: int = 180,

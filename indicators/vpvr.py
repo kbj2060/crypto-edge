@@ -63,8 +63,8 @@ class SessionVPVR:
 
     def _calculate_simple_bin_size(self, price_data: List[float]) -> float:
         """
-        간단한 bin_size 계산
-        가격 범위를 원하는 bin 개수로 나누는 방식
+        개선된 bin_size 계산
+        가격 범위와 ATR을 고려한 안정적인 bin_size
         """
         if not price_data or len(price_data) < 2:
             current_price = price_data[0] if price_data else 50000
@@ -77,19 +77,37 @@ class SessionVPVR:
         if price_range <= 0:
             return price_min * 0.001 if price_min > 0 else 1.0
         
-        # 범위를 bin 개수로 나누기
-        bin_size = price_range / self.bins
+        # 개선: ATR 기반 bin_size 계산
+        try:
+            # 간단한 ATR 계산
+            prices = np.array(price_data)
+            if len(prices) > 1:
+                high_low = np.diff(prices)
+                atr_estimate = np.mean(np.abs(high_low)) * 0.5
+                atr_based_size = atr_estimate * 2  # ATR의 2배
+            else:
+                atr_based_size = price_min * 0.002
+        except:
+            atr_based_size = price_min * 0.002
         
-        # 최소 크기 보장
-        min_bin_size = price_min * 0.0001 if price_min > 0 else 0.01
+        # 범위 기반 bin_size
+        range_based_size = price_range / self.bins
         
-        return max(bin_size, min_bin_size)
+        # 두 방법 중 더 작은 값 선택 (더 세밀한 분석)
+        bin_size = min(range_based_size, atr_based_size)
+        
+        # 최소/최대 크기 제한
+        min_bin_size = price_min * 0.0005 if price_min > 0 else 0.01
+        max_bin_size = price_min * 0.01 if price_min > 0 else 1.0
+        
+        return max(min_bin_size, min(bin_size, max_bin_size))
 
     def _get_price_bin_key(self, price: float) -> str:
-        """가격을 bin 키로 변환"""
+        """가격을 bin 키로 변환 - 개선된 버전"""
         if self.bin_size is None or self.bin_size <= 0:
             raise ValueError("bin_size가 초기화되지 않았습니다")
         
+        # price_min 초기화 (한 번만 설정)
         if self.price_min is None:
             self.price_min = price
         
@@ -97,18 +115,22 @@ class SessionVPVR:
         relative_price = price - self.price_min
         bin_index = int(math.floor(relative_price / self.bin_size))
         
-        # 음수 인덱스 처리
+        # 음수 인덱스 처리 - price_min을 동적으로 변경하지 않음
         if bin_index < 0:
-            self.price_min = price
-            bin_index = 0
+            # 새로운 price_min으로 재계산하되, 기존 데이터는 유지
+            new_price_min = price
+            relative_price = price - new_price_min
+            bin_index = int(math.floor(relative_price / self.bin_size))
+            # price_min은 변경하지 않고 bin_index만 조정
+            bin_index = max(0, bin_index)
         
         bin_key = f"bin_{bin_index}"
         
-        # bin center 계산
+        # bin center 계산 - 안정적인 계산
         center_price = self.price_min + (bin_index * self.bin_size) + (self.bin_size / 2)
         
-        if bin_key not in self.price_bins:
-            self.price_bins[bin_key] = center_price
+        # bin center 저장 (항상 업데이트)
+        self.price_bins[bin_key] = center_price
         
         return bin_key
 
@@ -254,7 +276,12 @@ class SessionVPVR:
             
             # POC (Point of Control) - 가장 높은 볼륨
             poc_bin = max(active_bins, key=active_bins.get)
-            poc_price = self.price_bins.get(poc_bin, 0)
+            poc_price = self.price_bins.get(poc_bin)
+            
+            # POC 가격이 없으면 현재 가격 사용
+            if poc_price is None:
+                # 현재 가격 추정 (가장 최근 캔들의 종가)
+                poc_price = float(self.candles[-1].get('close'))
             
             # HVN/LVN 계산
             volume_ratios = {k: (v / total_volume) for k, v in active_bins.items()}

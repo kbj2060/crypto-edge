@@ -11,9 +11,9 @@ class SynergyConfig:
     # 충돌 페널티
     conflict_penalties: Dict[str, float] = None
     
-    # 최소 임계값
-    min_score_threshold: float = 0.6
-    min_net_threshold: float = 0.15
+    # 최소 임계값 - 완화
+    min_score_threshold: float = 0.3  # 0.6 -> 0.3 (완화)
+    min_net_threshold: float = 0.1   # 0.15 -> 0.1 (완화)
     
     # 시너지 보너스
     consensus_bonus: float = 0.2
