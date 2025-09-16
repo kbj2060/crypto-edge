@@ -61,57 +61,70 @@ class TradingEnvironment(gym.Env):
         return 56
     
     def _extract_signal_features(self, signals: Dict) -> np.ndarray:
-        """신호 데이터에서 특성 추출"""
+        """신호 데이터에서 특성 추출 (평면화된 parquet 데이터 구조에 맞춤)"""
         features = []
         
-        # 각 카테고리별 특성 추출
-        for category in ['SHORT_TERM', 'MEDIUM_TERM', 'LONG_TERM']:
-            if category in signals['decisions']:
-                decision = signals['decisions'][category]
-                
-                # 기본 특성
-                features.extend([
-                    1.0 if decision['action'] == 'LONG' else (-1.0 if decision['action'] == 'SHORT' else 0.0),
-                    float(decision['net_score']),
-                    decision['leverage'] / 20.0,  # 정규화
-                    decision['max_holding_minutes'] / 1440.0,  # 정규화
-                ])
-                
-                # 신호 강도 특성
-                meta = decision['meta']['synergy_meta']
-                features.extend([
-                    float(meta['buy_score']) if 'buy_score' in meta else 0.0,
-                    float(meta['sell_score']) if 'sell_score' in meta else 0.0,
-                    1.0 if meta['confidence'] == 'HIGH' else (0.5 if meta['confidence'] == 'MEDIUM' else 0.0),
-                    len(meta.get('conflicts_detected', [])) / 5.0,  # 정규화
-                ])
-            else:
-                features.extend([0.0] * 8)
+        # 각 카테고리별 특성 추출 (평면화된 키 사용)
+        for category_prefix in ['short_term_', 'medium_term_', 'long_term_']:
+            # 기본 특성
+            action_key = f'{category_prefix}action'
+            net_score_key = f'{category_prefix}net_score'
+            leverage_key = f'{category_prefix}leverage'
+            max_holding_key = f'{category_prefix}max_holding_minutes'
+            
+            # 액션 변환
+            action = signals.get(action_key, 'HOLD')
+            action_val = 1.0 if action == 'LONG' else (-1.0 if action == 'SHORT' else 0.0)
+            
+            features.extend([
+                action_val,
+                float(signals.get(net_score_key, 0.0)),
+                float(signals.get(leverage_key, 1.0)) / 20.0,  # 정규화
+                float(signals.get(max_holding_key, 60.0)) / 1440.0,  # 정규화
+            ])
+            
+            # 신호 강도 특성
+            buy_score_key = f'{category_prefix}buy_score'
+            sell_score_key = f'{category_prefix}sell_score'
+            confidence_key = f'{category_prefix}confidence'
+            signals_used_key = f'{category_prefix}signals_used'
+            
+            confidence = signals.get(confidence_key, 'LOW')
+            confidence_val = 1.0 if confidence == 'HIGH' else (0.5 if confidence == 'MEDIUM' else 0.0)
+            
+            features.extend([
+                float(signals.get(buy_score_key, 0.0)),
+                float(signals.get(sell_score_key, 0.0)),
+                confidence_val,
+                float(signals.get(signals_used_key, 0.0)) / 5.0,  # 정규화
+            ])
         
-        # 전체 갈등 정보
-        conflicts = signals['conflicts']
+        # 갈등 정보 (간단한 휴리스틱으로 추정)
+        long_actions = sum(1 for prefix in ['short_term_', 'medium_term_', 'long_term_'] 
+                          if signals.get(f'{prefix}action') == 'LONG')
+        short_actions = sum(1 for prefix in ['short_term_', 'medium_term_', 'long_term_'] 
+                           if signals.get(f'{prefix}action') == 'SHORT')
+        
         features.extend([
-            1.0 if conflicts['has_conflicts'] else 0.0,
-            len(conflicts['long_categories']) / 3.0,
-            len(conflicts['short_categories']) / 3.0,
-            signals['meta']['active_positions'] / 3.0,
+            1.0 if long_actions > 0 and short_actions > 0 else 0.0,  # 갈등 존재
+            long_actions / 3.0,  # 정규화
+            short_actions / 3.0,  # 정규화
+            0.0,  # active_positions (데이터에 없음)
         ])
         
-        # 개별 전략 점수 (상위 6개만)
-        all_strategies = {}
-        for category_data in signals['decisions'].values():
-            all_strategies.update(category_data['raw'])
-        
+        # 개별 전략 점수 (raw_ 접두사 사용)
         strategy_scores = []
-        for strategy_name in ['VWAP_PINBALL', 'LIQUIDITY_GRAB', 'ZSCORE_MEAN_REVERSION', 
-                             'SUPPORT_RESISTANCE', 'EMA_CONFLUENCE', 'ICHIMOKU']:
-            if strategy_name in all_strategies:
-                score = all_strategies[strategy_name]['score']
-                action = all_strategies[strategy_name]['action']
-                action_val = 1.0 if action == 'BUY' else (-1.0 if action == 'SELL' else 0.0)
-                strategy_scores.extend([score, action_val])
-            else:
-                strategy_scores.extend([0.0, 0.0])
+        strategy_names = ['vwap_pinball', 'liquidity_grab', 'zscore_mean_reversion', 
+                         'support_resistance', 'ema_confluence', 'ichimoku']
+        
+        for strategy_name in strategy_names:
+            score_key = f'short_term_raw_{strategy_name}_score'
+            action_key = f'short_term_raw_{strategy_name}_action'
+            
+            score = float(signals.get(score_key, 0.0))
+            action = signals.get(action_key, 'HOLD')
+            action_val = 1.0 if action == 'BUY' else (-1.0 if action == 'SELL' else 0.0)
+            strategy_scores.extend([score, action_val])
         
         features.extend(strategy_scores[:12])  # 6개 전략 * 2 = 12개
         
@@ -145,44 +158,66 @@ class TradingEnvironment(gym.Env):
         
         # RSI
         delta = close.diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
-        rs = gain / loss
+        gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
+        rs = gain / (loss + 1e-8)  # 0으로 나누기 방지
         rsi = 100 - (100 / (1 + rs))
-        features.append(rsi.iloc[-1] / 100.0 if not pd.isna(rsi.iloc[-1]) else 0.5)
+        features.append(rsi.iloc[-1] / 100.0 if not pd.isna(rsi.iloc[-1]) and not np.isinf(rsi.iloc[-1]) else 0.5)
         
         # 볼린저 밴드
-        sma = close.rolling(window=20).mean()
-        std = close.rolling(window=20).std()
+        sma = close.rolling(window=20, min_periods=1).mean()
+        std = close.rolling(window=20, min_periods=1).std()
         bb_upper = sma + (std * 2)
         bb_lower = sma - (std * 2)
-        bb_position = (close.iloc[-1] - bb_lower.iloc[-1]) / (bb_upper.iloc[-1] - bb_lower.iloc[-1])
-        features.append(bb_position if not pd.isna(bb_position) else 0.5)
+        bb_width = bb_upper.iloc[-1] - bb_lower.iloc[-1]
+        if bb_width > 1e-8:  # 0으로 나누기 방지
+            bb_position = (close.iloc[-1] - bb_lower.iloc[-1]) / bb_width
+            features.append(bb_position if not pd.isna(bb_position) and not np.isinf(bb_position) else 0.5)
+        else:
+            features.append(0.5)
         
         # 이동평균
         for window in [5, 10, 20]:
-            ma = close.rolling(window=window).mean()
-            ma_ratio = close.iloc[-1] / ma.iloc[-1] - 1
-            features.append(ma_ratio if not pd.isna(ma_ratio) else 0.0)
+            ma = close.rolling(window=window, min_periods=1).mean()
+            ma_value = ma.iloc[-1]
+            if ma_value > 1e-8:  # 0으로 나누기 방지
+                ma_ratio = close.iloc[-1] / ma_value - 1
+                features.append(ma_ratio if not pd.isna(ma_ratio) and not np.isinf(ma_ratio) else 0.0)
+            else:
+                features.append(0.0)
         
         # 거래량 지표
+        volume_mean = volume.mean()
+        volume_ratio = volume.iloc[-1] / volume_mean - 1 if volume_mean > 1e-8 else 0.0
+        volatility = (high.iloc[-1] - low.iloc[-1]) / close.iloc[-1] if close.iloc[-1] > 1e-8 else 0.0
+        
         features.extend([
-            volume.iloc[-1] / volume.mean() - 1,  # 거래량 비율
-            (high.iloc[-1] - low.iloc[-1]) / close.iloc[-1],  # 변동성
+            volume_ratio if not pd.isna(volume_ratio) and not np.isinf(volume_ratio) else 0.0,
+            volatility if not pd.isna(volatility) and not np.isinf(volatility) else 0.0,
         ])
         
         # 가격 위치
         max_high = high.max()
         min_low = low.min()
-        price_position = (close.iloc[-1] - min_low) / (max_high - min_low)
-        features.append(price_position if not pd.isna(price_position) else 0.5)
+        price_range = max_high - min_low
+        if price_range > 1e-8:  # 0으로 나누기 방지
+            price_position = (close.iloc[-1] - min_low) / price_range
+            features.append(price_position if not pd.isna(price_position) and not np.isinf(price_position) else 0.5)
+        else:
+            features.append(0.5)
         
         # 추가 기술적 지표들
+        def safe_ratio(numerator, denominator):
+            if abs(denominator) > 1e-8:
+                ratio = numerator / denominator
+                return ratio if not pd.isna(ratio) and not np.isinf(ratio) else 0.0
+            return 0.0
+        
         features.extend([
-            (close.iloc[-1] - close.iloc[-5]) / close.iloc[-5],  # 5기간 수익률
-            (close.iloc[-1] - close.iloc[-10]) / close.iloc[-10],  # 10기간 수익률
-            (high.iloc[-5:].max() - close.iloc[-1]) / close.iloc[-1],  # 최근 고점과 거리
-            (close.iloc[-1] - low.iloc[-5:].min()) / close.iloc[-1],  # 최근 저점과 거리
+            safe_ratio(close.iloc[-1] - close.iloc[-5], close.iloc[-5]),  # 5기간 수익률
+            safe_ratio(close.iloc[-1] - close.iloc[-10], close.iloc[-10]),  # 10기간 수익률
+            safe_ratio(high.iloc[-5:].max() - close.iloc[-1], close.iloc[-1]),  # 최근 고점과 거리
+            safe_ratio(close.iloc[-1] - low.iloc[-5:].min(), close.iloc[-1]),  # 최근 저점과 거리
         ])
         
         return np.array(features[:20], dtype=np.float32)
@@ -231,8 +266,9 @@ class TradingEnvironment(gym.Env):
         # 가격 특성
         price_features = self._extract_price_features(self.current_step)
         
-        # 신호 특성
-        signal_features = self._extract_signal_features(self.signal_data[self.current_step])
+        # 신호 특성 - parquet 데이터는 딕셔너리 리스트
+        current_signal = self.signal_data[self.current_step]
+        signal_features = self._extract_signal_features(current_signal)
         
         # 포트폴리오 상태
         portfolio_features = self._get_portfolio_state()
@@ -299,8 +335,8 @@ class TradingEnvironment(gym.Env):
             reward += position_pnl * 100  # 스케일링
         
         # 2. 신호 방향성과 일치도 보상
-        signals = self.signal_data[self.current_step]
-        signal_alignment = self._calculate_signal_alignment(position_change, signals)
+        current_signal = self.signal_data[self.current_step]
+        signal_alignment = self._calculate_signal_alignment(position_change, current_signal)
         reward += signal_alignment * 10
         
         # 3. 리스크 관리 보상
@@ -322,15 +358,22 @@ class TradingEnvironment(gym.Env):
         return reward
     
     def _calculate_signal_alignment(self, position_change: float, signals: Dict) -> float:
-        """신호와 액션 일치도 계산"""
+        """신호와 액션 일치도 계산 (평면화된 parquet 데이터 구조에 맞춤)"""
         alignment_score = 0.0
         
-        for category, decision in signals['decisions'].items():
-            if decision['action'] == 'LONG' and position_change > 0:
-                alignment_score += abs(decision['net_score'])
-            elif decision['action'] == 'SHORT' and position_change < 0:
-                alignment_score += abs(decision['net_score'])
-            elif decision['action'] == 'HOLD' and abs(position_change) < 0.1:
+        # 각 카테고리별로 확인
+        for category_prefix in ['short_term_', 'medium_term_', 'long_term_']:
+            action_key = f'{category_prefix}action'
+            net_score_key = f'{category_prefix}net_score'
+            
+            action = signals.get(action_key, 'HOLD')
+            net_score = float(signals.get(net_score_key, 0.0))
+            
+            if action == 'LONG' and position_change > 0:
+                alignment_score += abs(net_score)
+            elif action == 'SHORT' and position_change < 0:
+                alignment_score += abs(net_score)
+            elif action == 'HOLD' and abs(position_change) < 0.1:
                 alignment_score += 0.1
         
         return alignment_score / 3  # 3개 카테고리로 정규화
@@ -509,11 +552,13 @@ class CryptoRLAgent:
             return
         
         batch = random.sample(self.memory, self.batch_size)
-        states = torch.FloatTensor([e.state for e in batch]).to(self.device)
+        
+        # numpy 배열로 먼저 변환한 후 텐서로 변환 (성능 최적화)
+        states = torch.FloatTensor(np.array([e.state for e in batch])).to(self.device)
         actions = [e.action for e in batch]
-        rewards = torch.FloatTensor([e.reward for e in batch]).to(self.device)
-        next_states = torch.FloatTensor([e.next_state for e in batch]).to(self.device)
-        dones = torch.BoolTensor([e.done for e in batch]).to(self.device)
+        rewards = torch.FloatTensor(np.array([e.reward for e in batch])).to(self.device)
+        next_states = torch.FloatTensor(np.array([e.next_state for e in batch])).to(self.device)
+        dones = torch.tensor(np.array([bool(e.done) for e in batch]), dtype=torch.bool).to(self.device)
         
         # 현재 Q값
         current_position_q, current_leverage_q, current_holding_q = self.q_network(states)
@@ -640,9 +685,9 @@ def train_rl_agent(price_data: pd.DataFrame, signal_data: List[Dict],
         if episode % 10 == 0:
             agent.update_target_network()
         
-        # 진행 상황 출력
-        if episode % 50 == 0:
-            avg_reward = np.mean(episode_rewards[-50:])
+        # 진행 상황 출력 (10 에피소드마다)
+        if episode % 10 == 0:
+            avg_reward = np.mean(episode_rewards[-10:]) if len(episode_rewards) >= 10 else np.mean(episode_rewards)
             print(f"Episode {episode}, Average Reward: {avg_reward:.2f}, "
                   f"Epsilon: {agent.epsilon:.3f}, Balance: {info['balance']:.2f}, "
                   f"Win Rate: {info['win_rate']:.3f}")
@@ -836,16 +881,23 @@ def generate_signal_data_with_indicators(price_data: pd.DataFrame, price_data_15
                 
         except Exception as e:
             print(f"❌ 신호 생성 중 오류 (인덱스 {i}): {e}")
-            # 오류 발생 시 기본 신호 생성
-            signal_data.append({
-                'decisions': {
-                    'SHORT_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 60, 'raw': {}, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0, 'conflicts_detected': []}}},
-                    'MEDIUM_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 240, 'raw': {}, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0, 'conflicts_detected': []}}},
-                    'LONG_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 1440, 'raw': {}, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0, 'conflicts_detected': []}}}
-                },
-                'conflicts': {'has_conflicts': False, 'long_categories': [], 'short_categories': []},
-                'meta': {'active_positions': 0}
-            })
+            # 오류 발생 시 기본 신호 생성 (평면화된 구조)
+            default_signal = {}
+            
+            # 각 카테고리별 기본값 설정
+            for category_prefix in ['short_term_', 'medium_term_', 'long_term_']:
+                default_signal.update({
+                    f'{category_prefix}action': 'HOLD',
+                    f'{category_prefix}net_score': 0.0,
+                    f'{category_prefix}leverage': 1,
+                    f'{category_prefix}max_holding_minutes': 60 if 'short' in category_prefix else (240 if 'medium' in category_prefix else 1440),
+                    f'{category_prefix}buy_score': 0.0,
+                    f'{category_prefix}sell_score': 0.0,
+                    f'{category_prefix}confidence': 'LOW',
+                    f'{category_prefix}signals_used': 0,
+                })
+            
+            signal_data.append(default_signal)
     
     print(f"✅ 신호 데이터 생성 완료: {len(signal_data)}개")
     return signal_data

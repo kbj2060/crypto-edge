@@ -4,6 +4,7 @@
 실시간 청산 전략 + 세션 기반 전략 + 고급 청산 전략을 활용합니다.
 """
 
+from datetime import datetime, timezone
 import time
 import pandas as pd
 from core.trader_core import TraderCore
@@ -20,7 +21,7 @@ class IntegratedSmartTrader:
         self.running = False
         
         # 핵심 컴포넌트 초기화
-        self.global_manager = get_global_indicator_manager()
+        self.global_manager = get_global_indicator_manager(target_time=datetime.now(timezone.utc))
         self.bucket_aggregator = None
         
         # 청산 버킷 관리 (60초 단위)

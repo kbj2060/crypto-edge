@@ -8,6 +8,7 @@ from datetime import datetime
 import pandas as pd
 
 # 리팩토링된 컴포넌트들
+from agent.live_trade_agent import LiveTradingAgent
 from data.strategy_executor import StrategyExecutor
 from data.candle_creator import CandleCreator
 from data.event_manager import EventManager
@@ -65,6 +66,7 @@ class BinanceWebSocket:
 
         # 카운트다운 태스크
         self.countdown_task = None
+        self.agent = LiveTradingAgent(model_path='agent/final_optimized_model.pth')
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
@@ -188,7 +190,8 @@ class BinanceWebSocket:
                 
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals)
-        
+        agent_decision = self.agent.make_trading_decision(signals, series_3m['close'])
+        print(agent_decision)
         # Decision 로그에 저장
         self.decision_logger.log_decision(decision)
         
