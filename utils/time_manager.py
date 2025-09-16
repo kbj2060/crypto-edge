@@ -74,11 +74,11 @@ class TimeManager:
             if isinstance(timestamp, datetime):
                 return timestamp
             elif isinstance(timestamp, (int, float)):
-                return datetime.fromtimestamp(timestamp, tz=timezone.utc)
+                return datetime.fromtimestamp(timestamp/1000, tz=timezone.utc)
             else:
-                return self.get_current_time()
+                return datetime.now(timezone.utc)
         except Exception:
-            return self.get_current_time()
+            return datetime.now(timezone.utc)
     
     def is_midnight_time(self) -> bool:
         """밤 12시인지 확인"""

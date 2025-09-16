@@ -6,6 +6,7 @@
 - 기타 트레이딩 관련 표시 함수들
 """
 
+from datetime import datetime, timezone
 from typing import Dict, Any
 
 
@@ -25,7 +26,7 @@ def print_decision_interpretation(decision: dict) -> None:
 
     # Header
     print("=" * 80)
-    print(f"🕒 Multi-Category Decision @ {meta.get('timestamp_utc', 'unknown')}")
+    print(f"🕒 Multi-Category Decision @ {datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"📊 활성 포지션: {meta.get('active_positions', 0)}개 / {meta.get('total_categories', 0)}개 카테고리")
     print("=" * 80)
 

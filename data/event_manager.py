@@ -1,5 +1,5 @@
 from typing import List
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from utils.time_manager import get_time_manager
 from utils.investing_crawler import fetch_us_high_events_today
 
@@ -24,7 +24,7 @@ class EventManager:
 
     def is_in_event_blocking_period(self) -> bool:
         """이벤트 발생 시간 ±30분 동안인지 체크"""
-        current_time = self.time_manager.get_current_time()
+        current_time = datetime.now(timezone.utc)
         
         for event_time in self.events:
             # 이벤트 시간 ±30분 범위 체크
