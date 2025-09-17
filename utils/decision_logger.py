@@ -58,9 +58,9 @@ class DecisionLogger:
             if log_file.exists():
                 try:
                     existing_df = pd.read_parquet(log_file)
-                    # timestamp 컬럼을 datetime 타입으로 변환
+                    # timestamp 컬럼을 datetime 타입 (UTC)으로 변환
                     if 'timestamp' in existing_df.columns:
-                        existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'])
+                        existing_df['timestamp'] = pd.to_datetime(existing_df['timestamp'], utc=True)
                     self.decision_buffer = existing_df.to_dict('records')
                     print(f"📂 기존 로그 파일 로드: {log_file} ({len(self.decision_buffer)}개 기록)")
                 except Exception as e:
@@ -100,9 +100,9 @@ class DecisionLogger:
             # DataFrame으로 변환
             df = pd.DataFrame(self.decision_buffer)
             
-            # timestamp 컬럼을 datetime 타입으로 명시적 변환
+            # timestamp 컬럼을 datetime 타입 (UTC)으로 명시적 변환
             if 'timestamp' in df.columns:
-                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
             
             # Parquet으로 저장 (datetime 타입 보존)
             log_file = self._get_log_file_path()
@@ -121,9 +121,9 @@ class DecisionLogger:
             log_file = self._get_log_file_path()
             if log_file.exists():
                 df = pd.read_parquet(log_file)
-                # timestamp 컬럼을 datetime 타입으로 변환
+                # timestamp 컬럼을 datetime 타입 (UTC)으로 변환
                 if 'timestamp' in df.columns:
-                    df['timestamp'] = pd.to_datetime(df['timestamp'])
+                    df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
                 return df
             else:
                 return pd.DataFrame()

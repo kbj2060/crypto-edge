@@ -1,4 +1,4 @@
-# 실시간 트레이딩 시스템 - 훈련된 에이전트로 실제 거래 결정
+# 수정된 실시간 트레이딩 시스템 - 기존 신호 데이터 활용
 
 import numpy as np
 import pandas as pd
@@ -10,7 +10,7 @@ import json
 from agent.ai import ImprovedCryptoRLAgent
 
 class LiveTradingAgent:
-    """실시간 거래를 위한 에이전트 래퍼"""
+    """실시간 거래를 위한 에이전트 - 기존 신호 데이터 활용"""
     
     def __init__(self, model_path: str, initial_balance: float = 10000.0):
         """
@@ -34,9 +34,11 @@ class LiveTradingAgent:
         self.winning_trades = 0
         self.max_drawdown = 0.0
         self.peak_balance = initial_balance
+        self.consecutive_losses = 0
         
-        # 가격 히스토리 (상태 계산용)
-        self.price_history = []
+        # 가격 정보 (최소한만 유지)
+        self.current_price = 0.0
+        self.last_candle = None
         
         # 훈련된 에이전트 로드
         self.agent = self._load_trained_agent()
@@ -63,22 +65,15 @@ class LiveTradingAgent:
             print(f"❌ 에이전트 로드 실패: {e}")
             return None
     
-    def update_price(self, ohlcv_data: Dict[str, float]):
-        """새로운 가격 데이터 업데이트"""
-        self.price_history.append(ohlcv_data)
-        
-        # 최대 100개까지만 유지 (메모리 절약)
-        if len(self.price_history) > 100:
-            self.price_history.pop(0)
-    
-    def make_trading_decision(self, current_signals: Dict[str, Any], 
-                            current_price: float) -> Dict[str, Any]:
+    def make_trading_decision(self, 
+                            signal_data: Dict[str, Any], 
+                            current_candle: Dict[str, float]) -> Dict[str, Any]:
         """
         실시간 거래 결정 생성
         
         Args:
-            current_signals: 당신의 전략에서 생성된 최신 신호
-            current_price: 현재 가격
+            signal_data: 전략에서 생성된 신호 (parquet 형태 또는 중첩 딕셔너리)
+            current_candle: 현재 캔들 데이터 {'open', 'high', 'low', 'close', 'volume'}
             
         Returns:
             거래 결정 딕셔너리
@@ -87,21 +82,21 @@ class LiveTradingAgent:
         if self.agent is None:
             return self._get_default_decision("에이전트 로드 실패")
         
-        if len(self.price_history) < 20:
-            return self._get_default_decision("가격 히스토리 부족")
+        self.current_price = current_candle['close']
+        self.last_candle = current_candle
         
         try:
-            # 1. 현재 상태 구성
-            current_state = self._build_current_state(current_signals, current_price)
+            # 1. 신호 데이터를 훈련된 형태로 변환
+            state_vector = self._convert_signal_to_state(signal_data, current_candle)
             
             # 2. AI 에이전트의 액션 예측
-            ai_action = self.agent.act(current_state)
+            ai_action = self.agent.act(state_vector)
             
             # 3. 액션을 거래 결정으로 변환
-            trading_decision = self._convert_action_to_decision(ai_action, current_price, current_signals)
+            trading_decision = self._convert_action_to_decision(ai_action, signal_data)
             
             # 4. 리스크 체크 및 최종 결정
-            final_decision = self._apply_risk_controls(trading_decision, current_price)
+            final_decision = self._apply_risk_controls(trading_decision)
             
             return final_decision
             
@@ -109,14 +104,14 @@ class LiveTradingAgent:
             print(f"❌ 거래 결정 생성 오류: {e}")
             return self._get_default_decision(f"오류: {str(e)}")
     
-    def _build_current_state(self, signals: Dict[str, Any], current_price: float) -> np.ndarray:
-        """현재 상태 벡터 구성 (훈련 시와 동일한 형태로)"""
+    def _convert_signal_to_state(self, signal_data: Dict, current_candle: Dict) -> np.ndarray:
+        """신호 데이터를 훈련된 상태 벡터 형태로 변환"""
         
-        # 1. 가격 특성 (20개)
-        price_features = self._extract_price_features()
+        # 1. 가격 특성 (20개) - 현재 캔들 정보 활용
+        price_features = self._extract_price_features_simple(current_candle)
         
-        # 2. 신호 특성 (30개)
-        signal_features = self._extract_signal_features(signals)
+        # 2. 신호 특성 (30개) - 기존 신호 데이터 활용
+        signal_features = self._extract_signal_features(signal_data)
         
         # 3. 포트폴리오 특성 (10개)
         portfolio_features = self._extract_portfolio_features()
@@ -126,79 +121,49 @@ class LiveTradingAgent:
         
         return state.astype(np.float32)
     
-    def _extract_price_features(self) -> np.ndarray:
-        """가격 히스토리에서 특성 추출 (훈련 시와 동일)"""
-        if len(self.price_history) < 20:
-            return np.zeros(20, dtype=np.float32)
+    def _extract_price_features_simple(self, candle: Dict) -> np.ndarray:
+        """현재 캔들에서 간단한 가격 특성 추출"""
         
-        # DataFrame으로 변환
-        df = pd.DataFrame(self.price_history[-20:])
+        # 현재 캔들만으로 계산 가능한 특성들
+        high = candle['high']
+        low = candle['low'] 
+        close = candle['close']
+        open_price = candle['open']
+        volume = candle.get('volume', 0)
         
-        features = []
+        # 기본 특성들
+        price_change = (close - open_price) / open_price if open_price > 0 else 0.0
+        price_range = (high - low) / close if close > 0 else 0.0
         
-        close = df['close']
-        high = df['high']
-        low = df['low']
-        volume = df['volume']
-        
-        # 수익률 특성
-        returns = close.pct_change().fillna(0)
-        features.extend([
-            returns.mean(),
-            returns.std(),
-            returns.iloc[-1],
-            returns.tail(5).mean()
-        ])
-        
-        # RSI
-        if len(close) >= 14:
-            delta = close.diff()
-            gain = (delta.where(delta > 0, 0)).rolling(window=14, min_periods=1).mean()
-            loss = (-delta.where(delta < 0, 0)).rolling(window=14, min_periods=1).mean()
-            rs = gain / (loss + 1e-8)
-            rsi = 100 - (100 / (1 + rs))
-            features.append(rsi.iloc[-1] / 100.0)
-        else:
-            features.append(0.5)
-        
-        # 볼린저 밴드 위치
-        if len(close) >= 20:
-            sma = close.rolling(window=20, min_periods=1).mean()
-            std = close.rolling(window=20, min_periods=1).std()
-            bb_upper = sma + (std * 2)
-            bb_lower = sma - (std * 2)
-            bb_width = bb_upper.iloc[-1] - bb_lower.iloc[-1]
-            if bb_width > 0:
-                bb_position = (close.iloc[-1] - bb_lower.iloc[-1]) / bb_width
-            else:
-                bb_position = 0.5
-            features.append(bb_position)
-        else:
-            features.append(0.5)
-        
-        # 이동평균 비율
-        for window in [5, 10, 20]:
-            if len(close) >= window:
-                ma = close.rolling(window=window, min_periods=1).mean()
-                ma_ratio = (close.iloc[-1] / ma.iloc[-1] - 1) if ma.iloc[-1] > 0 else 0.0
-                features.append(ma_ratio)
-            else:
-                features.append(0.0)
-        
-        # 나머지 특성들로 20개 맞추기
-        while len(features) < 20:
-            features.append(0.0)
+        # 20개 특성 구성 (실제 계산된 값이 있으면 사용하고, 없으면 중립값)
+        features = [
+            price_change,        # 현재 캔들 수익률
+            price_range,         # 변동성 대리값
+            0.0,                 # returns_mean (중립)
+            price_range,         # returns_std 대신 price_range
+            0.5,                 # RSI (중립값 - 실제 계산은 signal_data에서)
+            0.5,                 # BB position (중립값)
+            0.0, 0.0, 0.0,       # MA ratios (중립값)
+            0.0,                 # volume ratio (계산 복잡)
+            price_range,         # volatility
+            0.0,                 # price position
+            0.0, 0.0, 0.0, 0.0,  # 추가 기술적 지표들
+            0.0, 0.0, 0.0, 0.0, 0.0  # 나머지 패딩
+        ]
         
         return np.array(features[:20], dtype=np.float32)
     
-    def _extract_signal_features(self, signals: Dict[str, Any]) -> np.ndarray:
-        """신호에서 특성 추출 (훈련 시와 동일)"""
+    def _extract_signal_features(self, signal_data: Dict) -> np.ndarray:
+        """신호 데이터에서 특성 추출 (훈련 시와 동일한 로직)"""
         features = []
         
-        # 각 시간대별 신호 특성
+        # 신호 데이터 형태 확인 및 표준화
+        decisions = self._normalize_signal_data(signal_data)
+        
+        # 각 시간대별 신호 특성 (3개 × 8개 = 24개)
         for category in ['SHORT_TERM', 'MEDIUM_TERM', 'LONG_TERM']:
-            if 'decisions' in signals and category in signals['decisions']:
-                decision = signals['decisions'][category]
+            if category in decisions:
+                decision = decisions[category]
                 
                 action = decision.get('action', 'HOLD')
                 action_strength = 1.0 if action == 'LONG' else (-1.0 if action == 'SHORT' else 0.0)
@@ -210,6 +175,7 @@ class LiveTradingAgent:
                     min(float(decision.get('max_holding_minutes', 60)) / 1440.0, 1.0),
                 ])
                 
+                # 메타 정보
                 meta = decision.get('meta', {}).get('synergy_meta', {})
                 confidence = meta.get('confidence', 'LOW')
                 confidence_score = 1.0 if confidence == 'HIGH' else (0.5 if confidence == 'MEDIUM' else 0.0)
@@ -223,21 +189,47 @@ class LiveTradingAgent:
             else:
                 features.extend([0.0] * 8)
         
-        # 갈등 및 메타 정보
-        if 'conflicts' in signals:
-            conflicts = signals['conflicts']
-            features.extend([
-                1.0 if conflicts.get('has_conflicts', False) else 0.0,
-                len(conflicts.get('long_categories', [])) / 3.0,
-                len(conflicts.get('short_categories', [])) / 3.0,
-                float(signals.get('meta', {}).get('active_positions', 0)) / 3.0,
-                0.0,
-                0.0
-            ])
-        else:
-            features.extend([0.0] * 6)
+        # 갈등 및 메타 정보 (6개)
+        conflicts = signal_data.get('conflicts', {})
+        features.extend([
+            1.0 if conflicts.get('has_conflicts', False) else 0.0,
+            len(conflicts.get('long_categories', [])) / 3.0,
+            len(conflicts.get('short_categories', [])) / 3.0,
+            float(signal_data.get('meta', {}).get('active_positions', 0)) / 3.0,
+            0.0, 0.0  # 예비
+        ])
         
         return np.array(features[:30], dtype=np.float32)
+    
+    def _normalize_signal_data(self, signal_data: Dict) -> Dict:
+        """신호 데이터를 표준 형태로 변환"""
+        
+        # 이미 중첩 딕셔너리 형태인 경우 (ai.py와 동일)
+        if 'decisions' in signal_data:
+            return signal_data['decisions']
+        
+        # parquet 평면화된 형태인 경우 (agent.py와 동일)
+        decisions = {}
+        
+        for category in ['SHORT_TERM', 'MEDIUM_TERM', 'LONG_TERM']:
+            prefix = f"{category.lower()}_"
+            
+            decisions[category] = {
+                'action': signal_data.get(f'{prefix}action', 'HOLD'),
+                'net_score': float(signal_data.get(f'{prefix}net_score', 0.0)),
+                'leverage': int(signal_data.get(f'{prefix}leverage', 1)),
+                'max_holding_minutes': int(signal_data.get(f'{prefix}max_holding_minutes', 60)),
+                'meta': {
+                    'synergy_meta': {
+                        'confidence': signal_data.get(f'{prefix}confidence', 'LOW'),
+                        'buy_score': float(signal_data.get(f'{prefix}buy_score', 0.0)),
+                        'sell_score': float(signal_data.get(f'{prefix}sell_score', 0.0)),
+                        'conflicts_detected': []
+                    }
+                }
+            }
+        
+        return decisions
     
     def _extract_portfolio_features(self) -> np.ndarray:
         """현재 포트폴리오 상태 특성"""
@@ -245,149 +237,196 @@ class LiveTradingAgent:
             self.current_position,
             self.current_leverage / 20.0,
             (self.current_balance - self.initial_balance) / self.initial_balance,
-            0.0,  # unrealized_pnl (실시간에서는 계산 복잡)
+            0.0,  # unrealized_pnl (단순화)
             min(self.total_trades / 100.0, 1.0),
             self.winning_trades / max(self.total_trades, 1),
             self.max_drawdown,
-            0.0,  # consecutive_losses (단순화)
+            min(self.consecutive_losses / 10.0, 1.0),
             min(self.holding_time / 1440.0, 1.0),
             1.0 if self.in_position else 0.0
         ]
         return np.array(features, dtype=np.float32)
     
-    def _convert_action_to_decision(self, ai_action: np.ndarray, current_price: float, 
-                                  signals: Dict[str, Any]) -> Dict[str, Any]:
+    def _convert_action_to_decision(self, ai_action: np.ndarray, signal_data: Dict) -> Dict[str, Any]:
         """AI 액션을 실제 거래 결정으로 변환"""
         
         position_change = ai_action[0]
         leverage = ai_action[1] 
         holding_minutes = ai_action[2]
         
+        # 신호 품질 분석
+        signal_quality = self._analyze_signal_quality(signal_data)
+        
         # 거래 결정 생성
         decision = {
             'timestamp': datetime.now(),
-            'current_price': current_price,
-            'ai_confidence': self._calculate_confidence(ai_action),
+            'current_price': self.current_price,
+            'ai_confidence': self._calculate_confidence(ai_action, signal_quality),
+            'signal_quality': signal_quality,
             'position_change': position_change,
-            'target_leverage': leverage,
+            'target_leverage': min(leverage, 5.0),  # 최대 5배로 제한
             'target_holding_minutes': holding_minutes,
-            'action': 'HOLD',  # 기본값
+            'action': 'HOLD',
             'reason': '',
             'quantity': 0.0,
             'stop_loss': None,
             'take_profit': None
         }
         
-        # 액션 해석
-        if abs(position_change) > 0.1:  # 의미있는 포지션 변경
-            if position_change > 0.1:
+        # 액션 해석 (더 보수적으로)
+        min_threshold = 0.2  # 최소 임계값 증가
+        
+        if abs(position_change) > min_threshold and signal_quality['overall_score'] > 0.3:
+            if position_change > min_threshold:
                 decision['action'] = 'BUY'
-                decision['reason'] = f"AI 추천: Long 포지션 {position_change:.2f}"
-            elif position_change < -0.1:
+                decision['reason'] = f"AI+신호 추천: Long {position_change:.2f} (품질: {signal_quality['overall_score']:.2f})"
+            elif position_change < -min_threshold:
                 decision['action'] = 'SELL'  
-                decision['reason'] = f"AI 추천: Short 포지션 {abs(position_change):.2f}"
+                decision['reason'] = f"AI+신호 추천: Short {abs(position_change):.2f} (품질: {signal_quality['overall_score']:.2f})"
             
-            # 포지션 크기 계산 (Kelly Criterion 기반)
-            decision['quantity'] = self._calculate_position_size(position_change, leverage)
-            
-            # 스탑로스/익절 설정
-            decision['stop_loss'], decision['take_profit'] = self._calculate_stops(
-                current_price, decision['action'], holding_minutes
+            # 포지션 크기 계산 (신호 품질 반영)
+            decision['quantity'] = self._calculate_position_size(
+                position_change, leverage, signal_quality['overall_score']
             )
+            
+            # 스탑 설정
+            decision['stop_loss'], decision['take_profit'] = self._calculate_stops(
+                decision['action'], holding_minutes, signal_quality
+            )
+        else:
+            decision['reason'] = f"임계값 미달 (변경량: {position_change:.2f}, 신호품질: {signal_quality['overall_score']:.2f})"
         
         return decision
     
-    def _calculate_confidence(self, ai_action: np.ndarray) -> float:
-        """AI 결정의 신뢰도 계산"""
-        # 포지션 변경량이 클수록 높은 신뢰도
-        position_confidence = min(abs(ai_action[0]) / 2.0, 1.0)
+    def _analyze_signal_quality(self, signal_data: Dict) -> Dict:
+        """신호 데이터 품질 분석"""
+        decisions = self._normalize_signal_data(signal_data)
         
-        # 레버리지가 높을수록 높은 신뢰도 (단, 과도하면 감점)
-        leverage_confidence = min(ai_action[1] / 5.0, 1.0) * (0.8 if ai_action[1] > 10 else 1.0)
+        quality_metrics = {
+            'high_confidence_signals': 0,
+            'total_signals': 0,
+            'agreement_score': 0.0,
+            'overall_score': 0.0
+        }
         
-        # 종합 신뢰도
-        overall_confidence = (position_confidence + leverage_confidence) / 2
+        actions = []
+        confidences = []
         
-        return min(overall_confidence, 1.0)
+        for category in ['SHORT_TERM', 'MEDIUM_TERM', 'LONG_TERM']:
+            if category in decisions:
+                decision = decisions[category]
+                action = decision.get('action', 'HOLD')
+                confidence = decision.get('meta', {}).get('synergy_meta', {}).get('confidence', 'LOW')
+                
+                if action != 'HOLD':
+                    quality_metrics['total_signals'] += 1
+                    actions.append(1 if action == 'LONG' else -1)
+                    
+                    if confidence == 'HIGH':
+                        quality_metrics['high_confidence_signals'] += 1
+                        confidences.append(1.0)
+                    elif confidence == 'MEDIUM':
+                        confidences.append(0.5)
+                    else:
+                        confidences.append(0.1)
+        
+        # 신호 일치도 계산
+        if actions:
+            action_agreement = 1.0 - (np.std(actions) if len(actions) > 1 else 0.0)
+            avg_confidence = np.mean(confidences)
+            
+            quality_metrics['agreement_score'] = action_agreement
+            quality_metrics['overall_score'] = (action_agreement + avg_confidence) / 2
+        
+        return quality_metrics
     
-    def _calculate_position_size(self, position_change: float, leverage: float) -> float:
-        """포지션 크기 계산 (리스크 기반)"""
-        # 기본 리스크: 잔고의 2%
-        base_risk = self.current_balance * 0.02
+    def _calculate_confidence(self, ai_action: np.ndarray, signal_quality: Dict) -> float:
+        """AI와 신호 품질을 결합한 신뢰도 계산"""
         
-        # 포지션 변경량에 따른 조정
+        # AI 신뢰도
+        ai_confidence = min(abs(ai_action[0]) / 2.0, 1.0)
+        
+        # 신호 품질 신뢰도
+        signal_confidence = signal_quality['overall_score']
+        
+        # 결합 신뢰도 (가중평균)
+        combined_confidence = (ai_confidence * 0.6) + (signal_confidence * 0.4)
+        
+        return min(combined_confidence, 1.0)
+    
+    def _calculate_position_size(self, position_change: float, leverage: float, signal_quality: float) -> float:
+        """포지션 크기 계산 (신호 품질 반영)"""
+        
+        # 기본 리스크 (잔고의 1-3%)
+        base_risk_pct = 0.01 + (signal_quality * 0.02)  # 1-3%
+        base_risk = self.current_balance * base_risk_pct
+        
+        # 포지션 변경량 반영
         position_multiplier = min(abs(position_change), 1.0)
         
-        # 레버리지 제한 (최대 5배)
-        safe_leverage = min(leverage, 5.0)
+        # 레버리지 제한
+        safe_leverage = min(leverage, 3.0)  # 더 보수적
         
-        # 최종 포지션 크기 (USD)
+        # 최종 포지션 크기
         position_usd = base_risk * position_multiplier * safe_leverage
         
-        # 최대 잔고의 20%로 제한
-        max_position = self.current_balance * 0.2
+        # 최대 잔고의 15%로 제한
+        max_position = self.current_balance * 0.15
         
         return min(position_usd, max_position)
     
-    def _calculate_stops(self, current_price: float, action: str, 
-                        holding_minutes: float) -> Tuple[Optional[float], Optional[float]]:
+    def _calculate_stops(self, action: str, holding_minutes: float, signal_quality: Dict) -> Tuple[Optional[float], Optional[float]]:
         """스탑로스와 익절가 계산"""
         
-        # ATR 기반 (단순화: 가격의 2%)
-        atr_estimate = current_price * 0.02
-        
-        if action == 'BUY':
-            stop_loss = current_price - (atr_estimate * 1.5)  # 1.5 ATR
-            take_profit = current_price + (atr_estimate * 1.0)  # 1.0 ATR (승률 우선)
-        elif action == 'SELL':
-            stop_loss = current_price + (atr_estimate * 1.5)
-            take_profit = current_price - (atr_estimate * 1.0)
-        else:
+        if action == 'HOLD':
             return None, None
         
-        # 홀딩 시간이 짧으면 더 타이트한 스탑
-        if holding_minutes < 120:  # 2시간 미만
-            stop_multiplier = 0.7
-            profit_multiplier = 0.8
+        # ATR 대신 캔들 정보 활용
+        if self.last_candle:
+            price_range = (self.last_candle['high'] - self.last_candle['low']) / self.current_price
+            volatility_estimate = max(price_range, 0.01)  # 최소 1%
         else:
-            stop_multiplier = 1.0
-            profit_multiplier = 1.0
+            volatility_estimate = 0.02  # 기본 2%
+        
+        # 신호 품질에 따른 스탑 조정
+        stop_multiplier = 1.5 + (1.0 - signal_quality['overall_score'])  # 품질 낮으면 타이트하게
+        profit_multiplier = 1.0 + signal_quality['overall_score']  # 품질 높으면 더 큰 목표
         
         if action == 'BUY':
-            stop_loss = current_price - (atr_estimate * 1.5 * stop_multiplier)
-            take_profit = current_price + (atr_estimate * 1.0 * profit_multiplier)
-        elif action == 'SELL':
-            stop_loss = current_price + (atr_estimate * 1.5 * stop_multiplier)
-            take_profit = current_price - (atr_estimate * 1.0 * profit_multiplier)
+            stop_loss = self.current_price * (1 - volatility_estimate * stop_multiplier)
+            take_profit = self.current_price * (1 + volatility_estimate * profit_multiplier)
+        else:  # SELL
+            stop_loss = self.current_price * (1 + volatility_estimate * stop_multiplier)
+            take_profit = self.current_price * (1 - volatility_estimate * profit_multiplier)
         
         return stop_loss, take_profit
     
-    def _apply_risk_controls(self, decision: Dict[str, Any], current_price: float) -> Dict[str, Any]:
-        """최종 리스크 체크 및 거래 결정 조정"""
+    def _apply_risk_controls(self, decision: Dict[str, Any]) -> Dict[str, Any]:
+        """최종 리스크 체크"""
         
         # 1. 최대 드로우다운 체크
-        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance
-        if current_drawdown > 0.15:  # 15% 이상 손실시
+        current_drawdown = (self.peak_balance - self.current_balance) / self.peak_balance if self.peak_balance > 0 else 0
+        if current_drawdown > 0.12:  # 12% 이상 손실시
             decision['action'] = 'HOLD'
-            decision['reason'] = f"리스크 관리: 최대 손실 한도 도달 ({current_drawdown:.1%})"
+            decision['reason'] = f"리스크 관리: 최대 손실 한도 ({current_drawdown:.1%})"
             decision['quantity'] = 0.0
             return decision
         
-        # 2. 포지션 크기 재검증
-        if decision['quantity'] > self.current_balance * 0.3:  # 30% 초과 금지
-            decision['quantity'] = self.current_balance * 0.3
-            decision['reason'] += " (포지션 크기 조정)"
+        # 2. 연속 손실 체크
+        if self.consecutive_losses > 3:
+            decision['quantity'] *= 0.5
+            decision['reason'] += f" (연속손실 {self.consecutive_losses}회, 크기 감소)"
         
-        # 3. 연속 손실 후 보수적 진입
-        if hasattr(self, 'recent_losses') and self.recent_losses > 3:
-            decision['quantity'] *= 0.5  # 포지션 크기 반감
-            decision['reason'] += " (연속 손실 후 보수적 진입)"
-        
-        # 4. 신뢰도가 낮으면 거래 금지
-        if decision['ai_confidence'] < 0.3:
+        # 3. 신뢰도 체크
+        if decision['ai_confidence'] < 0.4:
             decision['action'] = 'HOLD'
             decision['reason'] = f"신뢰도 부족 ({decision['ai_confidence']:.2f})"
             decision['quantity'] = 0.0
+        
+        # 4. 포지션 크기 최종 검증
+        if decision['quantity'] > self.current_balance * 0.2:
+            decision['quantity'] = self.current_balance * 0.2
+            decision['reason'] += " (포지션 크기 제한)"
         
         return decision
     
@@ -399,27 +438,29 @@ class LiveTradingAgent:
             'reason': reason,
             'quantity': 0.0,
             'ai_confidence': 0.0,
+            'signal_quality': {'overall_score': 0.0},
             'stop_loss': None,
             'take_profit': None
         }
     
     def execute_decision(self, decision: Dict[str, Any]) -> bool:
-        """거래 결정 실행 (실제 거래소 연동은 여기서)"""
+        """거래 결정 실행"""
         
         if decision['action'] == 'HOLD':
             print(f"⏸️  거래 없음: {decision['reason']}")
             return True
         
-        print(f"📊 AI 거래 결정:")
+        print(f"\n📊 AI 거래 결정:")
         print(f"   액션: {decision['action']}")
         print(f"   수량: ${decision['quantity']:.2f}")
-        print(f"   신뢰도: {decision['ai_confidence']:.2f}")
+        print(f"   AI 신뢰도: {decision['ai_confidence']:.2f}")
+        print(f"   신호 품질: {decision['signal_quality']['overall_score']:.2f}")
         print(f"   스탑로스: ${decision['stop_loss']:.2f}" if decision['stop_loss'] else "   스탑로스: 없음")
         print(f"   익절가: ${decision['take_profit']:.2f}" if decision['take_profit'] else "   익절가: 없음")
         print(f"   이유: {decision['reason']}")
         
         # 실제 거래소 API 호출은 여기에 구현
-        # exchange_api.place_order(...)
+        # result = exchange_api.place_order(...)
         
         return True
     
@@ -429,14 +470,15 @@ class LiveTradingAgent:
         
         if trade_pnl > 0:
             self.winning_trades += 1
+            self.consecutive_losses = 0
             print(f"✅ 수익 거래: +${trade_pnl:.2f}")
         else:
+            self.consecutive_losses += 1
             print(f"❌ 손실 거래: ${trade_pnl:.2f}")
         
-        # 잔고 업데이트
+        # 잔고 및 통계 업데이트
         self.current_balance += trade_pnl
         
-        # 최대 낙폭 업데이트
         if self.current_balance > self.peak_balance:
             self.peak_balance = self.current_balance
         else:
@@ -450,114 +492,98 @@ class LiveTradingAgent:
         print(f"📈 현재 통계: 승률 {win_rate:.1%}, 수익률 {total_return:.1%}, 잔고 ${self.current_balance:.2f}")
 
 # =================================================================
-# 사용 예시
+# 사용 예시 (기존 시스템과 통합)
 # =================================================================
 
-def example_live_trading():
-    """실시간 트레이딩 사용 예시"""
-    
-    # 1. 훈련된 에이전트 로드
-    live_agent = LiveTradingAgent(
-        model_path='agent/final_optimized_model.pth',  # 훈련된 모델 경로
-        initial_balance=10000.0
-    )
-    
-    # 2. 실시간 거래 루프 시뮬레이션
-    print("\n🚀 실시간 트레이딩 시뮬레이션 시작")
-    
-    # 가상의 실시간 데이터
-    for i in range(10):  # 10번의 거래 기회
-        
-        # 현재 가격 데이터 (실제로는 거래소 API에서 가져옴)
-        current_ohlcv = {
-            'open': 3000 + i,
-            'high': 3010 + i,
-            'low': 2995 + i,
-            'close': 3005 + i,
-            'volume': 1000000
-        }
-        
-        # 당신의 전략 신호 (실제로는 strategy_executor에서 가져옴)
-        current_signals = {
-            'decisions': {
-                'SHORT_TERM': {
-                    'action': 'LONG' if i % 3 == 0 else ('SHORT' if i % 3 == 1 else 'HOLD'),
-                    'net_score': np.random.uniform(-1, 1),
-                    'leverage': np.random.randint(1, 5),
-                    'max_holding_minutes': np.random.randint(60, 240),
-                    'meta': {
-                        'synergy_meta': {
-                            'confidence': np.random.choice(['HIGH', 'MEDIUM', 'LOW']),
-                            'buy_score': np.random.uniform(0, 1),
-                            'sell_score': np.random.uniform(0, 1),
-                            'conflicts_detected': []
-                        }
-                    }
-                },
-                'MEDIUM_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 240, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0}}},
-                'LONG_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 1440, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0}}}
-            },
-            'conflicts': {'has_conflicts': False, 'long_categories': [], 'short_categories': []},
-            'meta': {'active_positions': 0}
-        }
-        
-        print(f"\n⏰ 거래 기회 {i+1}")
-        
-        # 가격 데이터 업데이트
-        live_agent.update_price(current_ohlcv)
-        
-        # AI 거래 결정
-        decision = live_agent.make_trading_decision(current_signals, current_ohlcv['close'])
-        
-        # 거래 실행
-        live_agent.execute_decision(decision)
-        
-        # 결과 시뮬레이션 (실제로는 거래소에서 받아옴)
-        if decision['action'] != 'HOLD':
-            simulated_pnl = np.random.uniform(-50, 100)  # 랜덤 손익
-            live_agent.update_trade_result(simulated_pnl)
-
-def integrate_with_your_system():
-    """당신의 기존 시스템과 통합 방법"""
+def integrate_with_strategy_executor():
+    """기존 strategy_executor와의 통합 예시"""
     
     print("""
-    🔗 기존 시스템과 통합 방법:
-    
-    1. strategy_executor.py에서:
+    🔗 기존 시스템 통합 방법:
+
+    1. main.py에서:
     ```python
-    # 전략 실행 후
-    signals = strategy_executor.get_signals()
+    from agent.live_trade_agent import LiveTradingAgent
     
-    # AI 에이전트에 전달
-    decision = live_agent.make_trading_decision(signals, current_price)
+    # AI 에이전트 초기화
+    live_agent = LiveTradingAgent('agent/final_optimized_model.pth')
     
-    # 거래 실행
-    if decision['action'] != 'HOLD':
-        execute_trade(decision)
+    # 메인 루프에서
+    while True:
+        # 기존 전략 실행
+        strategy_executor.execute_all_strategies()
+        signals = strategy_executor.get_signals()
+        decision = decision_engine.decide_trade_realtime(signals)
+        
+        # AI 에이전트 결정 추가
+        current_candle = get_current_candle()
+        ai_decision = live_agent.make_trading_decision(decision, current_candle)
+        
+        # 최종 거래 실행
+        if ai_decision['action'] != 'HOLD':
+            execute_trade(ai_decision)
+            
+        time.sleep(180)  # 3분 대기
     ```
     
-    2. 실시간 루프에서:
+    2. decision_engine.py에서 AI 결정 통합:
     ```python
-    while True:
-        # 1. 새로운 캔들 데이터 받기
-        new_candle = get_latest_candle()
-        live_agent.update_price(new_candle)
+    def decide_trade_with_ai(self, signals, ai_agent, current_candle):
+        # 기존 결정
+        base_decision = self.decide_trade_realtime(signals)
         
-        # 2. 전략 신호 생성
-        signals = generate_strategy_signals()
+        # AI 결정
+        ai_decision = ai_agent.make_trading_decision(base_decision, current_candle)
         
-        # 3. AI 결정 받기
-        decision = live_agent.make_trading_decision(signals, new_candle['close'])
-        
-        # 4. 거래 실행
-        if decision['action'] != 'HOLD':
-            result = execute_real_trade(decision)
-            live_agent.update_trade_result(result['pnl'])
-        
-        time.sleep(180)  # 3분 대기
+        # 결합 로직 (예: AI가 HOLD이면 기존 결정, AI가 거래면 AI 우선)
+        if ai_decision['action'] != 'HOLD':
+            return ai_decision
+        else:
+            return base_decision
     ```
     """)
 
-if __name__ == "__main__":
-    example_live_trading()
-    integrate_with_your_system()
+def example_usage():
+    """사용 예시"""
+    
+    # AI 에이전트 초기화
+    agent = LiveTradingAgent('agent/final_optimized_model.pth')
+    
+    # 가상의 신호 데이터 (실제로는 strategy_executor에서)
+    signal_data = {
+        'decisions': {
+            'SHORT_TERM': {
+                'action': 'LONG',
+                'net_score': 0.7,
+                'leverage': 3,
+                'max_holding_minutes': 120,
+                'meta': {
+                    'synergy_meta': {
+                        'confidence': 'HIGH',
+                        'buy_score': 0.8,
+                        'sell_score': 0.1,
+                        'conflicts_detected': []
+                    }
+                }
+            },
+            'MEDIUM_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 240, 'meta': {'synergy_meta': {'confidence': 'LOW'}}},
+            'LONG_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 1440, 'meta': {'synergy_meta': {'confidence': 'LOW'}}}
+        },
+        'conflicts': {'has_conflicts': False},
+        'meta': {'active_positions': 0}
+    }
+    
+    current_candle = {
+        'open': 3000,
+        'high': 3010,
+        'low': 2995,
+        'close': 3005,
+        'volume': 1000000
+    }
+    
+    # 거래 결정
+    decision = agent.make_trading_decision(signal_data, current_candle)
+    print(f"AI 결정: {decision}")
+    
+    # 거래 실행
+    agent.execute_decision(decision)

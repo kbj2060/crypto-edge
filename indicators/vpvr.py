@@ -342,7 +342,7 @@ class SessionVPVR:
                 "price_range": [self.price_min, self.price_max],
                 "last_update": self.target_time.isoformat(),
             }
-            print(f"VPVR 결과: {poc_price:.2f}, {hvn_price:.2f}, {lvn_price:.2f}")
+
             self.last_update_time = self.target_time
             
         except Exception as e:
