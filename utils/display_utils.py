@@ -179,44 +179,6 @@ def print_decision_interpretation(decision: dict) -> None:
     print("")  # blank line for spacing
 
 
-def print_llm_judgment(judge: dict) -> None:
-    """
-    LLM 판단 결과를 예쁘게 출력합니다.
-    """
-    if not judge or not isinstance(judge, dict):
-        print("⚠️ LLM 판단 결과가 비어있거나 형식이 잘못되었습니다.")
-        return
-
-    decision = judge.get("decision", "HOLD")
-    confidence = judge.get("confidence", 0.0)
-    reason = judge.get("reason", "")
-
-    # 결정에 따른 이모지 선택
-    decision_emoji = {
-        "BUY": "🟢",
-        "SELL": "🔴", 
-        "HOLD": "🟡"
-    }.get(decision, "❓")
-
-    # 신뢰도에 따른 색상/표시
-    confidence_level = ""
-    if confidence >= 0.8:
-        confidence_level = "🔥 매우 높음"
-    elif confidence >= 0.6:
-        confidence_level = "📈 높음"
-    elif confidence >= 0.4:
-        confidence_level = "📊 보통"
-    else:
-        confidence_level = "⚠️ 낮음"
-
-    print("🤖" + "="*60)
-    print(f"🧠 LLM 최종 판단")
-    print("🤖" + "="*60)
-    print(f"{decision_emoji} 결정: {decision}")
-    print(f"🎯 신뢰도: {confidence:.2f} ({confidence_level})")
-    print(f"💭 이유: {reason}")
-    print("🤖" + "="*60)
-    print("")  # blank line for spacing
 
 
 def print_trading_summary(signals: Dict[str, Any], decision: Dict[str, Any], judge: Dict[str, Any]) -> None:
@@ -288,3 +250,80 @@ def print_trading_summary(signals: Dict[str, Any], decision: Dict[str, Any], jud
     
     print("📊" + "="*60)
     print("")  # blank line for spacing
+
+
+def print_ai_final_decision(ai_decision: Dict[str, Any]) -> None:
+    """
+    강화학습 에이전트의 최종 거래 결정을 사람이 보기 좋게 출력합니다.
+    expected keys:
+      - timestamp, current_price, ai_confidence, signal_quality(dict)
+      - position_change, target_leverage, target_holding_minutes
+      - action, reason, quantity, stop_loss, take_profit
+    """
+    if not ai_decision or not isinstance(ai_decision, dict):
+        print("⚠️ AI 결정이 비어있거나 형식이 잘못되었습니다.")
+        return
+
+    # 안전한 추출 및 형변환
+    def _to_float(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    ts = ai_decision.get("timestamp", "unknown")
+    price = _to_float(ai_decision.get("current_price"))
+    confidence = _to_float(ai_decision.get("ai_confidence"))
+    signal_quality = ai_decision.get("signal_quality", {}) or {}
+    action = ai_decision.get("action", "HOLD")
+    reason = ai_decision.get("reason", "")
+    pos_change = _to_float(ai_decision.get("position_change"))
+    leverage = _to_float(ai_decision.get("target_leverage"), 1.0)
+    holding_min = _to_float(ai_decision.get("target_holding_minutes"))
+    qty = _to_float(ai_decision.get("quantity"))
+    sl = ai_decision.get("stop_loss")
+    tp = ai_decision.get("take_profit")
+
+    # 이모지/라벨
+    action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
+    conf_level = (
+        "🔥 매우 높음" if confidence >= 0.8 else
+        ("📈 높음" if confidence >= 0.6 else ("📊 보통" if confidence >= 0.4 else "⚠️ 낮음"))
+    )
+
+    print("🤖" + "=" * 60)
+    print("🧠 AI 최종 거래 결정")
+    print("🤖" + "=" * 60)
+    print(f"🕒 시각: {ts}")
+    print(f"💵 현재가: {price:.4f}")
+    print(f"{action_emoji} 액션: {action}")
+    print(f"🎯 신뢰도: {confidence:.2f} ({conf_level})")
+    if reason:
+        print(f"💭 이유: {reason}")
+
+    # 신호 품질 요약
+    if isinstance(signal_quality, dict) and signal_quality:
+        try:
+            hc = int(signal_quality.get("high_confidence_signals", 0) or 0)
+            total = int(signal_quality.get("total_signals", 0) or 0)
+            agree = _to_float(signal_quality.get("agreement_score"))
+            overall = _to_float(signal_quality.get("overall_score"))
+            print("📊 신호 품질:")
+            print(f"   - 높은 신뢰 신호: {hc}/{total}")
+            print(f"   - 합의도: {agree:.2f} | 종합점수: {overall:.2f}")
+        except Exception:
+            pass
+
+    # 포지션/리스크 요약
+    print("⚙️ 실행 파라미터:")
+    print(f"   - 포지션 변경: {pos_change:+.2f}")
+    print(f"   - 레버리지: {leverage:.0f}x")
+    print(f"   - 보유시간: {int(holding_min)}분")
+    print(f"   - 수량: {qty:.4f}")
+    if sl is not None or tp is not None:
+        sl_str = f"{_to_float(sl):.4f}" if sl is not None else "-"
+        tp_str = f"{_to_float(tp):.4f}" if tp is not None else "-"
+        print(f"   - 손절/익절: {sl_str} / {tp_str}")
+
+    print("🤖" + "=" * 60)
+    print("")  # spacing

@@ -9,6 +9,28 @@ from typing import Dict, Any, List, Optional
 # 상위 디렉토리를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# agent 모듈 import (직접 파일에서 import)
+import importlib.util
+
+print("모듈 로딩 시작...")
+
+# agent.py에서 함수들 import
+agent_path = os.path.join(os.path.dirname(__file__), 'agent.py')
+print(f"agent.py 경로: {agent_path}")
+print(f"agent.py 존재 여부: {os.path.exists(agent_path)}")
+
+spec = importlib.util.spec_from_file_location("agent", agent_path)
+agent_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(agent_module)
+train_rl_agent = agent_module.train_rl_agent
+evaluate_agent = agent_module.evaluate_agent
+print("✅ agent.py 로드 완료")
+
+# backtester.py에서 클래스 import (임시로 None으로 설정)
+print("⚠️ backtester.py 로드 건너뛰기 (dataclass 오류)")
+BacktestAnalyzer = None
+print("✅ backtester.py 건너뛰기 완료")
+
 def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     """복잡한 중첩 구조를 평면화하여 Parquet 저장에 최적화"""
     flattened = {}
@@ -71,6 +93,40 @@ def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     
     return flattened
 
+def safe_concat(existing_df, new_df):
+    if existing_df is None or existing_df.empty:
+        return new_df.copy() if not new_df.empty else pd.DataFrame()
+    elif new_df.empty:
+        return existing_df.copy()
+    else:
+        # 컬럼 일치 확인
+        if list(existing_df.columns) != list(new_df.columns):
+            # 공통 컬럼만 사용
+            common_cols = list(set(existing_df.columns) & set(new_df.columns))
+            if common_cols:
+                existing_df = existing_df[common_cols]
+                new_df = new_df[common_cols]
+            else:
+                return existing_df.copy()
+        
+        # FutureWarning 방지: 빈 DataFrame이나 모든 NA인 컬럼 처리
+        if existing_df.empty or new_df.empty:
+            return existing_df if not existing_df.empty else new_df
+        
+        # 모든 NA인 컬럼 제거
+        existing_df_clean = existing_df.dropna(axis=1, how='all')
+        new_df_clean = new_df.dropna(axis=1, how='all')
+        
+        # 공통 컬럼만 유지
+        common_cols = list(set(existing_df_clean.columns) & set(new_df_clean.columns))
+        if not common_cols:
+            return existing_df_clean if not existing_df_clean.empty else new_df_clean
+        
+        existing_df_clean = existing_df_clean[common_cols]
+        new_df_clean = new_df_clean[common_cols]
+        
+        return pd.concat([existing_df_clean, new_df_clean], ignore_index=True)
+
 def save_decisions_to_parquet(
     decision_data_list: List[Dict[str, Any]], 
     filename: str = "agent/decisions_data.parquet",
@@ -120,7 +176,8 @@ def save_decisions_to_parquet(
                     new_df = new_df.reindex(columns=all_columns)
                     
                     # 데이터 합치기
-                    combined_df = pd.concat([existing_df, new_df], ignore_index=True)
+                    combined_df = safe_concat(existing_df, new_df)
+
                 else:
                     combined_df = existing_df
                     print("새로 추가할 데이터가 없습니다 (중복 제거됨)")
@@ -158,6 +215,115 @@ def load_decisions_from_parquet(filename: str = "agent/decisions_data.parquet") 
     except Exception as e:
         print(f"Parquet 로드 오류: {e}")
         return None
+
+def inspect_parquet_structure(filename: str = "agent/decisions_data.parquet") -> None:
+    """Parquet 파일의 구조를 확인하는 함수"""
+    try:
+        if not os.path.exists(filename):
+            print(f"파일을 찾을 수 없습니다: {filename}")
+            return
+            
+        df = pd.read_parquet(filename)
+        print(f"\n=== Parquet 파일 구조 분석 ===")
+        print(f"파일: {filename}")
+        print(f"총 레코드 수: {len(df)}")
+        print(f"컬럼 수: {len(df.columns)}")
+        print(f"메모리 사용량: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f} MB")
+        
+        print(f"\n컬럼 목록:")
+        for i, col in enumerate(df.columns):
+            non_null_count = df[col].count()
+            print(f"  {i+1:2d}. {col:<30} (non-null: {non_null_count}/{len(df)})")
+        
+        print(f"\n첫 번째 레코드 샘플:")
+        if len(df) > 0:
+            sample_record = df.iloc[0].to_dict()
+            for key, value in list(sample_record.items())[:10]:  # 처음 10개만 표시
+                print(f"  {key}: {value}")
+            if len(sample_record) > 10:
+                print(f"  ... (총 {len(sample_record)}개 필드)")
+        
+        print(f"\n데이터 타입:")
+        print(df.dtypes)
+        
+    except Exception as e:
+        print(f"Parquet 구조 분석 오류: {e}")
+
+def convert_parquet_to_signal_data(
+    df: pd.DataFrame, 
+    max_samples: Optional[int] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """DataFrame을 signal_data 리스트로 효율적으로 변환
+    
+    Args:
+        df: 변환할 DataFrame (이미 딕셔너리 형태로 저장됨)
+        max_samples: 최대 샘플 수 (None이면 전체 사용)
+        start_date: 시작 날짜 (YYYY-MM-DD 형식)
+        end_date: 종료 날짜 (YYYY-MM-DD 형식)
+    """
+    try:
+        # 날짜 필터링
+        if start_date or end_date:
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                if start_date:
+                    df = df[df['timestamp'] >= start_date]
+                if end_date:
+                    df = df[df['timestamp'] <= end_date]
+                print(f"날짜 필터링 후: {len(df)}개 레코드")
+        
+        # 샘플 수 제한
+        if max_samples and len(df) > max_samples:
+            # 최근 데이터부터 샘플링
+            df = df.tail(max_samples)
+            print(f"샘플링 후: {len(df)}개 레코드")
+        
+        # NaN 값을 None으로 변환하고 딕셔너리 리스트로 변환
+        df_clean = df.where(pd.notnull(df), None)
+        signal_data = df_clean.to_dict('records')
+        
+        print(f"Parquet 데이터를 signal_data로 변환 완료: {len(signal_data)}개 레코드")
+        return signal_data
+        
+    except Exception as e:
+        print(f"signal_data 변환 오류: {e}")
+        return []
+
+def load_signal_data_directly(
+    filename: str = "agent/decisions_data.parquet",
+    max_samples: Optional[int] = 5000,  # 기본값 5000개로 제한
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """Parquet 파일에서 직접 signal_data를 로드하는 간단한 함수"""
+    try:
+        # parquet 파일 로드
+        df = pd.read_parquet(filename)
+        
+        # 날짜 필터링
+        if start_date or end_date:
+            if 'timestamp' in df.columns:
+                df['timestamp'] = pd.to_datetime(df['timestamp'])
+                if start_date:
+                    df = df[df['timestamp'] >= start_date]
+                if end_date:
+                    df = df[df['timestamp'] <= end_date]
+        
+        # 샘플 수 제한
+        if max_samples and len(df) > max_samples:
+            df = df.tail(max_samples)
+        
+        # NaN을 None으로 변환하고 딕셔너리 리스트로 변환
+        signal_data = df.where(pd.notnull(df), None).to_dict('records')
+        
+        print(f"Parquet에서 signal_data 직접 로드 완료: {len(signal_data)}개 레코드")
+        return signal_data
+        
+    except Exception as e:
+        print(f"signal_data 직접 로드 오류: {e}")
+        return []
 
 def save_progress_state(current_index: int, total_count: int, filename: str = "agent/progress_state.pkl"):
     """진행 상태 저장"""
@@ -396,37 +562,132 @@ def generate_signal_data_with_indicators(
         traceback.print_exc()
         return False
 
+def check_existing_decision_data() -> bool:
+    """기존 decision_data가 있는지 확인"""
+    try:
+        df = load_decisions_from_parquet()
+        if df is not None and not df.empty:
+            print(f"✅ 기존 Decision 데이터 발견: {len(df)}개 레코드")
+            print(f"   - 시간 범위: {df['timestamp'].min()} ~ {df['timestamp'].max()}")
+            print(f"   - 컬럼 수: {len(df.columns)}")
+            return True
+        else:
+            print("❌ 기존 Decision 데이터가 없습니다.")
+            return False
+    except Exception as e:
+        print(f"❌ Decision 데이터 확인 중 오류: {e}")
+        return False
+
+def run_reinforcement_learning(price_data, signal_data):
+    """강화학습 실행 함수"""
+    print("=== 강화학습 에이전트 훈련 시작 ===")
+    
+    try:
+        # 4. 에이전트 훈련 (에피소드 수 조정)
+        print("에이전트 훈련 시작...")
+        agent, rewards = train_rl_agent(price_data, signal_data, episodes=200)
+        
+        print("\n=== 훈련 완료, 성능 평가 중 ===")
+        
+        # 5. 성능 평가
+        print("성능 평가 시작...")
+        eval_results = evaluate_agent(agent, price_data, signal_data, episodes=10)
+        
+        # 6. 성능 분석
+        print("성능 분석 시작...")
+        if BacktestAnalyzer is not None:
+            analyzer = BacktestAnalyzer()
+            metrics = analyzer.calculate_performance_metrics(eval_results)
+            report = analyzer.generate_report(eval_results, metrics)
+            print(report)
+        else:
+            print("⚠️ BacktestAnalyzer를 사용할 수 없습니다. 기본 성능 정보만 출력합니다.")
+            print(f"훈련 완료: {len(rewards)} 에피소드")
+            print(f"평균 보상: {sum(rewards)/len(rewards):.4f}")
+            metrics = {"episodes": len(rewards), "avg_reward": sum(rewards)/len(rewards)}
+        
+        # 7. 모델 저장
+        print("모델 저장 중...")
+        agent.save_model('ethusdc_crypto_rl_model.pth')
+        print("\n모델이 'ethusdc_crypto_rl_model.pth'에 저장되었습니다.")
+        
+        return agent, eval_results, metrics
+        
+    except Exception as e:
+        print(f"❌ 에이전트 훈련 중 오류 발생: {e}")
+        import traceback
+        traceback.print_exc()
+        return None, None, None
+
 def main_example():
     """강화학습 트레이딩 AI 사용 예시 - Parquet 저장 및 재시작 지원"""
     
-    print("=== 강화학습 트레이딩 AI 훈련 시작 (Parquet 저장) ===")
+    print("=== 강화학습 트레이딩 AI 훈련 시작 ===")
     
-    # 1. 실제 ETHUSDC 데이터 로드 (3분, 15분, 1시간봉)
-    price_data, price_data_15m, price_data_1h = load_ethusdc_data()
+    # 1. 기존 Decision 데이터 확인
+    has_existing_data = check_existing_decision_data()
     
-    if price_data is None:
-        print("데이터 로드 실패. 프로그램을 종료합니다.")
-        return
-    
-    print(f"가격 데이터 정보:")
-    print(f"   - 총 캔들 수: {len(price_data)}개")
-    print(f"   - 가격 범위: ${price_data['close'].min():.2f} ~ ${price_data['close'].max():.2f}")
-    
-    # 2. CSV 데이터로 실제 지표 업데이트 및 전략 실행 (재시작 지원)
-    success = generate_signal_data_with_indicators(price_data, price_data_15m, price_data_1h, resume_from_progress=True)
-
-    if success:
-        print("Decision 데이터가 Parquet 파일로 저장되었습니다.")
+    if has_existing_data:
+        print("\n🚀 기존 Decision 데이터를 사용하여 바로 강화학습을 시작합니다!")
         
-        # 저장된 데이터 확인
-        df = load_decisions_from_parquet()
-        if df is not None:
-            print(f"저장된 데이터 요약:")
-            print(f"   - 총 레코드 수: {len(df)}")
-            print(f"   - 시간 범위: {df['timestamp'].min()} ~ {df['timestamp'].max()}")
-            print(f"   - 컬럼 수: {len(df.columns)}")
+        # 가격 데이터 로드 (강화학습에 필요)
+        price_data, price_data_15m, price_data_1h = load_ethusdc_data()
+        if price_data is None:
+            print("가격 데이터 로드 실패. 프로그램을 종료합니다.")
+            return
+        
+        # Decision 데이터를 signal_data로 변환
+        inspect_parquet_structure()
+        signal_data = load_signal_data_directly()
+        
+        if not signal_data:
+            print("signal_data 로드에 실패했습니다.")
+            return
+        
+        # 바로 강화학습 실행
+        return run_reinforcement_learning(price_data, signal_data)
+    
     else:
-        print("데이터 생성이 완료되지 않았습니다. 나중에 재시작할 수 있습니다.")
+        print("\n📊 Decision 데이터를 새로 생성합니다...")
+        
+        # 2. 실제 ETHUSDC 데이터 로드 (3분, 15분, 1시간봉)
+        price_data, price_data_15m, price_data_1h = load_ethusdc_data()
+        
+        if price_data is None:
+            print("데이터 로드 실패. 프로그램을 종료합니다.")
+            return
+        
+        print(f"가격 데이터 정보:")
+        print(f"   - 총 캔들 수: {len(price_data)}개")
+        print(f"   - 가격 범위: ${price_data['close'].min():.2f} ~ ${price_data['close'].max():.2f}")
+        
+        # 3. CSV 데이터로 실제 지표 업데이트 및 전략 실행 (재시작 지원)
+        success = generate_signal_data_with_indicators(price_data, price_data_15m, price_data_1h, resume_from_progress=True)
+
+        if success:
+            print("Decision 데이터가 Parquet 파일로 저장되었습니다.")
+            
+            # 저장된 데이터 확인
+            df = load_decisions_from_parquet()
+            if df is not None:
+                print(f"저장된 데이터 요약:")
+                print(f"   - 총 레코드 수: {len(df)}")
+                print(f"   - 시간 범위: {df['timestamp'].min()} ~ {df['timestamp'].max()}")
+                print(f"   - 컬럼 수: {len(df.columns)}")
+            
+            # Decision 데이터를 signal_data로 변환
+            inspect_parquet_structure()
+            signal_data = load_signal_data_directly()
+            
+            if not signal_data:
+                print("signal_data 로드에 실패했습니다.")
+                return
+            
+            # 강화학습 실행
+            return run_reinforcement_learning(price_data, signal_data)
+        else:
+            print("데이터 생성이 완료되지 않았습니다. 나중에 재시작할 수 있습니다.")
+            return None, None, None
 
 if __name__ == "__main__":
     # 예시 실행

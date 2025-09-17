@@ -2040,6 +2040,7 @@ version = "0.1.0"
 source = { virtual = "." }
 dependencies = [
     { name = "aiohttp" },
+    { name = "certifi" },
     { name = "flask" },
     { name = "flask-socketio" },
     { name = "gym" },
@@ -2064,6 +2065,7 @@ dependencies = [
 [package.metadata]
 requires-dist = [
     { name = "aiohttp", specifier = ">=3.12.15" },
+    { name = "certifi", specifier = ">=2025.8.3" },
     { name = "flask", specifier = ">=3.1.2" },
     { name = "flask-socketio", specifier = ">=5.5.1" },
     { name = "gym", specifier = ">=0.26.2" },

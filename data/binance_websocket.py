@@ -8,6 +8,7 @@ from datetime import datetime
 import pandas as pd
 
 # 리팩토링된 컴포넌트들
+from agent.live_trade_agent import LiveTradingAgent
 from data.strategy_executor import StrategyExecutor
 from data.candle_creator import CandleCreator
 from data.event_manager import EventManager
@@ -18,7 +19,7 @@ from llm.LLM_decider import LLMDecider
 from data.bucket_aggregator import BucketAggregator
 from data.data_manager import get_data_manager
 from indicators.global_indicators import get_global_indicator_manager
-from utils.display_utils import print_decision_interpretation, print_llm_judgment
+from utils.display_utils import print_decision_interpretation, print_ai_final_decision
 from utils.telegram import send_telegram_message
 from utils.time_manager import get_time_manager
 from utils.session_manager import get_session_manager
@@ -65,6 +66,7 @@ class BinanceWebSocket:
 
         # 카운트다운 태스크
         self.countdown_task = None
+        self.agent = LiveTradingAgent(model_path='agent/final_optimized_model.pth')
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
@@ -188,11 +190,12 @@ class BinanceWebSocket:
                 
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals)
-        
+        agent_decision = self.agent.make_trading_decision(signals, price_data)
         # Decision 로그에 저장
-        self.decision_logger.log_decision(decision)
+        # self.decision_logger.log_decision(decision)
         
         print_decision_interpretation(decision)
+        print_ai_final_decision(agent_decision)
 
         if decision.get("action") != "HOLD":
             send_telegram_message(decision)
