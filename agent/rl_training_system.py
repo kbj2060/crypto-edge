@@ -732,6 +732,47 @@ class RLAgent:
             print(f"모델 로드 실패: {e}")
             return False
 
+    def load_model_with_compatibility(self, filepath: str) -> bool:
+        """호환성을 고려한 모델 로드"""
+        if not os.path.exists(filepath):
+            print(f"모델 파일이 없습니다: {filepath}")
+            return False
+        
+        try:
+            checkpoint = torch.load(filepath, map_location=self.device, weights_only=False)
+            
+            # state_dict 키 이름 변환
+            state_dict = checkpoint['q_network']
+            converted_state_dict = {}
+            
+            for key, value in state_dict.items():
+                # feature_extraction -> feature_extractor 변환
+                new_key = key.replace('feature_extraction', 'feature_extractor')
+                converted_state_dict[new_key] = value
+            
+            # 변환된 state_dict로 로드
+            self.q_network.load_state_dict(converted_state_dict)
+            
+            # target_network도 동일하게 처리
+            target_state_dict = checkpoint['target_network']
+            converted_target_dict = {}
+            for key, value in target_state_dict.items():
+                new_key = key.replace('feature_extraction', 'feature_extractor')
+                converted_target_dict[new_key] = value
+            
+            self.target_network.load_state_dict(converted_target_dict)
+            
+            # 나머지 파라미터들
+            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            self.epsilon = checkpoint.get('epsilon', self.epsilon)
+            
+            print(f"모델 로드 성공! (호환성 변환 적용)")
+            return True
+            
+        except Exception as e:
+            print(f"모델 로드 실패: {e}")
+            return False
+            
 class DataLoader:
     """데이터 로딩 클래스"""
     
@@ -1121,7 +1162,7 @@ class TrainingManager:
                 recent_100_win_rate = np.mean(episode_win_rates[-100:])
                 if recent_100_win_rate >= 0.65:
                     print(f"목표 달성! 승률 {recent_100_win_rate:.3f} 도달")
-                    agent.save_model('final_optimized_model.pth')
+                    agent.save_model('agent/final_optimized_model.pth')
                     break
         
         print(f"\n훈련 완료!")
@@ -1161,7 +1202,7 @@ def main():
         agent = RLAgent(env.observation_space.shape[0])
         
         # 기존 모델 로드 시도
-        model_files = ['final_optimized_model.pth', 'improved_crypto_rl_model.pth']
+        model_files = ['agent/final_optimized_model.pth', 'agent/improved_crypto_rl_model.pth']
         model_loaded = False
         
         for model_file in model_files:

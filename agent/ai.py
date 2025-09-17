@@ -1129,7 +1129,7 @@ def train_agent(agent, env, episodes=500, save_interval=100):
             recent_100_win_rate = np.mean(episode_win_rates[-100:])
             if recent_100_win_rate >= 0.65:
                 print(f"🎯 목표 달성! 승률 {recent_100_win_rate:.3f} 도달")
-                agent.safe_save_model('final_optimized_model.pth')
+                agent.safe_save_model('agent/final_optimized_model.pth')
                 break
     
     print(f"\n🎉 훈련 완료!")
@@ -1174,7 +1174,7 @@ def main():
         agent = ImprovedCryptoRLAgent(env.observation_space.shape[0])
         
         # 기존 모델 로드 시도
-        model_files = ['final_optimized_model.pth', 'improved_crypto_rl_model.pth']
+        model_files = ['agent/final_optimized_model.pth', 'agent/improved_crypto_rl_model.pth']
         model_loaded = False
         
         for model_file in model_files:
@@ -1211,7 +1211,7 @@ def main():
             print(f"   평균 수익률: {stats['avg_return']:.3f} → {final_stats['avg_return']:.3f}")
             
             # 최종 모델 저장
-            trained_agent.safe_save_model('improved_crypto_rl_model.pth')
+            trained_agent.safe_save_model('agent/improved_crypto_rl_model.pth')
             
         else:
             print(f"✅ 현재 성능이 양호합니다 (승률: {stats['overall_win_rate']:.3f})")

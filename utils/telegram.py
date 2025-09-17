@@ -90,6 +90,90 @@ def send_telegram_message(decision: Dict[str, Any]) -> None:
     except Exception as e:
         print("텔레그램 전송 에러:", e)
 
+def send_telegram_agent_decision(agent_decision: Dict[str, Any]) -> None:
+    """
+    AI 에이전트의 거래 결정을 텔레그램으로 전송
+    """
+    if not agent_decision or not isinstance(agent_decision, dict):
+        print("⚠️ agent_decision이 비어있거나 형식이 잘못되었습니다.")
+        return
+
+    # 안전한 추출 및 형변환
+    def _to_float(v: Any, default: float = 0.0) -> float:
+        try:
+            return float(v)
+        except Exception:
+            return default
+
+    # 데이터 추출
+    ts = agent_decision.get("timestamp", "unknown")
+    price = _to_float(agent_decision.get("current_price"))
+    confidence = _to_float(agent_decision.get("ai_confidence"))
+    signal_quality = agent_decision.get("signal_quality", {}) or {}
+    action = agent_decision.get("action", "HOLD")
+    reason = agent_decision.get("reason", "")
+    pos_change = _to_float(agent_decision.get("position_change"))
+    leverage = _to_float(agent_decision.get("target_leverage"), 1.0)
+    holding_min = _to_float(agent_decision.get("target_holding_minutes"))
+    qty = _to_float(agent_decision.get("quantity"))
+    sl = agent_decision.get("stop_loss")
+    tp = agent_decision.get("take_profit")
+
+    # 이모지/라벨
+    action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
+    conf_level = (
+        "🔥 매우 높음" if confidence >= 0.8 else
+        ("📈 높음" if confidence >= 0.6 else ("📊 보통" if confidence >= 0.4 else "⚠️ 낮음"))
+    )
+
+    # 메시지 구성
+    msg = f"🤖 *AI Trading Decision*\n"
+    msg += f"🕒 {ts}\n\n"
+    
+    msg += f"{action_emoji} *{action}* (신뢰도: {confidence:.2f} - {conf_level})\n"
+    msg += f"💵 현재가: {price:.4f}\n"
+    
+    if reason:
+        msg += f"💭 이유: {reason}\n"
+    
+    # 신호 품질 정보
+    if isinstance(signal_quality, dict) and signal_quality:
+        try:
+            hc = int(signal_quality.get("high_confidence_signals", 0) or 0)
+            total = int(signal_quality.get("total_signals", 0) or 0)
+            agree = _to_float(signal_quality.get("agreement_score"))
+            overall = _to_float(signal_quality.get("overall_score"))
+            msg += f"\n📊 신호 품질: {hc}/{total}개 고신뢰 | 합의도: {agree:.2f} | 종합: {overall:.2f}"
+        except Exception:
+            pass
+
+    # 실행 파라미터
+    msg += f"\n\n⚙️ *실행 파라미터:*\n"
+    msg += f"• 포지션 변경: {pos_change:+.2f}\n"
+    msg += f"• 레버리지: {leverage:.0f}x\n"
+    msg += f"• 보유시간: {int(holding_min)}분\n"
+    msg += f"• 수량: {qty:.4f}"
+    
+    if sl is not None or tp is not None:
+        sl_str = f"{_to_float(sl):.4f}" if sl is not None else "-"
+        tp_str = f"{_to_float(tp):.4f}" if tp is not None else "-"
+        msg += f"\n• 손절/익절: {sl_str} / {tp_str}"
+
+    # 메시지 전송
+    url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": CHAT_ID,
+        "text": msg,
+        "parse_mode": "Markdown"
+    }
+    
+    try:
+        response = requests.post(url, json=payload)
+        if response.status_code != 200:
+            print("텔레그램 AI 결정 전송 실패:", response.text)
+    except Exception as e:
+        print("텔레그램 AI 결정 전송 에러:", e)
+
 def send_telegram_alert(message: str) -> None:
     """
     간단한 알림 메시지 전송

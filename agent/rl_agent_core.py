@@ -633,4 +633,353 @@ class StandardRLAgent:
                     lev_idx = np.clip(lev_idx, 0, 19)
                     hold_idx = np.clip(hold_idx, 0, 47)
                     
-                    target_position_q[i, pos_idx] = reward + self.gamma * torch.max(next_position_q[i
+                    target_position_q[i, pos_idx] = reward + self.gamma * torch.max(next_position_q[i])
+                    target_leverage_q[i, lev_idx] = reward + self.gamma * torch.max(next_leverage_q[i])
+                    target_holding_q[i, hold_idx] = reward + self.gamma * torch.max(next_holding_q[i])
+                else:
+                    pos_idx = int((action[0] + 2.0) / 0.2)
+                    lev_idx = int(action[1] - 1)
+                    hold_idx = int((action[2] - 30.0) / 30.0)
+                    
+                    pos_idx = np.clip(pos_idx, 0, 20)
+                    lev_idx = np.clip(lev_idx, 0, 19)
+                    hold_idx = np.clip(hold_idx, 0, 47)
+                    
+                    target_position_q[i, pos_idx] = reward
+                    target_leverage_q[i, lev_idx] = reward
+                    target_holding_q[i, hold_idx] = reward
+        
+        # 손실 계산
+        pos_loss = F.mse_loss(current_position_q, target_position_q)
+        lev_loss = F.mse_loss(current_leverage_q, target_leverage_q)
+        hold_loss = F.mse_loss(current_holding_q, target_holding_q)
+        
+        total_loss = pos_loss + lev_loss + hold_loss
+        
+        # 역전파
+        self.optimizer.zero_grad()
+        total_loss.backward()
+        torch.nn.utils.clip_grad_norm_(self.q_network.parameters(), 1.0)
+        self.optimizer.step()
+        
+        self.losses.append(total_loss.item())
+        
+        # 엡실론 감소
+        if self.epsilon > self.epsilon_min:
+            self.epsilon *= self.epsilon_decay
+    
+    def update_target_network(self):
+        """타겟 네트워크 업데이트"""
+        self.target_network.load_state_dict(self.q_network.state_dict())
+    
+    def save_model(self, filepath: str):
+        """모델 저장"""
+        torch.save({
+            'q_network': self.q_network.state_dict(),
+            'target_network': self.target_network.state_dict(),
+            'optimizer': self.optimizer.state_dict(),
+            'epsilon': self.epsilon,
+            'training_rewards': self.training_rewards,
+            'losses': self.losses
+        }, filepath)
+    
+    def load_model(self, filepath: str):
+        """모델 로드"""
+        checkpoint = torch.load(filepath, map_location=self.device)
+        self.q_network.load_state_dict(checkpoint['q_network'])
+        self.target_network.load_state_dict(checkpoint['target_network'])
+        self.optimizer.load_state_dict(checkpoint['optimizer'])
+        self.epsilon = checkpoint['epsilon']
+        self.training_rewards = checkpoint['training_rewards']
+        self.losses = checkpoint['losses']
+    
+    
+
+def train_standard_agent(price_data: pd.DataFrame, signal_data: List[Dict], 
+                        episodes: int = 1000, save_interval: int = 100):
+    """표준 강화학습 에이전트 훈련"""
+    
+    # 환경과 에이전트 초기화
+    env = StandardTradingEnvironment(price_data, signal_data)
+    agent = StandardRLAgent(env.observation_space.shape[0])
+    
+    episode_rewards = []
+    best_reward = -float('inf')
+    
+    for episode in range(episodes):
+        state = env.reset()
+        total_reward = 0
+        steps = 0
+        
+        while True:
+            # 액션 선택 및 실행
+            action = agent.act(state)
+            next_state, reward, done, info = env.step(action)
+            
+            # 경험 저장
+            agent.remember(state, action, reward, next_state, done)
+            
+            state = next_state
+            total_reward += reward
+            steps += 1
+            
+            # 학습
+            if len(agent.memory) > agent.batch_size:
+                agent.replay()
+            
+            if done:
+                break
+        
+        episode_rewards.append(total_reward)
+        agent.training_rewards.append(total_reward)
+        
+        # 타겟 네트워크 업데이트 (매 10 에피소드)
+        if episode % 10 == 0:
+            agent.update_target_network()
+        
+        # 진행 상황 출력
+        if episode % 10 == 0:
+            avg_reward = np.mean(episode_rewards[-10:]) if len(episode_rewards) >= 10 else np.mean(episode_rewards)
+            print(f"Episode {episode}, Average Reward: {avg_reward:.2f}, "
+                  f"Epsilon: {agent.epsilon:.3f}, Balance: {info['balance']:.2f}, "
+                  f"Win Rate: {info['win_rate']:.3f}")
+        
+        # 모델 저장
+        if episode % save_interval == 0 and total_reward > best_reward:
+            best_reward = total_reward
+            agent.save_model(f'best_standard_rl_model_ep{episode}.pth')
+            print(f"New best model saved at episode {episode} with reward {best_reward:.2f}")
+    
+    return agent, episode_rewards
+
+def evaluate_standard_agent(agent: StandardRLAgent, price_data: pd.DataFrame, 
+                           signal_data: List[Dict], episodes: int = 10):
+    """표준 에이전트 성능 평가"""
+    env = StandardTradingEnvironment(price_data, signal_data)
+    agent.epsilon = 0  # 탐험 비활성화
+    
+    results = []
+    
+    for episode in range(episodes):
+        state = env.reset()
+        total_reward = 0
+        trades = []
+        
+        while True:
+            action = agent.act(state)
+            next_state, reward, done, info = env.step(action)
+            
+            # 거래 기록
+            if env.total_trades > len(trades):
+                trades.append({
+                    'step': env.current_step,
+                    'price': env.price_data.iloc[env.current_step]['close'],
+                    'action': 'CLOSE',
+                    'balance': info['balance'],
+                    'pnl': info['balance'] - env.initial_balance
+                })
+            
+            state = next_state
+            total_reward += reward
+            
+            if done:
+                break
+        
+        results.append({
+            'episode': episode,
+            'total_reward': total_reward,
+            'final_balance': info['balance'],
+            'total_return': (info['balance'] - env.initial_balance) / env.initial_balance,
+            'total_trades': info['total_trades'],
+            'win_rate': info['win_rate'],
+            'max_drawdown': env.max_drawdown,
+            'trades': trades
+        })
+    
+    return results
+
+class BacktestResults:
+    """백테스트 결과 분석 클래스"""
+    
+    @staticmethod
+    def calculate_metrics(results: List[Dict]) -> Dict:
+        """성능 지표 계산"""
+        returns = [r['total_return'] for r in results]
+        
+        metrics = {
+            'avg_return': np.mean(returns),
+            'std_return': np.std(returns),
+            'sharpe_ratio': np.mean(returns) / np.std(returns) if np.std(returns) > 0 else 0,
+            'max_return': np.max(returns),
+            'min_return': np.min(returns),
+            'win_rate': np.mean([r['win_rate'] for r in results]),
+            'avg_trades': np.mean([r['total_trades'] for r in results]),
+            'max_drawdown': np.mean([r['max_drawdown'] for r in results]),
+            'profit_episodes': sum(1 for r in returns if r > 0),
+            'loss_episodes': sum(1 for r in returns if r < 0),
+        }
+        
+        return metrics
+    
+    @staticmethod
+    def print_report(results: List[Dict], metrics: Dict):
+        """성능 리포트 출력"""
+        print("\n" + "="*60)
+        print("강화학습 트레이딩 AI 성능 리포트")
+        print("="*60)
+        
+        print(f"평균 수익률: {metrics['avg_return']:.2%}")
+        print(f"수익률 표준편차: {metrics['std_return']:.2%}")
+        print(f"샤프 비율: {metrics['sharpe_ratio']:.3f}")
+        print(f"최대 수익률: {metrics['max_return']:.2%}")
+        print(f"최소 수익률: {metrics['min_return']:.2%}")
+        print(f"평균 승률: {metrics['win_rate']:.2%}")
+        print(f"평균 거래 횟수: {metrics['avg_trades']:.1f}")
+        print(f"최대 낙폭: {metrics['max_drawdown']:.2%}")
+        print(f"수익 에피소드: {metrics['profit_episodes']}개")
+        print(f"손실 에피소드: {metrics['loss_episodes']}개")
+
+# 데이터 로딩 함수들
+def load_ethusdc_data():
+    """ETHUSDC CSV 데이터 로드"""
+    try:
+        df_3m = pd.read_csv('data/ETHUSDC_3m_historical_data.csv')
+        df_3m['timestamp'] = pd.to_datetime(df_3m['timestamp'])
+        df_3m = df_3m.set_index('timestamp')
+        
+        df_15m = pd.read_csv('data/ETHUSDC_15m_historical_data.csv')
+        df_15m['timestamp'] = pd.to_datetime(df_15m['timestamp'])
+        df_15m = df_15m.set_index('timestamp')
+        
+        df_1h = pd.read_csv('data/ETHUSDC_1h_historical_data.csv')
+        df_1h['timestamp'] = pd.to_datetime(df_1h['timestamp'])
+        df_1h = df_1h.set_index('timestamp')
+        
+        print(f"ETHUSDC 3분봉: {len(df_3m)}개")
+        print(f"ETHUSDC 15분봉: {len(df_15m)}개")
+        print(f"ETHUSDC 1시간봉: {len(df_1h)}개")
+        
+        return df_3m, df_15m, df_1h
+
+    except FileNotFoundError as e:
+        print(f"데이터 파일을 찾을 수 없습니다: {e}")
+        return None, None, None
+    except Exception as e:
+        print(f"데이터 로드 중 오류: {e}")
+        return None, None, None
+
+def generate_signal_data_with_indicators(price_data: pd.DataFrame, price_data_15m: pd.DataFrame, 
+                                        price_data_1h: pd.DataFrame, max_periods: int = 1000):
+    """실제 지표로 신호 데이터 생성"""
+    try:
+        from data.strategy_executor import StrategyExecutor
+        from engines.trade_decision_engine import TradeDecisionEngine
+        from indicators.global_indicators import get_global_indicator_manager
+        from utils.time_manager import get_time_manager
+        
+        strategy_executor = StrategyExecutor()
+        decision_engine = TradeDecisionEngine()
+        global_manager = get_global_indicator_manager()
+        time_manager = get_time_manager()
+        
+        signal_data = []
+        
+        print("실제 지표로 신호 생성 중...")
+        
+        start_idx = 500
+        
+        for i in range(start_idx, min(len(price_data), start_idx + max_periods)):
+            try:
+                series_3m = price_data.iloc[i][['open', 'high', 'low', 'close', 'volume', 'quote_volume', 'timestamp']]
+                
+                global_manager.update_all_indicators(series_3m)
+                strategy_executor.execute_all_strategies()
+                signals = strategy_executor.get_signals()
+                decision = decision_engine.decide_trade_realtime(signals)
+                
+                signal_data.append(decision)
+                
+                if (i - start_idx) % 100 == 0:
+                    print(f"   진행률: {i - start_idx + 1}/{max_periods}")
+                    
+            except Exception as e:
+                print(f"신호 생성 오류 (인덱스 {i}): {e}")
+                # 기본 신호 생성
+                default_signal = {
+                    'decisions': {
+                        'SHORT_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 60, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0}}},
+                        'MEDIUM_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 240, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0}}},
+                        'LONG_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 1440, 'meta': {'synergy_meta': {'confidence': 'LOW', 'buy_score': 0.0, 'sell_score': 0.0}}}
+                    },
+                    'conflicts': {'has_conflicts': False, 'long_categories': [], 'short_categories': []},
+                    'meta': {'active_positions': 0}
+                }
+                signal_data.append(default_signal)
+        
+        print(f"신호 데이터 생성 완료: {len(signal_data)}개")
+        return signal_data
+        
+    except ImportError:
+        print("전략 모듈을 찾을 수 없습니다. 기본 신호를 생성합니다.")
+        return None
+
+# def main_example():
+#     """사용 예시"""
+    
+#     print("표준 강화학습 트레이딩 AI 예시")
+#     print("="*50)
+    
+#     # 1. 데이터 로드
+#     price_data_3m, price_data_15m, price_data_1h = load_ethusdc_data()
+    
+#     if price_data_3m is None:
+#         print("데이터 로드 실패")
+#         return
+    
+#     # 2. 가격 데이터 전처리
+#     price_data = price_data_3m.reset_index()
+#     price_data = price_data.rename(columns={'timestamp': 'timestamp'})
+    
+#     required_columns = ['timestamp', 'open', 'high', 'low', 'close', 'volume']
+#     price_data = price_data[required_columns]
+    
+#     print(f"가격 데이터: {len(price_data)}개 캔들")
+    
+#     # 3. 신호 데이터 생성
+#     signal_data = generate_signal_data_with_indicators(
+#         price_data, price_data_15m, price_data_1h, max_periods=1000
+#     )
+    
+#     if not signal_data:
+#         print("기본 신호 데이터 생성")
+#         signal_data = []
+#         for i in range(min(1000, len(price_data))):
+#             signal_data.append({
+#                 'decisions': {
+#                     'SHORT_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 60, 'meta': {'synergy_meta': {'confidence': 'LOW'}}},
+#                     'MEDIUM_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 240, 'meta': {'synergy_meta': {'confidence': 'LOW'}}},
+#                     'LONG_TERM': {'action': 'HOLD', 'net_score': 0.0, 'leverage': 1, 'max_holding_minutes': 1440, 'meta': {'synergy_meta': {'confidence': 'LOW'}}}
+#                 },
+#                 'conflicts': {'has_conflicts': False},
+#                 'meta': {'active_positions': 0}
+#             })
+    
+#     print("에이전트 훈련 시작")
+    
+#     # 4. 에이전트 훈련
+#     agent, rewards = train_standard_agent(price_data, signal_data, episodes=200)
+    
+#     print("성능 평가 중")
+    
+#     # 5. 성능 평가
+#     eval_results = evaluate_standard_agent(agent, price_data, signal_data, episodes=10)
+    
+#     # 6. 결과 분석
+#     metrics = BacktestResults.calculate_metrics(eval_results)
+#     BacktestResults.print_report(eval_results, metrics)
+    
+#     # 7. 모델 저장
+#     agent.save_model('standard_crypto_rl_model.pth')
+#     print("모델 저장 완료: standard_crypto_rl_model.pth")
+    
+#     return agent, eval_results, metrics

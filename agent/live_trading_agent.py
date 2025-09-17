@@ -13,12 +13,13 @@ import json
 import os
 from pathlib import Path
 
-# 훈련된 모델 클래스들 import
 try:
-    from rl_training_system import RLAgent, DuelingDQN
+    from agent.rl_training_system import RLAgent, DuelingDQN
+    print("✅ 올바른 모델 클래스 로드됨")
 except ImportError:
-    print("훈련 모듈을 찾을 수 없습니다. 기본 구조를 사용합니다.")
-    from rl_agent_core import StandardRLAgent as RLAgent, StandardDQN as DuelingDQN
+    print("❌ 훈련 시스템 모듈을 찾을 수 없습니다.")
+    # 대안: 직접 DuelingDQN 클래스 정의
+    from agent.rl_training_system import DuelingDQN, RLAgent
 
 class SignalQualityAnalyzer:
     """신호 품질 분석기"""
@@ -27,7 +28,7 @@ class SignalQualityAnalyzer:
     def analyze_signal_quality(signal_data: Dict[str, Any]) -> Dict[str, float]:
         """신호 데이터 품질 분석"""
         decisions = SignalQualityAnalyzer._normalize_signal_data(signal_data)
-        
+
         quality_metrics = {
             'high_confidence_signals': 0,
             'total_signals': 0,
@@ -328,22 +329,28 @@ class LiveTradingAgent:
         print(f"   모델: {model_path}")
         print(f"   초기 잔고: ${initial_balance:,.2f}")
     
+            
     def _load_trained_agent(self):
         """훈련된 에이전트 로드"""
         try:
-            # 에이전트 생성 (상태 크기는 60으로 고정)
+            # DuelingDQN을 사용하는 RLAgent 생성
             agent = RLAgent(state_size=60)
             
+            # 모델 파일 존재 확인
+            if not os.path.exists(self.model_path):
+                print(f"❌ 모델 파일이 없습니다: {self.model_path}")
+                return None
+            
             # 모델 로드
-            if agent.load_model(self.model_path):
-                agent.epsilon = 0.0  # 실거래에서는 탐험 비활성화
-                print(f"훈련된 모델 로드 성공")
+            if agent.load_model_with_compatibility(self.model_path):
+                agent.epsilon = 0.0
+                print(f"✅ 훈련된 모델 로드 성공")
                 return agent
             else:
                 raise Exception("모델 로드 실패")
                 
         except Exception as e:
-            print(f"에이전트 로드 실패: {e}")
+            print(f"❌ 에이전트 로드 실패: {e}")
             return None
     
     def make_trading_decision(self, signal_data: Dict[str, Any], 
@@ -590,7 +597,7 @@ class IntegrationHelper:
             with open(config_path, 'r') as f:
                 config = json.load(f)
             
-            model_path = config.get('model_path', 'final_optimized_model.pth')
+            model_path = config.get('model_path', 'agent/final_optimized_model.pth')
             initial_balance = config.get('initial_balance', 10000.0)
             
             return LiveTradingAgent(model_path, initial_balance)
@@ -598,7 +605,7 @@ class IntegrationHelper:
         except FileNotFoundError:
             print(f"설정 파일이 없습니다: {config_path}")
             print("기본 설정으로 에이전트를 생성합니다.")
-            return LiveTradingAgent('final_optimized_model.pth')
+            return LiveTradingAgent('agent/final_optimized_model.pth')
     
     @staticmethod
     def integrate_with_main_loop(live_agent: LiveTradingAgent):
@@ -610,7 +617,7 @@ class IntegrationHelper:
 from live_trading_agent import LiveTradingAgent
 
 # 1. AI 에이전트 초기화
-live_agent = LiveTradingAgent('final_optimized_model.pth')
+live_agent = LiveTradingAgent('agent/final_optimized_model.pth')
 
 # 2. 메인 루프에서
 while True:
@@ -653,7 +660,7 @@ def example_usage():
     """사용 예시"""
     
     # AI 에이전트 초기화
-    agent = LiveTradingAgent('final_optimized_model.pth')
+    agent = LiveTradingAgent('agent/final_optimized_model.pth')
     
     # 가상의 신호 데이터 (실제로는 strategy_executor에서)
     signal_data = {
@@ -697,7 +704,7 @@ def example_usage():
 def create_default_config():
     """기본 설정 파일 생성"""
     config = {
-        "model_path": "final_optimized_model.pth",
+        "model_path": "agent/final_optimized_model.pth",
         "initial_balance": 10000.0,
         "risk_settings": {
             "max_drawdown_limit": 0.12,

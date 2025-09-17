@@ -64,7 +64,6 @@ class TradeDecisionEngine:
         
         # 각 카테고리별로 독립적으로 결정
         decisions = {}
-        
         for category_name, category_config in self.STRATEGY_CATEGORIES.items():
             decisions[category_name] = self._decide_category_trade(
                 signals, category_name, category_config,
