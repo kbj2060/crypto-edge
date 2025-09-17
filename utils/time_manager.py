@@ -9,7 +9,7 @@
 
 import pandas as pd
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any, Tuple, List, Union
+from typing import Optional, Union
 
 class TimeManager:
     """시간 관리자 - 싱글톤 패턴"""

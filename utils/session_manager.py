@@ -10,7 +10,7 @@
 
 import pandas as pd
 from datetime import datetime, timezone, timedelta
-from typing import Optional, Dict, Any, Tuple, List, Union
+from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass
 
 # 세션 시간 상수

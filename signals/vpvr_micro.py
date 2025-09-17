@@ -145,7 +145,7 @@ class VPVRMicro:
         
         action = 'HOLD'
         score = 0.0
-        conf = 0.0
+        _conf = 0.0
         entry = None
         stop = None
         
@@ -158,25 +158,25 @@ class VPVRMicro:
                 
                 # 방향 결정 - 개선된 로직
                 if self.config.side_bias == 'LONG':
-                    action, score, conf = 'BUY', 0.8, 0.7
+                    action, score, _conf = 'BUY', 0.8, 0.7
                 elif self.config.side_bias == 'SHORT':
-                    action, score, conf = 'SELL', 0.8, 0.7
+                    action, score, _conf = 'SELL', 0.8, 0.7
                 else:
                     # POC 근처에서의 가격 움직임과 거래량 패턴으로 방향 결정
                     price_diff_pct = (last_close - poc) / poc
                     
                     # POC 근처 (±0.5% 이내)에서는 중립
                     if abs(price_diff_pct) <= 0.005:
-                        action, score, conf = 'HOLD', 0.0, 0.0
+                        action, score, _conf = 'HOLD', 0.0, 0.0
                     # POC 위에서 강한 상승 모멘텀이 있으면 BUY
                     elif price_diff_pct > 0.005 and last_close > df_3m['close'].iloc[-2]:
-                        action, score, conf = 'BUY', 0.75, 0.6
+                        action, score, _conf = 'BUY', 0.75, 0.6
                     # POC 아래에서 강한 하락 모멘텀이 있으면 SELL  
                     elif price_diff_pct < -0.005 and last_close < df_3m['close'].iloc[-2]:
-                        action, score, conf = 'SELL', 0.75, 0.6
+                        action, score, _conf = 'SELL', 0.75, 0.6
                     # 그 외에는 중립
                     else:
-                        action, score, conf = 'HOLD', 0.0, 0.0
+                        action, score, _conf = 'HOLD', 0.0, 0.0
                 
                 entry = last_close
                 

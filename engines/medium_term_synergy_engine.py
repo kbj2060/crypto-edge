@@ -1,7 +1,6 @@
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import numpy as np
-from datetime import datetime, timedelta
 
 @dataclass
 class MediumTermConfig:

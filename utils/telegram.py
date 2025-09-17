@@ -17,7 +17,7 @@ def send_telegram_message(decision: Dict[str, Any]) -> None:
     # 새로운 구조에서 데이터 추출
     decisions = decision.get("decisions", {})
     conflicts = decision.get("conflicts", {})
-    meta = decision.get("meta", {})
+    decision.get("meta", {})
     
     # 활성 포지션만 필터링
     active_positions = {k: v for k, v in decisions.items() if v.get("action") != "HOLD"}

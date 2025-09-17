@@ -1,8 +1,7 @@
 # long_term_synergy.py
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import numpy as np
-from datetime import datetime, timedelta
 
 @dataclass 
 class LongTermConfig:
@@ -127,11 +126,10 @@ class LongTermSynergyEngine:
         # 2. 펀딩비 상태 분석 (시장 심리)
         funding = signal_dict.get('FUNDING_RATE')
         funding_extreme = False
-        funding_direction = None
         
         if funding and funding['score'] > self.config.funding_rate_threshold:
             funding_extreme = True
-            funding_direction = funding['action']
+            funding['action']
         
         # 3. VPVR 레벨 강도 (거래량 기반 지지/저항)
         vpvr = signal_dict.get('VPVR')

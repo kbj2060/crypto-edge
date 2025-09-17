@@ -1,11 +1,9 @@
 # signals/macd_histogram_strategy.py
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional, Dict, Any
 import pandas as pd
-import numpy as np
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from indicators.global_indicators import get_atr
 from utils.time_manager import get_time_manager
 

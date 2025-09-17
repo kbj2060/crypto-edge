@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, Optional
 from datetime import datetime
 import math
 from utils.time_manager import get_time_manager
@@ -14,17 +14,18 @@ class TradeDecisionEngine:
     # 전략 카테고리 정의
     STRATEGY_CATEGORIES = {
         "SHORT_TERM": {  # 3분봉 기반, 5-30분 보유
-            "strategies": [ "VOL_SPIKE", "ORDERFLOW_CVD", "VPVR_MICRO",
-                            "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "ZSCORE_MEAN_REVERSION"],
-            "weight": 0.60,  # 전체 가중치의 60%
+            "strategies": ["VOL_SPIKE", "ORDERFLOW_CVD", "VPVR_MICRO",
+                          "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "ZSCORE_MEAN_REVERSION"],
+            "weight": 0.60,
             "timeframe": "3m",
             "max_holding_minutes": 30,
             "leverage": 20,
             "risk_multiplier": 1.0
         },
         "MEDIUM_TERM": {  # 15분봉 기반, 1-4시간 보유
-            "strategies": ["MULTI_TIMEFRAME", "HTF_TREND", "BOLLINGER_SQUEEZE", "SUPPORT_RESISTANCE", "EMA_CONFLUENCE"],
-            "weight": 0.25,  # 전체 가중치의 25%
+            "strategies": ["MULTI_TIMEFRAME", "HTF_TREND", "BOLLINGER_SQUEEZE", 
+                          "SUPPORT_RESISTANCE", "EMA_CONFLUENCE"],
+            "weight": 0.25,
             "timeframe": "15m",
             "max_holding_minutes": 240,
             "leverage": 10,
@@ -32,11 +33,65 @@ class TradeDecisionEngine:
         },
         "LONG_TERM": {  # 1시간봉+ 기반, 4-24시간 보유
             "strategies": ["OI_DELTA", "VPVR", "ICHIMOKU", "FUNDING_RATE"],
-            "weight": 0.15,  # 전체 가중치의 15%
+            "weight": 0.15,
             "timeframe": "1h+",
             "max_holding_minutes": 1440,
             "leverage": 5,
             "risk_multiplier": 0.5
+        }
+    }
+    
+    # 고정 스키마 정의 - 항상 동일한 구조 보장
+    FIXED_SCHEMA = {
+        "action": "HOLD",
+        "category": "",
+        "net_score": 0.0,
+        "raw": {
+            # 모든 가능한 전략들을 고정으로 정의
+            "vol_spike": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "orderflow_cvd": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "vpvr_micro": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "session": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "liquidity_grab": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "vwap_pinball": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "zscore_mean_reversion": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "multi_timeframe": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "htf_trend": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "bollinger_squeeze": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "support_resistance": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "ema_confluence": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "oi_delta": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "vpvr": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "ichimoku": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None},
+            "funding_rate": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None, "weight": 0.0, "timestamp": None}
+        },
+        "reason": "",
+        "sizing": {
+            "qty": None,
+            "risk_usd": 0.0,
+            "entry_used": None,
+            "stop_used": None,
+            "leverage": 0,
+            "risk_multiplier": 0.0
+        },
+        "max_holding_minutes": 0,
+        "leverage": 0,
+        "strategies_used": [],
+        "meta": {
+            "timestamp_utc": "",
+            "timeframe": "",
+            "used_weight_sum": 0.0,
+            "synergy_meta": {
+                "confidence": "LOW",
+                "market_context": "NEUTRAL",
+                "conflicts_detected": [],
+                "bonuses_applied": [],
+                "buy_score": 0.0,
+                "sell_score": 0.0,
+                "signals_used": 0,
+                "institutional_bias": "NEUTRAL",
+                "macro_trend_strength": "WEAK"
+            }
         }
     }
     
@@ -47,13 +102,137 @@ class TradeDecisionEngine:
         self.medium_term_engine = MediumTermSynergyEngine(MediumTermConfig())
         self.long_term_engine = LongTermSynergyEngine(LongTermConfig())
 
+    def _create_fixed_decision_schema(self, category_name: str) -> Dict[str, Any]:
+        """고정 스키마 기반으로 결정 객체 생성"""
+        import copy
+        decision = copy.deepcopy(self.FIXED_SCHEMA)
+        decision["category"] = category_name
+        decision["meta"]["timestamp_utc"] = self.time_manager.get_current_time().isoformat()
+        decision["meta"]["timeframe"] = self.STRATEGY_CATEGORIES[category_name]["timeframe"]
+        return decision
+
+    def _normalize_single_decision(self, decision: Dict[str, Any], category_name: str) -> Dict[str, Any]:
+        """단일 결정을 고정 스키마로 정규화"""
+        # 고정 스키마로 시작
+        normalized = self._create_fixed_decision_schema(category_name)
+        
+        # 실제 값들로 업데이트 (안전하게)
+        self._safe_update_dict(normalized, decision, ["action", "net_score", "reason"])
+        
+        # raw 섹션 업데이트 - 모든 전략 키가 항상 존재하도록 보장
+        if "raw" in decision and isinstance(decision["raw"], dict):
+            for strategy_name, strategy_data in decision["raw"].items():
+                normalized_strategy = strategy_name.lower().replace("_or", "")  # session_or -> session
+                if normalized_strategy in normalized["raw"]:
+                    # 항상 모든 필드를 업데이트 (None 값도 포함)
+                    if isinstance(strategy_data, dict):
+                        for field in ["action", "score", "entry", "stop", "weight", "timestamp"]:
+                            if field in strategy_data:
+                                normalized["raw"][normalized_strategy][field] = strategy_data[field]
+                            # 필드가 없어도 기본값 유지됨
+        
+        # 모든 전략 키에 대해 명시적으로 기본값 보장
+        for strategy_key in normalized["raw"]:
+            strategy_obj = normalized["raw"][strategy_key]
+            # 필수 필드들이 모두 있는지 확인하고 없으면 기본값 설정
+            required_fields = {
+                "action": "HOLD",
+                "score": 0.0,
+                "entry": None,
+                "stop": None,
+                "weight": 0.0,
+                "timestamp": None
+            }
+            for field, default_val in required_fields.items():
+                if field not in strategy_obj:
+                    strategy_obj[field] = default_val
+        
+        # sizing 섹션 업데이트
+        if "sizing" in decision and isinstance(decision["sizing"], dict):
+            self._safe_update_dict(normalized["sizing"], decision["sizing"],
+                                 ["qty", "risk_usd", "entry_used", "stop_used", "leverage", "risk_multiplier"])
+        
+        # sizing의 필수 필드들 보장
+        required_sizing_fields = {
+            "qty": None,
+            "risk_usd": 0.0,
+            "entry_used": None,
+            "stop_used": None,
+            "leverage": 0,
+            "risk_multiplier": 0.0
+        }
+        for field, default_val in required_sizing_fields.items():
+            if field not in normalized["sizing"]:
+                normalized["sizing"][field] = default_val
+        
+        # meta 섹션 업데이트
+        if "meta" in decision and isinstance(decision["meta"], dict):
+            self._safe_update_dict(normalized["meta"], decision["meta"],
+                                 ["used_weight_sum"])
+            
+            # synergy_meta 업데이트
+            if "synergy_meta" in decision["meta"] and isinstance(decision["meta"]["synergy_meta"], dict):
+                self._safe_update_dict(normalized["meta"]["synergy_meta"], decision["meta"]["synergy_meta"],
+                                     ["confidence", "market_context", "conflicts_detected", "bonuses_applied",
+                                      "buy_score", "sell_score", "signals_used", "institutional_bias", "macro_trend_strength"])
+        
+        # synergy_meta의 필수 필드들 보장
+        required_synergy_fields = {
+            "confidence": "LOW",
+            "market_context": "NEUTRAL",
+            "conflicts_detected": [],
+            "bonuses_applied": [],
+            "buy_score": 0.0,
+            "sell_score": 0.0,
+            "signals_used": 0,
+            "institutional_bias": "NEUTRAL",
+            "macro_trend_strength": "WEAK"
+        }
+        for field, default_val in required_synergy_fields.items():
+            if field not in normalized["meta"]["synergy_meta"]:
+                normalized["meta"]["synergy_meta"][field] = default_val
+        
+        # 기타 필드들 업데이트
+        for field in ["max_holding_minutes", "leverage", "strategies_used"]:
+            if field in decision:
+                normalized[field] = decision[field]
+            elif field == "strategies_used" and field not in normalized:
+                normalized[field] = []
+        
+        return normalized
+
+    def _safe_update_dict(self, target: Dict[str, Any], source: Dict[str, Any], allowed_keys: list) -> None:
+        """안전하게 딕셔너리 업데이트 (허용된 키만) - None 값도 명시적으로 설정"""
+        for key in allowed_keys:
+            if key in source:
+                # None 값도 명시적으로 설정하여 키 누락 방지
+                target[key] = source[key]
+            # source에 키가 없어도 target의 기본값 유지 (이미 고정 스키마에서 설정됨)
+
+    def _normalize_decisions_schema(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """모든 카테고리 결정을 고정 스키마로 정규화"""
+        normalized = {}
+        
+        # 모든 카테고리에 대해 고정 스키마 적용
+        for category_name in self.STRATEGY_CATEGORIES.keys():
+            if category_name.lower() in decisions:
+                # 실제 결정이 있는 경우
+                normalized[category_name.lower()] = self._normalize_single_decision(
+                    decisions[category_name.lower()], category_name
+                )
+            else:
+                # 결정이 없는 경우 기본 HOLD 결정 생성
+                normalized[category_name.lower()] = self._create_category_hold_decision(category_name)
+        
+        return normalized
+
     def decide_trade_realtime(
         self,
         signals: Dict[str, Dict[str, Any]],
         *,
         account_balance: float = 10000.0,
         base_risk_pct: float = 0.005,
-        open_threshold: float = 0.15,  # 0.25 -> 0.15 (완화)
+        open_threshold: float = 0.15,
         immediate_threshold: float = 0.75,
         confirm_threshold: float = 0.3,
         confirm_window_sec: int = 180,
@@ -65,7 +244,7 @@ class TradeDecisionEngine:
         # 각 카테고리별로 독립적으로 결정
         decisions = {}
         for category_name, category_config in self.STRATEGY_CATEGORIES.items():
-            decisions[category_name] = self._decide_category_trade(
+            decisions[category_name.lower()] = self._decide_category_trade(
                 signals, category_name, category_config,
                 account_balance, base_risk_pct, open_threshold,
                 immediate_threshold, confirm_threshold, confirm_window_sec,
@@ -75,16 +254,42 @@ class TradeDecisionEngine:
         # 포지션 충돌 체크
         conflicts = self._check_position_conflicts(decisions)
         
+        # 고정 스키마로 정규화 (핵심!)
+        normalized_decisions = self._normalize_decisions_schema(decisions)
+        
+        # 고정 conflicts 스키마
+        normalized_conflicts = {
+            "has_conflicts": conflicts.get("has_conflicts", False),
+            "conflict_types": conflicts.get("conflict_types", []),
+            "long_categories": conflicts.get("long_categories", []),
+            "short_categories": conflicts.get("short_categories", []),
+            "conflict_details": conflicts.get("conflict_details", [])
+        }
+        
+        # 고정 meta 스키마
+        normalized_meta = {
+            "timestamp_utc": self.time_manager.get_current_time().isoformat(),
+            "total_categories": 3,  # 고정값
+            "active_positions": sum(1 for d in normalized_decisions.values() if d["action"] != "HOLD"),
+            "session_priority": session_priority,
+            "news_event": news_event
+        }
+        
         return {
-            "decisions": decisions,
-            "conflicts": conflicts,
-            "meta": {
-                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
-                "total_categories": len(decisions),
-                "active_positions": sum(1 for d in decisions.values() if d["action"] != "HOLD")
-            }
+            "decisions": normalized_decisions,
+            "conflicts": normalized_conflicts,
+            "meta": normalized_meta
         }
     
+    def _create_category_hold_decision(self, category_name: str) -> Dict[str, Any]:
+        """카테고리별 HOLD 결정 생성 (고정 스키마 사용)"""
+        decision = self._create_fixed_decision_schema(category_name)
+        decision["reason"] = f"no {category_name.lower()} strategies active"
+        decision["max_holding_minutes"] = self.STRATEGY_CATEGORIES[category_name]["max_holding_minutes"]
+        decision["leverage"] = self.STRATEGY_CATEGORIES[category_name]["leverage"]
+        return decision
+
+    # 나머지 메서드들은 기존과 동일하게 유지...
     def _decide_category_trade(
         self, 
         signals: Dict[str, Dict[str, Any]], 
@@ -103,10 +308,10 @@ class TradeDecisionEngine:
         
         # 해당 카테고리 신호만 필터링
         category_signals = {k: v for k, v in signals.items() 
-                           if k in category_config["strategies"]}
+                            if k.upper() in category_config["strategies"]}
         
         if not category_signals:
-            return self._create_category_hold_decision(category_name, category_config)
+            return self._create_category_hold_decision(category_name)
         
         # 각 카테고리별 시너지 엔진 사용
         if category_name == "SHORT_TERM":
@@ -128,55 +333,10 @@ class TradeDecisionEngine:
                 session_priority, news_event
             )
         
-        # 다른 카테고리는 기존 로직 사용
-        # 카테고리 내 가중치 계산
-        category_weights = self._calculate_category_weights(category_signals, category_config)
-        
-        # 카테고리별 점수 계산
-        signed, raw, used_weight_sum = self._calculate_weighted_scores(category_signals, category_weights)
-        
-        if used_weight_sum <= 0:
-            return self._create_category_hold_decision(category_name, category_config)
-        
-        net_score = sum(signed.values()) / max(1e-9, used_weight_sum)
-        
-        # 세션 오버라이드 체크 (단기 전략에만 적용)
-        session_override = False
-        session_action = None
-        if category_name == "SHORT_TERM" and session_priority:
-            session_override, session_action = self._check_session_override(raw, session_priority, immediate_threshold)
-        
-        # 확인 신호 계산
-        now = self.time_manager.get_current_time()
-        agree_counts = self._calculate_agreement_counts(raw, confirm_threshold, confirm_window_sec, now)
-        
-        # 최종 결정
-        action, reason = self._make_category_decision(
-            session_override, session_action, raw, net_score, open_threshold, agree_counts
-        )
-        
-        # 포지션 크기 계산
-        sizing = self._calculate_category_sizing(
-            action, raw, category_config, account_balance, base_risk_pct
-        )
-        
-        return {
-            "action": action,
-            "category": category_name,
-            "net_score": round(net_score, 4),
-            "raw": raw,
-            "reason": "; ".join(reason),
-            "sizing": sizing,
-            "max_holding_minutes": category_config["max_holding_minutes"],
-            "leverage": category_config["leverage"],
-            "strategies_used": list(category_signals.keys()),
-            "meta": {
-                "timestamp_utc": now.isoformat(),
-                "used_weight_sum": used_weight_sum,
-                "timeframe": category_config["timeframe"]
-            }
-        }
-    
+        # 기본 로직 (백업용)
+        return self._create_category_hold_decision(category_name)
+
+    # 시너지 엔진 메서드들도 고정 스키마 반환하도록 수정
     def _decide_short_term_with_synergy(
         self,
         category_signals: Dict[str, Dict[str, Any]],
@@ -192,89 +352,72 @@ class TradeDecisionEngine:
     ) -> Dict[str, Any]:
         """ShortTermSynergyEngine을 사용한 단기 전략 결정"""
         
-        # ShortTermSynergyEngine에 신호 전달
+        # 고정 스키마로 시작
+        decision = self._create_fixed_decision_schema("SHORT_TERM")
+        
+        # 시너지 엔진 실행
         synergy_result = self.short_term_engine.calculate_synergy_score(category_signals)
-        # 결과 변환
+        
+        # 결과 업데이트
+        decision["net_score"] = round(synergy_result['net_score'], 4)
+        
+        # 액션 결정
         action = synergy_result['action']
-        net_score = synergy_result['net_score']
-        confidence = synergy_result['confidence']
-        market_context = synergy_result['market_context']
-        conflicts_detected = synergy_result['conflicts_detected']
-        
-        # 세션 오버라이드 체크 (기존 로직 유지)
-        session_override = False
-        session_action = None
-        if session_priority:
-            # synergy_result에서 raw 신호 재구성
-            raw_signals = {}
-            for name, signal_data in category_signals.items():
-                raw_signals[name] = {
-                    "action": signal_data.get("action"),
-                    "score": signal_data.get("score"),
-                    "weight": 1.0,  # 시너지 엔진에서 이미 가중치 적용됨
-                    "entry": signal_data.get("entry"),
-                    "stop": signal_data.get("stop"),
-                    "timestamp": self.time_manager.get_current_time()
-                }
-            
-            session_override, session_action = self._check_session_override(
-                raw_signals, session_priority, immediate_threshold
-            )
-        
-        # 최종 액션 결정
-        if session_override and session_action is not None:
-            final_action = "LONG" if session_action == "BUY" else "SHORT"
-            reason = [f"SESSION strong override (score={raw_signals.get('SESSION', {}).get('score', 'N/A')})"]
+        if action == 'BUY':
+            decision["action"] = 'LONG'
+            decision["reason"] = f"synergy BUY: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
+        elif action == 'SELL':
+            decision["action"] = 'SHORT'
+            decision["reason"] = f"synergy SELL: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
         else:
-            # 시너지 엔진 결과 사용
-            if action == 'BUY':
-                final_action = 'LONG'
-                reason = [f"synergy BUY: net_score={net_score:.3f}, confidence={confidence}"]
-            elif action == 'SELL':
-                final_action = 'SHORT'
-                reason = [f"synergy SELL: net_score={net_score:.3f}, confidence={confidence}"]
-            else:
-                final_action = 'HOLD'
-                reason = [f"synergy HOLD: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'HOLD'
+            decision["reason"] = f"synergy HOLD: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
         
-        # 포지션 크기 계산 (기존 로직 사용)
-        raw_signals = {}
+        # raw 신호 업데이트 (고정 스키마의 해당 키만) - 모든 필드 보장
         for name, signal_data in category_signals.items():
-            raw_signals[name] = {
-                "action": signal_data.get("action"),
-                "score": signal_data.get("score"),
-                "entry": signal_data.get("entry"),
-                "stop": signal_data.get("stop")
-            }
+            normalized_name = name.lower().replace("_or", "")
+            if normalized_name in decision["raw"]:
+                # 모든 필드를 명시적으로 설정 (None 값도 포함)
+                decision["raw"][normalized_name]["action"] = signal_data.get("action", "HOLD")
+                decision["raw"][normalized_name]["score"] = signal_data.get("score", 0.0)
+                decision["raw"][normalized_name]["entry"] = signal_data.get("entry")  # None도 허용
+                decision["raw"][normalized_name]["stop"] = signal_data.get("stop")    # None도 허용
+                decision["raw"][normalized_name]["weight"] = 1.0
+                decision["raw"][normalized_name]["timestamp"] = self.time_manager.get_current_time()
         
+        # 사용되지 않은 전략들도 기본값으로 명시적 설정
+        for strategy_key in decision["raw"]:
+            if not any(name.lower().replace("_or", "") == strategy_key for name in category_signals.keys()):
+                decision["raw"][strategy_key]["action"] = "HOLD"
+                decision["raw"][strategy_key]["score"] = 0.0
+                decision["raw"][strategy_key]["entry"] = None
+                decision["raw"][strategy_key]["stop"] = None
+                decision["raw"][strategy_key]["weight"] = 0.0
+                decision["raw"][strategy_key]["timestamp"] = None
+        
+        # 포지션 크기 계산
         sizing = self._calculate_category_sizing(
-            final_action, raw_signals, category_config, account_balance, base_risk_pct
+            decision["action"], decision["raw"], category_config, account_balance, base_risk_pct
         )
+        decision["sizing"].update(sizing)
         
-        return {
-            "action": final_action,
-            "category": "SHORT_TERM",
-            "net_score": round(net_score, 4),
-            "raw": raw_signals,
-            "reason": "; ".join(reason),
-            "sizing": sizing,
-            "max_holding_minutes": category_config["max_holding_minutes"],
-            "leverage": category_config["leverage"],
-            "strategies_used": list(category_signals.keys()),
-            "meta": {
-                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
-                "timeframe": category_config["timeframe"],
-                "synergy_meta": {
-                    "confidence": confidence,
-                    "market_context": market_context,
-                    "conflicts_detected": conflicts_detected,
-                    "buy_score": synergy_result.get('buy_score', 0),
-                    "sell_score": synergy_result.get('sell_score', 0),
-                    "signals_used": synergy_result.get('signals_used', 0)
-                }
-            }
-        }
-    
+        # 기타 필드 업데이트
+        decision["max_holding_minutes"] = category_config["max_holding_minutes"]
+        decision["leverage"] = category_config["leverage"]
+        decision["strategies_used"] = list(category_signals.keys())
+        
+        # 시너지 메타데이터
+        decision["meta"]["synergy_meta"].update({
+            "confidence": synergy_result['confidence'],
+            "market_context": synergy_result['market_context'],
+            "conflicts_detected": synergy_result['conflicts_detected'],
+            "buy_score": synergy_result.get('buy_score', 0),
+            "sell_score": synergy_result.get('sell_score', 0),
+            "signals_used": synergy_result.get('signals_used', 0)
+        })
+        
+        return decision
+
     def _decide_medium_term_with_synergy(
         self,
         category_signals: Dict[str, Dict[str, Any]],
@@ -290,67 +433,73 @@ class TradeDecisionEngine:
     ) -> Dict[str, Any]:
         """MediumTermSynergyEngine을 사용한 중기 전략 결정"""
         
-        # MediumTermSynergyEngine에 신호 전달
+        # 고정 스키마로 시작
+        decision = self._create_fixed_decision_schema("MEDIUM_TERM")
+        
+        # 시너지 엔진 실행
         synergy_result = self.medium_term_engine.calculate_synergy_score(category_signals)
         
-        # 결과 변환
-        action = synergy_result['action']
-        net_score = synergy_result['net_score']
-        confidence = synergy_result['confidence']
-        market_context = synergy_result['market_context']
-        conflicts_detected = synergy_result['conflicts_detected']
-        bonuses_applied = synergy_result.get('bonuses_applied', [])
+        # 결과 업데이트
+        decision["net_score"] = round(synergy_result['net_score'], 4)
         
-        # 최종 액션 결정
+        # 액션 결정
+        action = synergy_result['action']
         if action == 'BUY':
-            final_action = 'LONG'
-            reason = [f"medium synergy BUY: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'LONG'
+            decision["reason"] = f"medium synergy BUY: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
         elif action == 'SELL':
-            final_action = 'SHORT'
-            reason = [f"medium synergy SELL: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'SHORT'
+            decision["reason"] = f"medium synergy SELL: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
         else:
-            final_action = 'HOLD'
-            reason = [f"medium synergy HOLD: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'HOLD'
+            decision["reason"] = f"medium synergy HOLD: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
+        
+        # raw 신호 업데이트 (고정 스키마의 해당 키만) - 모든 필드 보장
+        for name, signal_data in category_signals.items():
+            normalized_name = name.lower()
+            if normalized_name in decision["raw"]:
+                # 모든 필드를 명시적으로 설정 (None 값도 포함)
+                decision["raw"][normalized_name]["action"] = signal_data.get("action", "HOLD")
+                decision["raw"][normalized_name]["score"] = signal_data.get("score", 0.0)
+                decision["raw"][normalized_name]["entry"] = signal_data.get("entry")  # None도 허용
+                decision["raw"][normalized_name]["stop"] = signal_data.get("stop")    # None도 허용
+                decision["raw"][normalized_name]["weight"] = 1.0
+                decision["raw"][normalized_name]["timestamp"] = self.time_manager.get_current_time()
+        
+        # 사용되지 않은 전략들도 기본값으로 명시적 설정
+        for strategy_key in decision["raw"]:
+            if not any(name.lower() == strategy_key for name in category_signals.keys()):
+                decision["raw"][strategy_key]["action"] = "HOLD"
+                decision["raw"][strategy_key]["score"] = 0.0
+                decision["raw"][strategy_key]["entry"] = None
+                decision["raw"][strategy_key]["stop"] = None
+                decision["raw"][strategy_key]["weight"] = 0.0
+                decision["raw"][strategy_key]["timestamp"] = None
         
         # 포지션 크기 계산
-        raw_signals = {}
-        for name, signal_data in category_signals.items():
-            raw_signals[name] = {
-                "action": signal_data.get("action"),
-                "score": signal_data.get("score"),
-                "entry": signal_data.get("entry"),
-                "stop": signal_data.get("stop")
-            }
-        
         sizing = self._calculate_category_sizing(
-            final_action, raw_signals, category_config, account_balance, base_risk_pct
+            decision["action"], decision["raw"], category_config, account_balance, base_risk_pct
         )
+        decision["sizing"].update(sizing)
         
-        return {
-            "action": final_action,
-            "category": "MEDIUM_TERM",
-            "net_score": round(net_score, 4),
-            "raw": raw_signals,
-            "reason": "; ".join(reason),
-            "sizing": sizing,
-            "max_holding_minutes": category_config["max_holding_minutes"],
-            "leverage": category_config["leverage"],
-            "strategies_used": list(category_signals.keys()),
-            "meta": {
-                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
-                "timeframe": category_config["timeframe"],
-                "synergy_meta": {
-                    "confidence": confidence,
-                    "market_context": market_context,
-                    "conflicts_detected": conflicts_detected,
-                    "bonuses_applied": bonuses_applied,
-                    "buy_score": synergy_result.get('buy_score', 0),
-                    "sell_score": synergy_result.get('sell_score', 0),
-                    "signals_used": synergy_result.get('signals_used', 0)
-                }
-            }
-        }
-    
+        # 기타 필드 업데이트
+        decision["max_holding_minutes"] = category_config["max_holding_minutes"]
+        decision["leverage"] = category_config["leverage"]
+        decision["strategies_used"] = list(category_signals.keys())
+        
+        # 시너지 메타데이터
+        decision["meta"]["synergy_meta"].update({
+            "confidence": synergy_result['confidence'],
+            "market_context": synergy_result['market_context'],
+            "conflicts_detected": synergy_result['conflicts_detected'],
+            "bonuses_applied": synergy_result.get('bonuses_applied', []),
+            "buy_score": synergy_result.get('buy_score', 0),
+            "sell_score": synergy_result.get('sell_score', 0),
+            "signals_used": synergy_result.get('signals_used', 0)
+        })
+        
+        return decision
+
     def _decide_long_term_with_synergy(
         self,
         category_signals: Dict[str, Dict[str, Any]],
@@ -366,142 +515,94 @@ class TradeDecisionEngine:
     ) -> Dict[str, Any]:
         """LongTermSynergyEngine을 사용한 장기 전략 결정"""
         
-        # LongTermSynergyEngine에 신호 전달
+        # 고정 스키마로 시작
+        decision = self._create_fixed_decision_schema("LONG_TERM")
+        
+        # 시너지 엔진 실행
         synergy_result = self.long_term_engine.calculate_synergy_score(category_signals)
         
-        # 결과 변환
-        action = synergy_result['action']
-        net_score = synergy_result['net_score']
-        confidence = synergy_result['confidence']
-        market_context = synergy_result['market_context']
-        conflicts_detected = synergy_result['conflicts_detected']
-        bonuses_applied = synergy_result.get('bonuses_applied', [])
+        # 결과 업데이트
+        decision["net_score"] = round(synergy_result['net_score'], 4)
         
-        # 최종 액션 결정
+        # 액션 결정
+        action = synergy_result['action']
         if action == 'BUY':
-            final_action = 'LONG'
-            reason = [f"long synergy BUY: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'LONG'
+            decision["reason"] = f"long synergy BUY: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
         elif action == 'SELL':
-            final_action = 'SHORT'
-            reason = [f"long synergy SELL: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'SHORT'
+            decision["reason"] = f"long synergy SELL: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
         else:
-            final_action = 'HOLD'
-            reason = [f"long synergy HOLD: net_score={net_score:.3f}, confidence={confidence}"]
+            decision["action"] = 'HOLD'
+            decision["reason"] = f"long synergy HOLD: net_score={synergy_result['net_score']:.3f}, confidence={synergy_result['confidence']}"
+        
+        # raw 신호 업데이트 (고정 스키마의 해당 키만) - 모든 필드 보장  
+        for name, signal_data in category_signals.items():
+            normalized_name = name.lower()
+            if normalized_name in decision["raw"]:
+                # 모든 필드를 명시적으로 설정 (None 값도 포함)
+                decision["raw"][normalized_name]["action"] = signal_data.get("action", "HOLD")
+                decision["raw"][normalized_name]["score"] = signal_data.get("score", 0.0)
+                decision["raw"][normalized_name]["entry"] = signal_data.get("entry")  # None도 허용
+                decision["raw"][normalized_name]["stop"] = signal_data.get("stop")    # None도 허용
+                decision["raw"][normalized_name]["weight"] = 1.0
+                decision["raw"][normalized_name]["timestamp"] = self.time_manager.get_current_time()
+        
+        # 사용되지 않은 전략들도 기본값으로 명시적 설정
+        for strategy_key in decision["raw"]:
+            if not any(name.lower() == strategy_key for name in category_signals.keys()):
+                decision["raw"][strategy_key]["action"] = "HOLD"
+                decision["raw"][strategy_key]["score"] = 0.0
+                decision["raw"][strategy_key]["entry"] = None
+                decision["raw"][strategy_key]["stop"] = None
+                decision["raw"][strategy_key]["weight"] = 0.0
+                decision["raw"][strategy_key]["timestamp"] = None
         
         # 포지션 크기 계산
-        raw_signals = {}
-        for name, signal_data in category_signals.items():
-            raw_signals[name] = {
-                "action": signal_data.get("action"),
-                "score": signal_data.get("score"),
-                "entry": signal_data.get("entry"),
-                "stop": signal_data.get("stop")
-            }
-        
         sizing = self._calculate_category_sizing(
-            final_action, raw_signals, category_config, account_balance, base_risk_pct
+            decision["action"], decision["raw"], category_config, account_balance, base_risk_pct
         )
+        decision["sizing"].update(sizing)
         
-        return {
-            "action": final_action,
-            "category": "LONG_TERM",
-            "net_score": round(net_score, 4),
-            "raw": raw_signals,
-            "reason": "; ".join(reason),
-            "sizing": sizing,
-            "max_holding_minutes": category_config["max_holding_minutes"],
-            "leverage": category_config["leverage"],
-            "strategies_used": list(category_signals.keys()),
-            "meta": {
-                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
-                "timeframe": category_config["timeframe"],
-                "synergy_meta": {
-                    "confidence": confidence,
-                    "market_context": market_context,
-                    "conflicts_detected": conflicts_detected,
-                    "bonuses_applied": bonuses_applied,
-                    "buy_score": synergy_result.get('buy_score', 0),
-                    "sell_score": synergy_result.get('sell_score', 0),
-                    "signals_used": synergy_result.get('signals_used', 0),
-                    "institutional_bias": synergy_result.get('meta', {}).get('institutional_bias', 'NEUTRAL'),
-                    "macro_trend_strength": synergy_result.get('meta', {}).get('macro_trend_strength', 'WEAK')
-                }
-            }
-        }
-    
-    def _calculate_category_weights(self, category_signals: Dict[str, Dict[str, Any]], category_config: Dict[str, Any]) -> Dict[str, float]:
-        """카테고리 내 가중치 계산"""
-        strategies = category_config["strategies"]
-        total_weight = category_config["weight"]
+        # 기타 필드 업데이트
+        decision["max_holding_minutes"] = category_config["max_holding_minutes"]
+        decision["leverage"] = category_config["leverage"]
+        decision["strategies_used"] = list(category_signals.keys())
         
-        # 카테고리 내 균등 분배 (필요시 개별 가중치 설정 가능)
-        weight_per_strategy = total_weight / len(strategies) if strategies else 0
+        # 시너지 메타데이터
+        decision["meta"]["synergy_meta"].update({
+            "confidence": synergy_result['confidence'],
+            "market_context": synergy_result['market_context'],
+            "conflicts_detected": synergy_result['conflicts_detected'],
+            "bonuses_applied": synergy_result.get('bonuses_applied', []),
+            "buy_score": synergy_result.get('buy_score', 0),
+            "sell_score": synergy_result.get('sell_score', 0),
+            "signals_used": synergy_result.get('signals_used', 0),
+            "institutional_bias": synergy_result.get('meta', {}).get('institutional_bias', 'NEUTRAL'),
+            "macro_trend_strength": synergy_result.get('meta', {}).get('macro_trend_strength', 'WEAK')
+        })
         
-        weights = {}
-        for strategy in strategies:
-            if strategy in category_signals:
-                weights[strategy] = weight_per_strategy
-            else:
-                # 디버깅: 신호가 없는 전략 로그 출력
-                print(f"[DEBUG] {strategy}: 신호 없음 (available signals: {list(category_signals.keys())})")
-        
-        return weights
-    
-    def _create_category_hold_decision(self, category_name: str, category_config: Dict[str, Any]) -> Dict[str, Any]:
-        """카테고리별 HOLD 결정 생성"""
-        return {
-            "action": "HOLD",
-            "category": category_name,
-            "net_score": 0.0,
-            "reason": f"no {category_name.lower()} strategies active",
-            "sizing": {"qty": None, "risk_usd": 0.0, "entry_used": None, "stop_used": None},
-            "max_holding_minutes": category_config["max_holding_minutes"],
-            "leverage": category_config["leverage"],
-            "strategies_used": [],
-            "meta": {
-                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
-                "timeframe": category_config["timeframe"]
-            }
-        }
-    
-    def _make_category_decision(self, session_override: bool, session_action: Optional[str], raw: Dict, net_score: float, open_threshold: float, agree_counts: Dict) -> tuple:
-        """카테고리별 최종 결정"""
-        action = "HOLD"
-        reason = []
-        
-        if session_override and session_action is not None:
-            action = "LONG" if session_action == "BUY" else "SHORT"
-            session_rec = raw.get("SESSION")
-            reason.append(f"SESSION strong override (score={session_rec.get('score')})")
-        else:
-            if net_score >= open_threshold:
-                action = "LONG"
-                reason.append(f"net_score {net_score:.3f} >= open_threshold {open_threshold}")
-            elif net_score <= -open_threshold:
-                action = "SHORT"
-                reason.append(f"net_score {net_score:.3f} <= -open_threshold {-open_threshold}")
-            else:
-                # 조건부 진입
-                if net_score > 0 and agree_counts["BUY"] >= 1 and net_score >= (open_threshold * 0.6):
-                    action = "LONG"
-                    reason.append(f"conditional LONG: net {net_score:.3f}, confirmations {agree_counts['BUY']}")
-                elif net_score < 0 and agree_counts["SELL"] >= 1 and abs(net_score) >= (open_threshold * 0.6):
-                    action = "SHORT"
-                    reason.append(f"conditional SHORT: net {net_score:.3f}, confirmations {agree_counts['SELL']}")
-                else:
-                    action = "HOLD"
-                    reason.append(f"net_score too small ({net_score:.3f}) or no confirmations")
-                    
-        return action, reason
-    
-    def _calculate_category_sizing(self, action: str, raw: Dict, category_config: Dict[str, Any], account_balance: float, base_risk_pct: float) -> Dict[str, Any]:
+        return decision
+
+    # 나머지 필수 메서드들...
+    def _calculate_category_sizing(self, action: str, raw: Dict, category_config: Dict[str, Any], 
+                                 account_balance: float, base_risk_pct: float) -> Dict[str, Any]:
         """카테고리별 포지션 크기 계산"""
-        if action == "HOLD":
-            return {"qty": None, "risk_usd": 0.0, "entry_used": None, "stop_used": None}
+        sizing = {
+            "qty": None,
+            "risk_usd": 0.0,
+            "entry_used": None,
+            "stop_used": None,
+            "leverage": category_config["leverage"],
+            "risk_multiplier": category_config["risk_multiplier"]
+        }
         
-        # 카테고리별 리스크 조정
+        if action == "HOLD":
+            return sizing
+        
+        # 리스크 계산
         adjusted_risk_pct = base_risk_pct * category_config["risk_multiplier"]
-        leverage = category_config["leverage"]
+        sizing["risk_usd"] = round(account_balance * adjusted_risk_pct, 4)
         
         # 진입/손절가 찾기
         entry_used = None
@@ -528,207 +629,32 @@ class TradeDecisionEngine:
             except Exception:
                 pass
         
-        # 거래 규모 계산 (카테고리별 기본값)
-        recommended_scale = 1.0  # 카테고리별로 기본 100% 규모
+        sizing["entry_used"] = float(entry_used) if entry_used is not None else None
+        sizing["stop_used"] = float(stop_used) if stop_used is not None else None
         
         # 수량 계산
-        qty = self._calculate_quantity(entry_used, stop_used, action, account_balance, adjusted_risk_pct, leverage, recommended_scale)
+        if entry_used is not None and stop_used is not None:
+            qty = self._calculate_quantity(
+                entry_used, stop_used, action, account_balance, 
+                adjusted_risk_pct, category_config["leverage"], 1.0
+            )
+            sizing["qty"] = float(qty) if qty is not None else None
         
-        return {
-            "qty": float(qty) if qty is not None else None,
-            "risk_usd": round(float(account_balance * adjusted_risk_pct), 4),
-            "entry_used": float(entry_used) if entry_used is not None else None,
-            "stop_used": float(stop_used) if stop_used is not None else None,
-            "leverage": leverage,
-            "risk_multiplier": category_config["risk_multiplier"]
-        }
-    
-    def _check_position_conflicts(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """포지션 충돌 체크"""
-        long_categories = [k for k, v in decisions.items() if v["action"] == "LONG"]
-        short_categories = [k for k, v in decisions.items() if v["action"] == "SHORT"]
-        
-        conflicts = []
-        
-        # 단기와 장기가 반대 방향일 때 경고
-        if "SHORT_TERM" in long_categories and "LONG_TERM" in short_categories:
-            conflicts.append("SHORT_TERM_LONG_vs_LONG_TERM_SHORT")
-        elif "SHORT_TERM" in short_categories and "LONG_TERM" in long_categories:
-            conflicts.append("SHORT_TERM_SHORT_vs_LONG_TERM_LONG")
-        
-        # 중기와 장기가 반대 방향일 때 경고
-        if "MEDIUM_TERM" in long_categories and "LONG_TERM" in short_categories:
-            conflicts.append("MEDIUM_TERM_LONG_vs_LONG_TERM_SHORT")
-        elif "MEDIUM_TERM" in short_categories and "LONG_TERM" in long_categories:
-            conflicts.append("MEDIUM_TERM_SHORT_vs_LONG_TERM_LONG")
-        
-        return {
-            "has_conflicts": len(conflicts) > 0,
-            "conflict_types": conflicts,
-            "long_categories": long_categories,
-            "short_categories": short_categories
-        }
+        return sizing
 
-    def _calculate_weighted_scores(self, signals, weights):
-        """가중 점수 계산"""
-        signed = {}
-        raw = {}
-        used_weight_sum = 0.0
-
-        for name, s in signals.items():
-            name = name.upper()
-            action = (s.get("action")).upper()
-            score = float(s.get("score"))
-            w = float(weights.get(name))
-            
-            # 부호 있는 값 계산
-            sign = 0
-            if action == "BUY":
-                sign = 1
-            elif action == "SELL":
-                sign = -1
-            val = sign * score * w
-            signed[name] = val
-            raw[name] = {
-                "action": action if action else None,
-                "score": score,
-                "weight": w,
-                "entry": s.get("entry"),
-                "stop": s.get("stop"),
-                "timestamp": self.time_manager.get_current_time()
-            }
-            if w > 0:
-                used_weight_sum += w
-                
-        return signed, raw, used_weight_sum
-
-    def _create_hold_decision(self, raw):
-        """HOLD 결정 생성"""
-        return {
-            "action": "HOLD",
-            "net_score": 0.0,
-            "reason": "no recognized weighted strategies",
-            "recommended_trade_scale": 0.0,
-            "sizing": {"qty": None, "risk_usd": 0.0, "entry_used": None, "stop_used": None},
-            "raw": raw
-        }
-
-    def _check_session_override(self, raw, session_priority, immediate_threshold):
-        """세션 오버라이드 체크"""
-        session_override = False
-        session_action = None
-        
-        if session_priority:
-            session_rec = raw.get("SESSION")
-            if session_rec:
-                sess_act = session_rec.get("action")
-                sess_score = float(session_rec.get("score") or 0.0)
-                
-                if sess_act in ("BUY", "SELL") and sess_score >= immediate_threshold:
-                    # 반대 신호 체크
-                    opp_strong = False
-                    for nm, r in raw.items():
-                        if nm == "SESSION": 
-                            continue
-                        if (r.get("action") and r.get("action") != sess_act and 
-                            float(r.get("score") or 0.0) >= 0.60):
-                            opp_strong = True
-                            break
-                    
-                    if not opp_strong:
-                        session_override = True
-                        session_action = sess_act
-                        
-        return session_override, session_action
-
-    def _calculate_agreement_counts(self, raw, confirm_threshold, confirm_window_sec, now):
-        """동의 신호 개수 계산"""
-        agree_counts = {"BUY": 0, "SELL": 0}
-        
-        for nm, r in raw.items():
-            act = r.get("action")
-            if act not in ("BUY", "SELL"):
-                continue
-            sc = float(r.get("score") or 0.0)
-            ts = r.get("timestamp")
-            
-            # 시간 기반 확인
-            if ts is not None and isinstance(ts, datetime):
-                if abs((now - ts).total_seconds()) > confirm_window_sec:
-                    continue
-            if sc >= confirm_threshold:
-                agree_counts[act] += 1
-                
-        return agree_counts
-
-    def _detect_oppositions(self, raw):
-        """충돌 신호 감지"""
-        oppositions = []
-        for nm, r in raw.items():
-            act = r.get("action")
-            sc = float(r.get("score") or 0.0)
-            if act in ("BUY", "SELL") and sc >= 0.5:
-                oppositions.append((nm, act, sc))
-        return oppositions
-
-    def _calculate_trade_scale(self, net, oppositions, raw, used_weight_sum):
-        """거래 규모 계산"""
-        # 기본 규모
-        base_scale = min(1.0, max(0.0, abs(net) / 0.75))
-        
-        # 충돌 페널티
-        if len(oppositions) >= 2:
-            conflict_penalty = 0.25
-        elif len(oppositions) == 1:
-            conflict_penalty = 0.6
-        else:
-            conflict_penalty = 1.0
-            
-        return max(0.0, min(1.0, base_scale * conflict_penalty))
-
-    def _make_final_decision(self, session_override, session_action, raw, net, open_threshold, agree_counts):
-        """최종 결정"""
-        action = "HOLD"
-        reason = []
-        
-        if session_override:
-            action = "LONG" if session_action == "BUY" else "SHORT"
-            session_rec = raw.get("SESSION")
-            reason.append(f"SESSION strong override (score={session_rec.get('score')})")
-        else:
-            if net >= open_threshold:
-                action = "LONG"
-                reason.append(f"net_score {net:.3f} >= open_threshold {open_threshold}")
-            elif net <= -open_threshold:
-                action = "SHORT"
-                reason.append(f"net_score {net:.3f} <= -open_threshold {-open_threshold}")
-            else:
-                # 조건부 진입
-                if net > 0 and agree_counts["BUY"] >= 1 and net >= (open_threshold * 0.6):
-                    action = "LONG"
-                    reason.append(f"conditional LONG: net {net:.3f}, confirmations {agree_counts['BUY']}")
-                elif net < 0 and agree_counts["SELL"] >= 1 and abs(net) >= (open_threshold * 0.6):
-                    action = "SHORT"
-                    reason.append(f"conditional SHORT: net {net:.3f}, confirmations {agree_counts['SELL']}")
-                else:
-                    action = "HOLD"
-                    reason.append(f"net_score too small ({net:.3f}) or no confirmations")
-                    
-        return action, reason
-
-    def _find_any_price(self, raw):
+    def _find_any_price(self, raw: Dict) -> Optional[float]:
         """어떤 가격이라도 찾기"""
-        for nm, r in raw.items():
-            if r.get("entry") is not None:
-                return float(r.get("entry"))
-        for nm, r in raw.items():
-            if r.get("score", 0) > 0:
-                any_price = r.get("entry") or r.get("stop")
+        for strategy_name, strategy_data in raw.items():
+            if strategy_data.get("entry") is not None:
+                return float(strategy_data.get("entry"))
+        for strategy_name, strategy_data in raw.items():
+            if strategy_data.get("score", 0) > 0:
+                any_price = strategy_data.get("entry") or strategy_data.get("stop")
                 if any_price is not None:
                     return float(any_price)
         return None
 
-    def _calculate_stop_with_atr(self, entry_used, atr_val, action):
+    def _calculate_stop_with_atr(self, entry_used: float, atr_val: float, action: str) -> Optional[float]:
         """ATR을 사용한 스탑 계산"""
         if atr_val is None or math.isnan(atr_val):
             atr_val = max(1.0, 0.5 * abs(entry_used) * 0.001)
@@ -740,18 +666,67 @@ class TradeDecisionEngine:
         else:
             return None
 
-    def _calculate_quantity(self, entry_used, stop_used, action, account_balance, base_risk_pct, leverage, recommended_scale):
+    def _calculate_quantity(self, entry_used: float, stop_used: float, action: str, 
+                          account_balance: float, adjusted_risk_pct: float, 
+                          leverage: int, scale: float) -> Optional[float]:
         """수량 계산"""
-        qty = None
-        risk_usd = account_balance * float(base_risk_pct)
-        
-        if (entry_used is not None and stop_used is not None and 
-            entry_used != stop_used and action in ("LONG", "SHORT")):
-            distance = abs(entry_used - stop_used)
-            if distance > 0:
-                qty = risk_usd / distance
-                qty = qty * recommended_scale * leverage
-        else:
-            qty = None
+        if entry_used == stop_used:
+            return None
             
+        distance = abs(entry_used - stop_used)
+        if distance <= 0:
+            return None
+            
+        risk_usd = account_balance * adjusted_risk_pct
+        qty = risk_usd / distance
+        qty = qty * scale * leverage
+        
         return qty
+
+    def _check_position_conflicts(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
+        """포지션 충돌 체크"""
+        long_categories = [k for k, v in decisions.items() if v["action"] == "LONG"]
+        short_categories = [k for k, v in decisions.items() if v["action"] == "SHORT"]
+        
+        conflicts = []
+        conflict_details = []
+        
+        # 단기와 장기가 반대 방향일 때 경고
+        if "short_term" in long_categories and "long_term" in short_categories:
+            conflicts.append("SHORT_TERM_LONG_vs_LONG_TERM_SHORT")
+            conflict_details.append({
+                "type": "directional_conflict",
+                "categories": ["short_term", "long_term"],
+                "directions": ["LONG", "SHORT"]
+            })
+        elif "short_term" in short_categories and "long_term" in long_categories:
+            conflicts.append("SHORT_TERM_SHORT_vs_LONG_TERM_LONG")
+            conflict_details.append({
+                "type": "directional_conflict", 
+                "categories": ["short_term", "long_term"],
+                "directions": ["SHORT", "LONG"]
+            })
+        
+        # 중기와 장기가 반대 방향일 때 경고
+        if "medium_term" in long_categories and "long_term" in short_categories:
+            conflicts.append("MEDIUM_TERM_LONG_vs_LONG_TERM_SHORT")
+            conflict_details.append({
+                "type": "directional_conflict",
+                "categories": ["medium_term", "long_term"], 
+                "directions": ["LONG", "SHORT"]
+            })
+        elif "medium_term" in short_categories and "long_term" in long_categories:
+            conflicts.append("MEDIUM_TERM_SHORT_vs_LONG_TERM_LONG")
+            conflict_details.append({
+                "type": "directional_conflict",
+                "categories": ["medium_term", "long_term"],
+                "directions": ["SHORT", "LONG"]
+            })
+        
+        return {
+            "has_conflicts": len(conflicts) > 0,
+            "conflict_types": conflicts,
+            "long_categories": long_categories,
+            "short_categories": short_categories,
+            "conflict_details": conflict_details
+        }

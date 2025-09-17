@@ -1,14 +1,13 @@
 # signals/oi_delta_strategy.py
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Optional, Dict, Any, List
 import pandas as pd
-import numpy as np
 import requests
 
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_atr
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 
 def _clamp(x, a=0.0, b=1.0):
     try:
@@ -330,7 +329,7 @@ class OIDeltaStrategy:
         # 단일 포인트로도 변화 추정 (더 완화)
         if len(oi_history) == 1:
             # 이전 캐시와 비교하거나 기본 변화율 사용
-            current_oi = oi_history[0]['open_interest']
+            oi_history[0]['open_interest']
             
             # 더 짧은 시간으로 가격 변화 분석
             price_change_15min = float((df['close'].iloc[-1] - df['close'].iloc[-5]) / df['close'].iloc[-5])

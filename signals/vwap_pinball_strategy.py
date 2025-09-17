@@ -10,7 +10,7 @@
 # 목적: 기존에 score가 0.4에서 멈추는 문제(가중치/정규화 불일치)를 해결.
 
 from dataclasses import dataclass
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
 from indicators.global_indicators import get_vwap, get_atr
@@ -135,7 +135,7 @@ class VWAPPinballStrategy:
 
         last = df3.iloc[-1]
         prev = df3.iloc[-2]
-        last_o, last_h, last_l, last_c = float(last['open']), float(last['high']), float(last['low']), float(last['close'])
+        _last_o, last_h, last_l, last_c = float(last['open']), float(last['high']), float(last['low']), float(last['close'])
         prev_c = float(prev['close'])
 
         if self.cfg.debug:

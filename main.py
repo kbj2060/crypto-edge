@@ -6,11 +6,9 @@
 
 from datetime import datetime, timezone
 import time
-import pandas as pd
-from core.trader_core import TraderCore
 
 from config.integrated_config import IntegratedConfig
-from data.bucket_aggregator import BucketAggregator
+from managers.bucket_aggregator import BucketAggregator
 from indicators.global_indicators import get_global_indicator_manager
 
 class IntegratedSmartTrader:
@@ -39,14 +37,13 @@ class IntegratedSmartTrader:
 
     def warmup_strategies(self):
         """전략 웜업"""
-        pass
 
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
         try:
             print("\n🚀 1단계: DataManager 우선 초기화 시작...")
             
-            from data.data_manager import get_data_manager
+            from managers.data_manager import get_data_manager
             
             # DataManager 싱글톤 인스턴스 가져오기
             data_manager = get_data_manager()
@@ -95,7 +92,7 @@ class IntegratedSmartTrader:
     def _init_strategy_executor(self):
         """전략 실행기 초기화"""
         try:
-            from data.strategy_executor import StrategyExecutor
+            from managers.strategy_executor import StrategyExecutor
             from core.trader_core import TraderCore
             
             # 전략 실행기 인스턴스 생성 (내부에서 모든 전략 자동 초기화)

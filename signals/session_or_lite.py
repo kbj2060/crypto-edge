@@ -1,11 +1,11 @@
 # session_or_lite.py
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 from typing import Optional, Dict, Any
 
 import pandas as pd
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.session_manager import get_session_manager
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_opening_range

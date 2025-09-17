@@ -1,12 +1,10 @@
 # htf_rsi_divergence.py
 from dataclasses import dataclass
-from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import pandas as pd
 import numpy as np
 
-from data.binance_dataloader import BinanceDataLoader
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 def _clamp(x, a=0.0, b=1.0):

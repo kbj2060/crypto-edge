@@ -4,11 +4,10 @@ VPVR 전략 내부 로직 개선 - 기존 인터페이스 유지
 
 from typing import Optional, Dict, Any, Tuple, List
 from dataclasses import dataclass
-from datetime import datetime
 import numpy as np
 import pandas as pd
 
-from indicators.global_indicators import get_atr, get_vpvr
+from indicators.global_indicators import get_vpvr
 from utils.time_manager import get_time_manager
 
 class LVNGoldenPocket:  # ← 기존 클래스명 유지
@@ -235,7 +234,7 @@ class LVNGoldenPocket:  # ← 기존 클래스명 유지
             # 거의 모든 상황에서 통과하도록 완화
             return dry_count >= min(min_required, ratio_required) or window <= 2
             
-        except Exception as e:
+        except Exception:
             # 오류시 통과 (완화)
             return True
 
@@ -351,7 +350,7 @@ class LVNGoldenPocket:  # ← 기존 클래스명 유지
             # 최종 판정 (매우 관대)
             return valid_rejections >= max(0, require_k) or lookback <= 2
             
-        except Exception as e:
+        except Exception:
             # 전체 오류시 통과
             return True
 

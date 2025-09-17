@@ -8,9 +8,9 @@ VWAP (Volume Weighted Average Price) 지표
 
 import pandas as pd
 from typing import Dict, Any, Optional
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 from utils.session_manager import get_session_manager
 
@@ -170,7 +170,7 @@ class SessionVWAP:
             self._calculate_session_vwap(df)
             
             # 세션 정보 출력
-            elapsed_minutes = session_config.get('elapsed_minutes', 0)
+            session_config.get('elapsed_minutes', 0)
 
         except Exception as e:
             print(f"❌ VWAP 업데이트 오류: {e}")

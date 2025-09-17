@@ -9,12 +9,10 @@ ATR (Average True Range) 지표
 """
 
 from typing import Dict, Optional
-import datetime as dt
-from collections import deque
 
 import pandas as pd
 from datetime import datetime, timedelta
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 class ATR3M:
@@ -155,7 +153,7 @@ class ATR3M:
             
             return float(self.current_atr)
             
-        except Exception as e:
+        except Exception:
             return 0.0
 
     def is_ready(self) -> bool:

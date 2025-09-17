@@ -29,7 +29,7 @@ class SessionORSignalGenerator:
     def _create_long_signal(self, analysis_result: Dict[str, Any], ohlc: Dict[str, float], 
                            or_high: float, vwap_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """롱 신호 생성"""
-        h, l, c = ohlc["h"], ohlc["l"], ohlc["c"]
+        h, l, _c = ohlc["h"], ohlc["l"], ohlc["c"]
         
         # 진입가, 스탑가, 목표가 계산
         entry = h + self.cfg.tick
@@ -70,7 +70,7 @@ class SessionORSignalGenerator:
     def _create_short_signal(self, analysis_result: Dict[str, Any], ohlc: Dict[str, float], 
                             or_low: float, vwap_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """숏 신호 생성"""
-        h, l, c = ohlc["h"], ohlc["l"], ohlc["c"]
+        h, l, _c = ohlc["h"], ohlc["l"], ohlc["c"]
         
         # 진입가, 스탑가, 목표가 계산
         entry = l - self.cfg.tick

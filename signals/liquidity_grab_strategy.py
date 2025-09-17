@@ -1,11 +1,9 @@
 # signals/liquidity_grab_strategy.py
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple
+from typing import Optional, Dict, Any, List
 import pandas as pd
-import numpy as np
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from indicators.global_indicators import get_atr, get_vwap
 from utils.time_manager import get_time_manager
 
@@ -54,7 +52,7 @@ class LiquidityGrabStrategy:
         """지지/저항선 찾기 (완화된 조건)"""
         high = pd.to_numeric(df['high'].astype(float))
         low = pd.to_numeric(df['low'].astype(float))
-        close = pd.to_numeric(df['close'].astype(float))
+        pd.to_numeric(df['close'].astype(float))
         
         levels = []
         window = 3  # 5 -> 3 (완화된 윈도우)

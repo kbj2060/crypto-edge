@@ -1,4 +1,4 @@
-from typing import Dict, Any, Optional, Tuple
+from typing import Dict, Any, Optional
 import pandas as pd
 from indicators.global_indicators import get_atr, get_vwap
 
@@ -46,7 +46,7 @@ class SessionORAnalyzer:
 
     def check_body_conditions(self, ohlc: Dict[str, float], range_val: float) -> Dict[str, Any]:
         """바디 조건 체크"""
-        o, h, l, c = ohlc["o"], ohlc["h"], ohlc["l"], ohlc["c"]
+        o, _h, _l, c = ohlc["o"], ohlc["h"], ohlc["l"], ohlc["c"]
         
         body = abs(c - o)
         body_ok = (body / range_val) >= self.cfg.body_ratio_min

@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Optional, Dict, Any, List
 import pandas as pd
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from indicators.global_indicators import get_atr
 from utils.time_manager import get_time_manager
 
@@ -325,8 +325,8 @@ class MultiTimeframeStrategy:
         
         curr_open = float(current['open'])
         curr_close = float(current['close'])
-        curr_high = float(current['high'])
-        curr_low = float(current['low'])
+        float(current['high'])
+        float(current['low'])
         
         prev_open = float(previous['open'])
         prev_close = float(previous['close'])

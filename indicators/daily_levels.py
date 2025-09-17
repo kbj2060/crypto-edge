@@ -4,12 +4,12 @@
 Note: 어제 데이터는 공용 데이터와 별개이므로 개별 API 호출 유지
 """
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Any, Dict, Optional
 
 import pandas as pd
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 

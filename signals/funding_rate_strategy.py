@@ -1,14 +1,13 @@
 # signals/funding_rate_strategy.py - 민감도 조정 버전
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import List, Optional, Dict, Any
 import pandas as pd
-import numpy as np
 import requests
 
 from utils.time_manager import get_time_manager
 from indicators.global_indicators import get_atr
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 
 def _clamp(x, a=0.0, b=1.0):
     try:

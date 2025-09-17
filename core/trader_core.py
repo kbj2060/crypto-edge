@@ -3,8 +3,7 @@
 통합 스마트 트레이더 핵심 컴포넌트
 """
 
-import pandas as pd
-from data.binance_websocket import BinanceWebSocket
+from managers.binance_websocket import BinanceWebSocket
 from config.integrated_config import IntegratedConfig
 
 

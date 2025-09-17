@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Dict, Any
 import pandas as pd
 
-from data.binance_dataloader import BinanceDataLoader
+from managers.binance_dataloader import BinanceDataLoader
 from utils.time_manager import get_time_manager
 
 def _clamp(x, a=0.0, b=1.0):
@@ -66,7 +66,6 @@ class EMATrend15m:
 
         score = 0.0
         action = "HOLD"
-        conf = 0.0
 
         thresh = self.cfg.score_scale
         if diff_pct >= thresh:

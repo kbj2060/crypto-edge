@@ -1,6 +1,6 @@
 # short_term_synergy_improvement.py
 from dataclasses import dataclass
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 import numpy as np
 
 @dataclass

@@ -1,9 +1,7 @@
 # htf_trend_bot.py
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-from datetime import datetime
 import pandas as pd
-import numpy as np
 
 @dataclass
 class HTFConfig:

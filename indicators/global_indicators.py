@@ -21,7 +21,7 @@ from indicators.vpvr import SessionVPVR
 from indicators.atr import ATR3M
 from indicators.daily_levels import DailyLevels
 from indicators.vwap import SessionVWAP
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.session_manager import get_session_manager
 from utils.time_manager import get_time_manager
 
@@ -132,7 +132,7 @@ class GlobalIndicatorManager:
                 self._initialized = True
                 print("🎯 모든 전역 지표 초기화 완료!")
             
-            except Exception as e:
+            except Exception:
                 self._initialized = False
     
     def update_all_indicators(self, candle_data: pd.Series):
@@ -273,3 +273,24 @@ def get_vpvr_status() -> Optional[Dict[str, Any]]:
     manager = get_global_indicator_manager()
     vpvr_indicator = manager.get_indicator('vpvr')
     return vpvr_indicator.get_status()
+
+def get_all_indicators() -> Dict[str, Any]:
+    # 튜플 언패킹으로 안전하게 처리
+    poc, hvn, lvn = get_vpvr()
+    vwap, vwap_std = get_vwap()
+    atr = get_atr() 
+    prev_day_high, prev_day_low = get_daily_levels()
+    opening_range_high, opening_range_low = get_opening_range()
+    
+    return {
+        "poc" : poc,
+        "hvn"  : hvn,
+        "lvn" : lvn,
+        "vwap" : vwap,
+        "vwap_std" : vwap_std,
+        "atr" : atr,
+        "prev_day_high" : prev_day_high,
+        "prev_day_low" : prev_day_low,
+        "opening_range_high" : opening_range_high,
+        "opening_range_low" : opening_range_low,
+    }

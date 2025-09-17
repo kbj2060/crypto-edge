@@ -3,7 +3,6 @@
 Decision Logger - 매일 Parquet 파일로 decision 로그 저장
 """
 
-import os
 import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional

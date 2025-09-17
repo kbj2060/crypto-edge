@@ -1,9 +1,7 @@
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
 import pandas as pd
-from datetime import datetime
-from data.data_manager import get_data_manager
-from indicators.global_indicators import get_atr
+from managers.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 def _clamp(x, a=0.0, b=1.0):

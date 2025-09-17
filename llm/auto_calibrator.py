@@ -296,7 +296,7 @@ def _attach_calibrator_and_methods(module):
 
     # wrap decide_async to sanitize input and apply calibration to the result
     if orig_decide is not None:
-        import asyncio, inspect
+        import inspect
         if inspect.iscoroutinefunction(orig_decide):
             async def decide_async_wrapper(self, signal, *args, **kwargs):
                 sanitized = sanitize_signal_for_llm(signal)

@@ -6,30 +6,18 @@ import sys
 import pickle
 from typing import Dict, Any, List, Optional
 
-# 상위 디렉토리를 Python 경로에 추가
+# 프로젝트 루트를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-# agent 모듈 import (직접 파일에서 import)
-import importlib.util
-
-print("모듈 로딩 시작...")
-
-# agent.py에서 함수들 import
-agent_path = os.path.join(os.path.dirname(__file__), 'agent.py')
-print(f"agent.py 경로: {agent_path}")
-print(f"agent.py 존재 여부: {os.path.exists(agent_path)}")
-
-spec = importlib.util.spec_from_file_location("agent", agent_path)
-agent_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(agent_module)
-train_rl_agent = agent_module.train_rl_agent
-evaluate_agent = agent_module.evaluate_agent
-print("✅ agent.py 로드 완료")
-
-# backtester.py에서 클래스 import (임시로 None으로 설정)
-print("⚠️ backtester.py 로드 건너뛰기 (dataclass 오류)")
-BacktestAnalyzer = None
-print("✅ backtester.py 건너뛰기 완료")
+from rl_training_system import TrainingManager, PerformanceAnalyzer, DataLoader
+from rl_agent_core import StandardRLAgent, EnhancedTradingEnvironment, train_enhanced_agent, evaluate_enhanced_agent
+from managers.strategy_executor import StrategyExecutor
+from managers.data_manager import get_data_manager
+from engines.trade_decision_engine import TradeDecisionEngine
+from indicators.global_indicators import get_all_indicators, get_global_indicator_manager
+# 함수 별칭 설정
+train_rl_agent = train_enhanced_agent
+evaluate_agent = evaluate_enhanced_agent
 
 def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     """복잡한 중첩 구조를 평면화하여 Parquet 저장에 최적화"""
@@ -406,11 +394,7 @@ def generate_signal_data_with_indicators(
     resume_from_progress: bool = True
 ):
     """CSV 데이터로 실제 지표 업데이트 및 전략 실행 (중단점 재시작 지원)"""
-    from data.strategy_executor import StrategyExecutor
-    from data.data_manager import get_data_manager
-    from engines.trade_decision_engine import TradeDecisionEngine
-    from indicators.global_indicators import get_global_indicator_manager
-    from indicators.global_indicators import get_atr, get_daily_levels, get_opening_range, get_vpvr, get_vwap
+
 
     # 진행 상태 확인
     progress_state = None
@@ -483,24 +467,7 @@ def generate_signal_data_with_indicators(
                     
             # 글로벌 지표 업데이트
             global_manager.update_all_indicators(series_3m)
-            atr = get_atr()
-            poc, hvn, lvn = get_vpvr()
-            vwap, vwap_std = get_vwap()
-            opening_range_high, opening_range_low = get_opening_range()
-            prev_day_high, prev_day_low = get_daily_levels()
-            indicators = {
-                'atr': atr,
-                'poc': poc,
-                'hvn': hvn,
-                'lvn': lvn,
-                'vwap': vwap,
-                'vwap_std': vwap_std,
-                'opening_range_high': opening_range_high,
-                'opening_range_low': opening_range_low,
-                'prev_day_high': prev_day_high,
-                'prev_day_low': prev_day_low,
-            }
-            
+            indicators = get_all_indicators()
             # 전략 실행
             strategy_executor.execute_all_strategies()
             

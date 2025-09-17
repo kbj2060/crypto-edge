@@ -1,16 +1,11 @@
 
 from dataclasses import dataclass
-from datetime import datetime
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 import pandas as pd
 import numpy as np
 
 from utils.time_manager import get_time_manager
 
-try:
-    from data.data_manager import get_data_manager  # type: ignore
-except Exception:
-    get_data_manager = None
 
 def _clamp(x, a=0.0, b=1.0):
     try:

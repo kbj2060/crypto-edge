@@ -8,11 +8,10 @@
 
 from dataclasses import dataclass
 from typing import Optional, Dict, Any
-from datetime import datetime, timezone
 import numpy as np
 import pandas as pd
 
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 
 
 @dataclass

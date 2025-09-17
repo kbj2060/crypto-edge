@@ -9,10 +9,10 @@ Opening Range (OR) 지표 모듈
 """
 
 import pandas as pd
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from utils.session_manager import get_session_manager
-from data.data_manager import get_data_manager
+from managers.data_manager import get_data_manager
 from utils.time_manager import get_time_manager
 
 # 기본 설정값
