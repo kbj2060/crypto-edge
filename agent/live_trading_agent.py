@@ -21,11 +21,13 @@ except ImportError:
     print("❌ 훈련 시스템 모듈을 찾을 수 없습니다.")
     from agent.rl_training_system import DuelingDQN, RLAgent
 
+from utils.data_flattener import ensure_flattened_data
+
 class SignalQualityAnalyzer:
     """신호 품질 분석기"""
     
     @staticmethod
-    def analyze_signal_quality(signal_data: Dict[str, Any]) -> Dict[str, float]:
+    def analyze_signal_quality(flattened_signal_data: Dict[str, Any]) -> Dict[str, float]:
         """Signal 데이터 품질 분석 (Flatten 형태 지원)"""
         
         quality_metrics = {
@@ -43,9 +45,9 @@ class SignalQualityAnalyzer:
         
         # Flatten 형태에서 시간대별 정보 추출
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            action = signal_data.get(f'{timeframe}_action', 'HOLD')
-            confidence = signal_data.get(f'{timeframe}_confidence', 'LOW')
-            net_score = float(signal_data.get(f'{timeframe}_net_score', 0.0))
+            action = flattened_signal_data.get(f'{timeframe}_action', 'HOLD')
+            confidence = flattened_signal_data.get(f'{timeframe}_confidence', 'LOW')
+            net_score = float(flattened_signal_data.get(f'{timeframe}_net_score', 0.0))
             
             if action != 'HOLD':
                 quality_metrics['total_signals'] += 1
@@ -88,18 +90,18 @@ class EnhancedSignalStateBuilder:
             'indicator_opening_range_high', 'indicator_opening_range_low'
         ]
     
-    def build_state_vector(self, signal_data: Dict, current_candle: Dict, 
+    def build_state_vector(self, flattened_signal_data: Dict, current_candle: Dict, 
                           portfolio_state: Dict) -> np.ndarray:
         """Signal 정보를 최대한 활용한 80차원 상태 벡터 구성"""
         
         # 1. Price Indicator Features (20차원) - signal의 indicator 활용
-        price_features = self._extract_price_indicators(signal_data, current_candle)
+        price_features = self._extract_price_indicators(flattened_signal_data, current_candle)
         
         # 2. Technical Score Features (25차원) - raw score들
-        technical_features = self._extract_technical_scores(signal_data)
+        technical_features = self._extract_technical_scores(flattened_signal_data)
         
         # 3. Decision Features (25차원) - 기존 decision 로직
-        decision_features = self._extract_decision_features(signal_data)
+        decision_features = self._extract_decision_features(flattened_signal_data)
         
         # 4. Portfolio Features (10차원) - 포트폴리오 상태
         portfolio_features = self._extract_portfolio_features(portfolio_state)
@@ -109,16 +111,16 @@ class EnhancedSignalStateBuilder:
         
         return state.astype(np.float32)
     
-    def _extract_price_indicators(self, signal_data: Dict, current_candle: Dict) -> np.ndarray:
+    def _extract_price_indicators(self, flattened_signal_data: Dict, current_candle: Dict) -> np.ndarray:
         """Signal의 indicator들을 price feature로 활용 (20차원)"""
         features = []
         current_price = current_candle['close']
         
         # 1. 가격 대비 지표 위치 (정규화)
-        vwap = signal_data.get('indicator_vwap', current_price)
-        poc = signal_data.get('indicator_poc', current_price)
-        hvn = signal_data.get('indicator_hvn', current_price)
-        lvn = signal_data.get('indicator_lvn', current_price)
+        vwap = flattened_signal_data.get('indicator_vwap', current_price)
+        poc = flattened_signal_data.get('indicator_poc', current_price)
+        hvn = flattened_signal_data.get('indicator_hvn', current_price)
+        lvn = flattened_signal_data.get('indicator_lvn', current_price)
         
         features.extend([
             (current_price - vwap) / current_price if current_price > 0 else 0.0,  # VWAP 상대 위치
@@ -128,8 +130,8 @@ class EnhancedSignalStateBuilder:
         ])
         
         # 2. 변동성 지표들
-        atr = signal_data.get('indicator_atr', 0.0)
-        vwap_std = signal_data.get('indicator_vwap_std', 0.0)
+        atr = flattened_signal_data.get('indicator_atr', 0.0)
+        vwap_std = flattened_signal_data.get('indicator_vwap_std', 0.0)
         
         features.extend([
             atr / current_price if current_price > 0 else 0.0,                     # ATR 정규화
@@ -137,10 +139,10 @@ class EnhancedSignalStateBuilder:
         ])
         
         # 3. 일별 기준점들과의 관계
-        prev_high = signal_data.get('indicator_prev_day_high', current_price)
-        prev_low = signal_data.get('indicator_prev_day_low', current_price)
-        or_high = signal_data.get('indicator_opening_range_high', current_price)
-        or_low = signal_data.get('indicator_opening_range_low', current_price)
+        prev_high = flattened_signal_data.get('indicator_prev_day_high', current_price)
+        prev_low = flattened_signal_data.get('indicator_prev_day_low', current_price)
+        or_high = flattened_signal_data.get('indicator_opening_range_high', current_price)
+        or_low = flattened_signal_data.get('indicator_opening_range_low', current_price)
         
         # 전일 레인지에서의 위치
         prev_range = prev_high - prev_low
@@ -185,13 +187,13 @@ class EnhancedSignalStateBuilder:
             (high - max(open_price, close)) / (high - low) if high > low else 0.0 # 위꼬리 비율
         ]
     
-    def _extract_technical_scores(self, signal_data: Dict) -> np.ndarray:
+    def _extract_technical_scores(self, flattened_signal_data: Dict) -> np.ndarray:
         """각 전략의 raw score들을 특성으로 활용 (25차원)"""
         features = []
         
         # 모든 raw score 키들 수집
         all_raw_scores = []
-        for key, value in signal_data.items():
+        for key, value in flattened_signal_data.items():
             if '_raw_' in key and '_score' in key and value is not None:
                 try:
                     all_raw_scores.append(float(value))
@@ -208,38 +210,38 @@ class EnhancedSignalStateBuilder:
         
         return np.array(features, dtype=np.float32)
     
-    def _extract_decision_features(self, signal_data: Dict) -> np.ndarray:
+    def _extract_decision_features(self, flattened_signal_data: Dict) -> np.ndarray:
         """기존 decision 특성들 (25차원)"""
         features = []
         
         # 각 시간대별 액션과 점수들 (3 × 6 = 18개)
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            action = signal_data.get(f'{timeframe}_action', 'HOLD')
+            action = flattened_signal_data.get(f'{timeframe}_action', 'HOLD')
             action_strength = 1.0 if action == 'LONG' else (-1.0 if action == 'SHORT' else 0.0)
             
-            net_score = float(signal_data.get(f'{timeframe}_net_score', 0.0))
-            buy_score = float(signal_data.get(f'{timeframe}_buy_score', 0.0))
-            sell_score = float(signal_data.get(f'{timeframe}_sell_score', 0.0))
+            net_score = float(flattened_signal_data.get(f'{timeframe}_net_score', 0.0))
+            buy_score = float(flattened_signal_data.get(f'{timeframe}_buy_score', 0.0))
+            sell_score = float(flattened_signal_data.get(f'{timeframe}_sell_score', 0.0))
             
-            confidence = signal_data.get(f'{timeframe}_confidence', 'LOW')
+            confidence = flattened_signal_data.get(f'{timeframe}_confidence', 'LOW')
             confidence_val = 1.0 if confidence == 'HIGH' else (0.5 if confidence == 'MEDIUM' else 0.0)
             
-            leverage = min(float(signal_data.get(f'{timeframe}_leverage', 1.0)) / 20.0, 1.0)
+            leverage = min(float(flattened_signal_data.get(f'{timeframe}_leverage', 1.0)) / 20.0, 1.0)
             
             features.extend([action_strength, net_score, buy_score, sell_score, confidence_val, leverage])
         
         # 추가 메타 정보 (7개)
-        signals_used_short = min(float(signal_data.get('short_term_signals_used', 0)) / 10.0, 1.0)
-        signals_used_medium = min(float(signal_data.get('medium_term_signals_used', 0)) / 10.0, 1.0)  
-        signals_used_long = min(float(signal_data.get('long_term_signals_used', 0)) / 10.0, 1.0)
+        signals_used_short = min(float(flattened_signal_data.get('short_term_signals_used', 0)) / 10.0, 1.0)
+        signals_used_medium = min(float(flattened_signal_data.get('medium_term_signals_used', 0)) / 10.0, 1.0)  
+        signals_used_long = min(float(flattened_signal_data.get('long_term_signals_used', 0)) / 10.0, 1.0)
         
-        market_context_short = 1.0 if signal_data.get('short_term_market_context') == 'TRENDING' else 0.0
-        market_context_medium = 1.0 if signal_data.get('medium_term_market_context') == 'TRENDING' else 0.0
+        market_context_short = 1.0 if flattened_signal_data.get('short_term_market_context') == 'TRENDING' else 0.0
+        market_context_medium = 1.0 if flattened_signal_data.get('medium_term_market_context') == 'TRENDING' else 0.0
         
-        institutional_bias = signal_data.get('long_term_institutional_bias', 'NEUTRAL')
+        institutional_bias = flattened_signal_data.get('long_term_institutional_bias', 'NEUTRAL')
         bias_val = 1.0 if institutional_bias == 'BULLISH' else (-1.0 if institutional_bias == 'BEARISH' else 0.0)
         
-        macro_strength = signal_data.get('long_term_macro_trend_strength', 'MEDIUM')
+        macro_strength = flattened_signal_data.get('long_term_macro_trend_strength', 'MEDIUM')
         strength_val = 1.0 if macro_strength == 'HIGH' else (0.5 if macro_strength == 'MEDIUM' else 0.0)
         
         features.extend([
@@ -404,7 +406,7 @@ class LiveTradingAgent:
         Signal을 최대한 활용한 실시간 거래 결정 생성
         
         Args:
-            signal_data: Flatten 형태의 신호 데이터
+            signal_data: 신호 데이터 (flatten된 형태이거나 중첩된 형태)
             current_candle: 현재 캔들 데이터
             
         Returns:
@@ -415,23 +417,26 @@ class LiveTradingAgent:
             return self._get_default_decision("에이전트 로드 실패")
         
         try:
-            # 1. 신호 품질 분석
-            signal_quality = self.signal_analyzer.analyze_signal_quality(signal_data)
+            # 1. 데이터가 평면화되었는지 확인하고 필요시 평면화
+            flattened_signal_data = ensure_flattened_data(signal_data)
             
-            # 2. 포트폴리오 상태 구성
+            # 2. 신호 품질 분석
+            signal_quality = self.signal_analyzer.analyze_signal_quality(flattened_signal_data)
+            
+            # 3. 포트폴리오 상태 구성
             portfolio_state = self._get_portfolio_state()
             
-            # 3. 80차원 상태 벡터 구성 (Signal 정보 최대 활용)
+            # 4. 80차원 상태 벡터 구성 (Signal 정보 최대 활용)
             state_vector = self.state_builder.build_state_vector(
-                signal_data, current_candle, portfolio_state
+                flattened_signal_data, current_candle, portfolio_state
             )
             
-            # 4. AI 에이전트의 액션 예측
+            # 5. AI 에이전트의 액션 예측
             ai_action = self.agent.act(state_vector)
             
-            # 5. 액션을 거래 결정으로 변환
+            # 6. 액션을 거래 결정으로 변환
             trading_decision = self._convert_action_to_decision(
-                ai_action, current_candle, signal_quality, signal_data
+                ai_action, current_candle, signal_quality, flattened_signal_data
             )
             
             # 6. 리스크 체크 및 최종 결정
@@ -465,7 +470,7 @@ class LiveTradingAgent:
     
     def _convert_action_to_decision(self, ai_action: np.ndarray, 
                                   current_candle: Dict, signal_quality: Dict,
-                                  signal_data: Dict) -> Dict[str, Any]:
+                                  flattened_signal_data: Dict) -> Dict[str, Any]:
         """AI 액션을 실제 거래 결정으로 변환"""
         
         position_change = ai_action[0]
@@ -478,7 +483,7 @@ class LiveTradingAgent:
         ai_confidence = self._calculate_ai_confidence(ai_action, signal_quality)
         
         # Signal 기반 추가 신뢰도 계산
-        signal_confidence = self._calculate_signal_confidence(signal_data)
+        signal_confidence = self._calculate_signal_confidence(flattened_signal_data)
         
         # 거래 결정 생성
         decision = {
@@ -530,7 +535,7 @@ class LiveTradingAgent:
             
             # 스탑 설정
             decision['stop_loss'], decision['take_profit'] = self._calculate_stops(
-                current_price, decision['action'], holding_minutes, signal_quality, signal_data
+                current_price, decision['action'], holding_minutes, signal_quality, flattened_signal_data
             )
         else:
             decision['reason'] = (f"임계값 미달 (변경량: {position_change:.2f}, "
@@ -549,13 +554,13 @@ class LiveTradingAgent:
         
         return min(combined_confidence, 1.0)
     
-    def _calculate_signal_confidence(self, signal_data: Dict) -> float:
+    def _calculate_signal_confidence(self, flattened_signal_data: Dict) -> float:
         """Signal 데이터 기반 신뢰도 계산"""
         confidence_factors = []
         
         # 각 시간대별 신뢰도
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            confidence = signal_data.get(f'{timeframe}_confidence', 'LOW')
+            confidence = flattened_signal_data.get(f'{timeframe}_confidence', 'LOW')
             if confidence == 'HIGH':
                 confidence_factors.append(1.0)
             elif confidence == 'MEDIUM':
@@ -566,7 +571,7 @@ class LiveTradingAgent:
         # 신호 사용 개수 (더 많은 신호 = 더 신뢰)
         signals_used = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            used = signal_data.get(f'{timeframe}_signals_used', 0)
+            used = flattened_signal_data.get(f'{timeframe}_signals_used', 0)
             signals_used.append(min(used / 5.0, 1.0))
         
         # 종합 신뢰도
@@ -577,14 +582,14 @@ class LiveTradingAgent:
     
     def _calculate_stops(self, current_price: float, action: str, 
                         holding_minutes: float, signal_quality: Dict, 
-                        signal_data: Dict) -> Tuple[Optional[float], Optional[float]]:
+                        flattened_signal_data: Dict) -> Tuple[Optional[float], Optional[float]]:
         """Signal 정보를 활용한 스탑로스와 익절가 계산"""
         
         if action == 'HOLD':
             return None, None
         
         # ATR 기반 변동성 (Signal에서 직접 가져옴)
-        atr = signal_data.get('indicator_atr', current_price * 0.02)
+        atr = flattened_signal_data.get('indicator_atr', current_price * 0.02)
         volatility_estimate = atr / current_price
         
         # 신호 품질에 따른 조정
@@ -600,7 +605,7 @@ class LiveTradingAgent:
         # 시간대별 신호 강도 반영
         timeframe_strength = 0.0
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            net_score = abs(float(signal_data.get(f'{timeframe}_net_score', 0.0)))
+            net_score = abs(float(flattened_signal_data.get(f'{timeframe}_net_score', 0.0)))
             timeframe_strength += net_score
         
         if timeframe_strength > 1.0:  # 강한 신호
