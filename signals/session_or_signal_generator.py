@@ -76,7 +76,7 @@ class SessionORSignalGenerator:
         entry = l - self.cfg.tick
         atr = get_atr()
         stop = max(h, or_low + self.cfg.atr_stop_mult * float(atr)) + self.cfg.tick if atr else \
-               (max(h, or_low) + self.cfg.tick)
+                (max(h, or_low) + self.cfg.tick)
         R = stop - entry
         tp1 = entry - self.cfg.tp_R1 * R
         tp2 = entry - self.cfg.tp_R2 * R

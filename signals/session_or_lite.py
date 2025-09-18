@@ -56,13 +56,11 @@ class SessionORLite:
         self.or_high, self.or_low = get_opening_range()
         
         if self.or_high is None or self.or_low is None or self.or_high <= self.or_low:
-            print("self.or_high is None or self.or_low is None or self.or_high <= self.or_low")
             return None
 
         # 캔들 데이터 분석
         candle_analysis = self.analyzer.analyze_candle_data(df3, self.or_high, self.or_low)
         if not candle_analysis["valid"]:
-            print(f"Invalid candle data: {candle_analysis['reason']}")
             return None
             
         ohlc = candle_analysis["ohlc"]

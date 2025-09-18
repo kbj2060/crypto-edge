@@ -34,19 +34,38 @@ def load_parquet(path: str) -> pd.DataFrame:
 def analyze_schema_consistency(df: pd.DataFrame) -> Tuple[bool, Dict[str, Any]]:
     """스키마 일관성 분석 (모든 행이 동일한 컬럼 구조를 가지는지)"""
     if df.empty:
-        return True, {"total_rows": 0, "total_columns": 0, "column_names": []}
+        return True, {"total_rows": 0, "total_columns": 0, "column_names": [], "inconsistent_rows": []}
     
-    # 모든 행이 동일한 컬럼을 가짐 (Parquet의 특성상 당연함)
+    # 각 행별로 실제로 값이 있는 컬럼들 확인
     total_columns = len(df.columns)
     column_names = list(df.columns)
+    inconsistent_rows = []
     
-    # 스키마는 항상 일관됨 (Parquet 파일의 특성)
-    is_schema_consistent = True
+    # 첫 번째 행의 컬럼 구조를 기준으로 설정
+    if len(df) > 0:
+        reference_columns = set(df.columns[df.iloc[0].notna()])
+        
+        # 각 행을 확인하여 컬럼 구조가 다른지 체크
+        for idx, row in df.iterrows():
+            row_columns = set(row[row.notna()].index)
+            
+            # NaN이 아닌 컬럼들이 기준과 다른 경우
+            if row_columns != reference_columns:
+                inconsistent_rows.append({
+                    'row_index': idx,
+                    'expected_columns': reference_columns,
+                    'actual_columns': row_columns,
+                    'missing_columns': reference_columns - row_columns,
+                    'extra_columns': row_columns - reference_columns
+                })
+    
+    is_schema_consistent = len(inconsistent_rows) == 0
     
     return is_schema_consistent, {
         "total_rows": len(df),
         "total_columns": total_columns,
-        "column_names": column_names
+        "column_names": column_names,
+        "inconsistent_rows": inconsistent_rows
     }
 
 
@@ -106,6 +125,22 @@ def print_analysis_report(schema_analysis: Dict[str, Any],
     print(f"총 컬럼 수: {schema_analysis['total_columns']}")
     print(f"컬럼 이름들: {schema_analysis['column_names'][:10]}{'...' if len(schema_analysis['column_names']) > 10 else ''}")
     
+    # 일관성 없는 행들 출력
+    inconsistent_rows = schema_analysis['inconsistent_rows']
+    if inconsistent_rows:
+        print(f"\n❌ 컬럼 구조가 다른 행들 (최대 {max_examples}개):")
+        for i, row_info in enumerate(inconsistent_rows[:max_examples]):
+            print(f"\n  행 {row_info['row_index']}:")
+            print(f"    예상 컬럼 수: {len(row_info['expected_columns'])}개")
+            print(f"    실제 컬럼 수: {len(row_info['actual_columns'])}개")
+            
+            if row_info['missing_columns']:
+                print(f"    누락된 컬럼: {sorted(list(row_info['missing_columns']))}")
+            if row_info['extra_columns']:
+                print(f"    추가된 컬럼: {sorted(list(row_info['extra_columns']))}")
+    else:
+        print(f"\n✅ 모든 행이 동일한 컬럼 구조를 가지고 있습니다!")
+    
     print(f"\n=== 데이터 완성도 분석 ===")
     print(f"최대 가능한 값 개수: {completeness_analysis['max_possible_values']}")
     print(f"값 개수 분포:")
@@ -161,11 +196,18 @@ def main() -> int:
     # 결론
     max_values = completeness_analysis['max_possible_values']
     value_counts = list(completeness_analysis['non_nan_distribution'].keys())
+    inconsistent_count = len(schema_analysis['inconsistent_rows'])
+    
+    print(f"\n=== 최종 결론 ===")
+    if inconsistent_count == 0:
+        print(f"✅ 컬럼 구조: 모든 행이 동일한 컬럼 구조를 가지고 있습니다!")
+    else:
+        print(f"❌ 컬럼 구조: {inconsistent_count}개 행이 다른 컬럼 구조를 가지고 있습니다!")
     
     if len(value_counts) == 1 and value_counts[0] == max_values:
-        print(f"\n✅ 결론: 모든 행이 완전한 데이터를 가지고 있습니다! ({max_values}개 값)")
+        print(f"✅ 데이터 완성도: 모든 행이 완전한 데이터를 가지고 있습니다! ({max_values}개 값)")
     else:
-        print(f"\n⚠️  결론: 일부 행에 누락된 값이 있습니다!")
+        print(f"⚠️  데이터 완성도: 일부 행에 누락된 값이 있습니다!")
         print(f"완전한 행: {completeness_analysis['non_nan_distribution'].get(max_values, 0)}개")
         print(f"불완전한 행: {len(completeness_analysis['incomplete_rows'])}개")
 

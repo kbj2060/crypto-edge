@@ -53,19 +53,19 @@ class OpeningRange:
 
         if current_session_start <= self.target_time <= current_session_start + timedelta(minutes=self.or_minutes):
             self.calculate_opening_range(
-                current_session_start + timedelta(seconds=1), 
+                current_session_start, 
                 self.target_time
                 )
 
         if current_session_start:
             self.calculate_opening_range(
-                current_session_start + timedelta(seconds=1), 
+                current_session_start, 
                 current_session_start + timedelta(minutes=self.or_minutes)
                 )
         else:
             prev_session_close = self.session_manager.get_previous_session_close()
             self.calculate_opening_range(
-                prev_session_close + timedelta(seconds=1), 
+                prev_session_close, 
                 prev_session_close + timedelta(minutes=self.or_minutes)
                 )
         return True
@@ -95,11 +95,7 @@ class OpeningRange:
         """새로운 캔들로 업데이트 (호환성용)"""
         try:
             self.target_time = self.time_manager.ensure_utc(candle_data.name)
-            self.is_initialized = self._initialize_or()   
-            # if self.is_initialized and self._or and 'high' in self._or and 'low' in self._or:
-            #     print(f"✅ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 업데이트 HIGH: {self._or['high']:.2f} LOW: {self._or['low']:.2f}")
-            # else:
-            #     print(f"❌ [{self.time_manager.get_current_time().strftime('%H:%M:%S')}] OR 현재 진행 중..")
+            self.is_initialized = self._initialize_or()
         except Exception as e:
             print(f"❌ OR 업데이트 오류: {e}")
             
@@ -136,7 +132,7 @@ class OpeningRange:
         try:
             df = self.get_data(start_time, end_time)
 
-            if df is not None:
+            if df is not None and not df.empty:
                 start_utc = self.time_manager.ensure_utc(start_time)
                 end_utc = self.time_manager.ensure_utc(end_time)
 
@@ -157,9 +153,30 @@ class OpeningRange:
                 
                 return self._or
             else:
-                print(f"⚠️ 지정된 기간에 해당하는 데이터가 없습니다.")
-                return {}
+                # 빈 OR 데이터라도 반환하여 None 오류 방지
+                self._or = {
+                    'start_time': self.target_time.isoformat(),
+                    'end_time': self.target_time.isoformat(),
+                    'or_minutes': self.or_minutes,
+                    'high': None,
+                    'low': None,
+                    'candle_count': 0,
+                    'is_completed': False,
+                    'calculation_time': self.time_manager.get_current_time().isoformat()
+                }
+                return self._or
             
         except Exception as e:
             print(f"❌ OR 데이터 계산 오류: {e}")
-            return {}
+            # 오류 시에도 빈 OR 데이터 반환
+            self._or = {
+                'start_time': self.target_time.isoformat(),
+                'end_time': self.target_time.isoformat(),
+                'or_minutes': self.or_minutes,
+                'high': None,
+                'low': None,
+                'candle_count': 0,
+                'is_completed': False,
+                'calculation_time': self.time_manager.get_current_time().isoformat()
+            }
+            return self._or

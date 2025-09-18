@@ -283,14 +283,14 @@ def get_all_indicators() -> Dict[str, Any]:
     opening_range_high, opening_range_low = get_opening_range()
     
     return {
-        "poc" : poc,
-        "hvn"  : hvn,
-        "lvn" : lvn,
-        "vwap" : vwap,
-        "vwap_std" : vwap_std,
-        "atr" : atr,
-        "prev_day_high" : prev_day_high,
-        "prev_day_low" : prev_day_low,
-        "opening_range_high" : opening_range_high,
-        "opening_range_low" : opening_range_low,
+        "poc" : round(float(poc), 3) if poc is not None else None,
+        "hvn"  : round(float(hvn), 3) if hvn is not None else None,
+        "lvn" : round(float(lvn), 3) if lvn is not None else None,
+        "vwap" : round(float(vwap), 3) if vwap is not None else None,
+        "vwap_std" : round(float(vwap_std), 3) if vwap_std is not None else None,
+        "atr" : round(float(atr), 3) if atr is not None else None,
+        "prev_day_high" : round(float(prev_day_high), 3) if prev_day_high is not None else None,
+        "prev_day_low" : round(float(prev_day_low), 3) if prev_day_low is not None else None,
+        "opening_range_high" : round(float(opening_range_high), 3) if opening_range_high is not None else None,
+        "opening_range_low" : round(float(opening_range_low), 3) if opening_range_low is not None else None,
     }

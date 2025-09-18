@@ -9,18 +9,23 @@ from typing import Dict, Any, List, Optional
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from rl_training_system import TrainingManager, PerformanceAnalyzer, DataLoader
-from rl_agent_core import StandardRLAgent, EnhancedTradingEnvironment, train_enhanced_agent, evaluate_enhanced_agent
 from managers.strategy_executor import StrategyExecutor
 from managers.data_manager import get_data_manager
 from engines.trade_decision_engine import TradeDecisionEngine
 from indicators.global_indicators import get_all_indicators, get_global_indicator_manager
-# 함수 별칭 설정
-train_rl_agent = train_enhanced_agent
-evaluate_agent = evaluate_enhanced_agent
 
 def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     """복잡한 중첩 구조를 평면화하여 Parquet 저장에 최적화"""
+    import numpy as np
+    
+    def safe_convert(value):
+        """numpy 타입을 Python 기본 타입으로 안전하게 변환"""
+        if isinstance(value, (np.integer, np.floating)):
+            return float(value)
+        elif isinstance(value, np.ndarray):
+            return value.tolist()
+        return value
+    
     flattened = {}
     
     # 기본 정보
@@ -29,7 +34,7 @@ def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     # indicators 정보
     indicators = decision_data.get('indicators', {})
     for key, value in indicators.items():
-        flattened[f'indicator_{key}'] = value
+        flattened[f'indicator_{key}'] = safe_convert(value)
     
     # decisions 정보를 각 카테고리별로 평면화
     decisions = decision_data.get('decisions', {})
@@ -37,48 +42,48 @@ def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     for category_name, category_data in decisions.items():
         prefix = f"{category_name.lower()}_"
         
-        # 기본 정보
-        flattened[f'{prefix}action'] = category_data.get('action')
-        flattened[f'{prefix}net_score'] = category_data.get('net_score')
-        flattened[f'{prefix}leverage'] = category_data.get('leverage')
-        flattened[f'{prefix}max_holding_minutes'] = category_data.get('max_holding_minutes')
-        flattened[f'{prefix}reason'] = category_data.get('reason')
+        # RL 변환된 데이터에서 기본 정보 추출
+        flattened[f'{prefix}action'] = safe_convert(category_data.get('action_value'))
+        flattened[f'{prefix}net_score'] = safe_convert(category_data.get('net_score'))
+        flattened[f'{prefix}leverage'] = safe_convert(category_data.get('leverage'))
+        flattened[f'{prefix}max_holding_minutes'] = safe_convert(category_data.get('max_holding_minutes'))
         
-        # sizing 정보
-        sizing = category_data.get('sizing', {})
-        flattened[f'{prefix}qty'] = sizing.get('qty')
-        flattened[f'{prefix}risk_usd'] = sizing.get('risk_usd')
-        flattened[f'{prefix}entry_used'] = sizing.get('entry_used')
-        flattened[f'{prefix}stop_used'] = sizing.get('stop_used')
-        flattened[f'{prefix}risk_multiplier'] = sizing.get('risk_multiplier')
+        # 신뢰도 및 시장 상황
+        flattened[f'{prefix}confidence'] = safe_convert(category_data.get('confidence_value'))
+        flattened[f'{prefix}market_context'] = safe_convert(category_data.get('market_context_value'))
         
-        # meta 정보
-        meta = category_data.get('meta', {})
-        flattened[f'{prefix}timeframe'] = meta.get('timeframe')
+        # 점수 정보
+        flattened[f'{prefix}buy_score'] = safe_convert(category_data.get('buy_score'))
+        flattened[f'{prefix}sell_score'] = safe_convert(category_data.get('sell_score'))
+        flattened[f'{prefix}signals_used'] = safe_convert(category_data.get('signals_used'))
         
-        # synergy_meta 정보
-        synergy_meta = meta.get('synergy_meta', {})
-        flattened[f'{prefix}confidence'] = synergy_meta.get('confidence')
-        flattened[f'{prefix}market_context'] = synergy_meta.get('market_context')
-        flattened[f'{prefix}buy_score'] = synergy_meta.get('buy_score')
-        flattened[f'{prefix}sell_score'] = synergy_meta.get('sell_score')
-        flattened[f'{prefix}signals_used'] = synergy_meta.get('signals_used')
+        # 충돌 및 보너스 정보
+        flattened[f'{prefix}conflicts_detected_count'] = safe_convert(category_data.get('conflicts_detected_count'))
+        flattened[f'{prefix}bonuses_applied_count'] = safe_convert(category_data.get('bonuses_applied_count'))
         
-        # 장기 전략 추가 정보
-        if category_name == 'LONG_TERM':
-            flattened[f'{prefix}institutional_bias'] = synergy_meta.get('institutional_bias')
-            flattened[f'{prefix}macro_trend_strength'] = synergy_meta.get('macro_trend_strength')
+        # 포지션 크기 정보
+        flattened[f'{prefix}risk_multiplier'] = safe_convert(category_data.get('risk_multiplier'))
+        flattened[f'{prefix}risk_usd'] = safe_convert(category_data.get('risk_usd'))
         
-        # raw 전략 데이터를 JSON 문자열로 저장 (필요시)
-        raw_data = category_data.get('raw', {})
-        # 주요 전략들만 개별 컬럼으로 저장
-        for strategy_name, strategy_data in raw_data.items():
-            if isinstance(strategy_data, dict):
-                flattened[f'{prefix}raw_{strategy_name.lower()}_action'] = strategy_data.get('action')
-                flattened[f'{prefix}raw_{strategy_name.lower()}_score'] = strategy_data.get('score')
-                flattened[f'{prefix}raw_{strategy_name.lower()}_entry'] = strategy_data.get('entry')
-                flattened[f'{prefix}raw_{strategy_name.lower()}_stop'] = strategy_data.get('stop')
+        # 전략 사용 정보
+        flattened[f'{prefix}strategies_count'] = safe_convert(category_data.get('strategies_count'))
+        
+        # 카테고리별 특화 정보
+        if category_name == 'short_term':
+            flattened[f'{prefix}momentum_strength'] = safe_convert(category_data.get('momentum_strength'))
+            flattened[f'{prefix}reversion_potential'] = safe_convert(category_data.get('reversion_potential'))
+        elif category_name == 'medium_term':
+            flattened[f'{prefix}trend_strength'] = safe_convert(category_data.get('trend_strength'))
+            flattened[f'{prefix}consolidation_level'] = safe_convert(category_data.get('consolidation_level'))
+        elif category_name == 'long_term':
+            flattened[f'{prefix}institutional_bias'] = safe_convert(category_data.get('institutional_bias'))
+            flattened[f'{prefix}macro_trend_strength'] = safe_convert(category_data.get('macro_trend_strength'))
     
+    # conflicts 정보 (딕셔너리 형태로 처리)
+    conflicts = decision_data.get('conflicts', {})
+    for key, value in conflicts.items():
+        flattened[f'conflict_{key}'] = safe_convert(value)
+
     return flattened
 
 def safe_concat(existing_df, new_df):
@@ -394,8 +399,6 @@ def generate_signal_data_with_indicators(
     resume_from_progress: bool = True
 ):
     """CSV 데이터로 실제 지표 업데이트 및 전략 실행 (중단점 재시작 지원)"""
-
-
     # 진행 상태 확인
     progress_state = None
     start_idx = None
@@ -437,7 +440,7 @@ def generate_signal_data_with_indicators(
     decision_engine = TradeDecisionEngine()
 
     end_idx = len(price_data)
-    batch_size = 500  # 500개씩 배치로 저장 (Parquet은 더 큰 배치가 효율적)
+    batch_size = 100  # 500개씩 배치로 저장 (Parquet은 더 큰 배치가 효율적)
     temp_decision_data = []  # 임시 저장용
     
     try:
@@ -545,116 +548,143 @@ def check_existing_decision_data() -> bool:
         print(f"❌ Decision 데이터 확인 중 오류: {e}")
         return False
 
-def run_reinforcement_learning(price_data, signal_data):
-    """강화학습 실행 함수"""
-    print("=== 강화학습 에이전트 훈련 시작 ===")
+def analyze_decision_data(df: pd.DataFrame) -> None:
+    """Decision 데이터 분석 및 통계 출력"""
+    print("\n=== Decision 데이터 분석 ===")
     
-    try:
-        # 4. 에이전트 훈련 (에피소드 수 조정)
-        print("에이전트 훈련 시작...")
-        agent, rewards = train_rl_agent(price_data, signal_data, episodes=200)
-        
-        print("\n=== 훈련 완료, 성능 평가 중 ===")
-        
-        # 5. 성능 평가
-        print("성능 평가 시작...")
-        eval_results = evaluate_agent(agent, price_data, signal_data, episodes=10)
-        
-        # 6. 성능 분석
-        print("성능 분석 시작...")
-        if BacktestAnalyzer is not None:
-            analyzer = BacktestAnalyzer()
-            metrics = analyzer.calculate_performance_metrics(eval_results)
-            report = analyzer.generate_report(eval_results, metrics)
-            print(report)
-        else:
-            print("⚠️ BacktestAnalyzer를 사용할 수 없습니다. 기본 성능 정보만 출력합니다.")
-            print(f"훈련 완료: {len(rewards)} 에피소드")
-            print(f"평균 보상: {sum(rewards)/len(rewards):.4f}")
-            metrics = {"episodes": len(rewards), "avg_reward": sum(rewards)/len(rewards)}
-        
-        # 7. 모델 저장
-        print("모델 저장 중...")
-        agent.save_model('ethusdc_crypto_rl_model.pth')
-        print("\n모델이 'ethusdc_crypto_rl_model.pth'에 저장되었습니다.")
-        
-        return agent, eval_results, metrics
-        
-    except Exception as e:
-        print(f"❌ 에이전트 훈련 중 오류 발생: {e}")
-        import traceback
-        traceback.print_exc()
-        return None, None, None
+    if df.empty:
+        print("분석할 데이터가 없습니다.")
+        return
+    
+    print(f"총 레코드 수: {len(df)}")
+    print(f"컬럼 수: {len(df.columns)}")
+    print(f"시간 범위: {df['timestamp'].min()} ~ {df['timestamp'].max()}")
+    
+    # 각 카테고리별 액션 분포 분석 (수치값을 문자열로 변환)
+    categories = ['short_term', 'medium_term', 'long_term']
+    action_mapping = {1.0: 'LONG', -1.0: 'SHORT', 0.0: 'HOLD'}
+    
+    for category in categories:
+        action_col = f'{category}_action'
+        if action_col in df.columns:
+            # 수치값을 문자열로 변환
+            action_values = df[action_col].map(action_mapping).fillna('UNKNOWN')
+            action_counts = action_values.value_counts()
+            print(f"\n{category.upper()} 액션 분포:")
+            for action, count in action_counts.items():
+                percentage = (count / len(df)) * 100
+                print(f"  {action}: {count}개 ({percentage:.1f}%)")
+    
+    # 신뢰도 분포 분석 (수치값을 문자열로 변환)
+    confidence_mapping = {0.8: 'HIGH', 0.5: 'MEDIUM', 0.2: 'LOW'}
+    
+    for category in categories:
+        confidence_col = f'{category}_confidence'
+        if confidence_col in df.columns:
+            # 수치값을 문자열로 변환
+            conf_values = df[confidence_col].map(confidence_mapping).fillna('UNKNOWN')
+            confidence_counts = conf_values.value_counts()
+            print(f"\n{category.upper()} 신뢰도 분포:")
+            for conf, count in confidence_counts.items():
+                percentage = (count / len(df)) * 100
+                print(f"  {conf}: {count}개 ({percentage:.1f}%)")
+    
+    # 지표 데이터 완성도 분석
+    indicator_cols = [col for col in df.columns if col.startswith('indicator_')]
+    print(f"\n지표 데이터 완성도:")
+    for col in indicator_cols:
+        non_null_count = df[col].count()
+        percentage = (non_null_count / len(df)) * 100
+        print(f"  {col}: {non_null_count}/{len(df)} ({percentage:.1f}%)")
+    
+    # 카테고리별 특화 지표 분석
+    print(f"\n카테고리별 특화 지표:")
+    for category in categories:
+        prefix = f'{category}_'
+        special_cols = [col for col in df.columns if col.startswith(prefix) and 
+                       col.endswith(('_strength', '_potential', '_level', '_bias'))]
+        if special_cols:
+            print(f"  {category.upper()}:")
+            for col in special_cols:
+                non_null_count = df[col].count()
+                percentage = (non_null_count / len(df)) * 100
+                print(f"    {col}: {non_null_count}/{len(df)} ({percentage:.1f}%)")
+    
+    # 충돌 정보 분석
+    conflict_cols = [col for col in df.columns if col.startswith('conflict_')]
+    if conflict_cols:
+        print(f"\n충돌 정보:")
+        for col in conflict_cols:
+            if col in ['conflict_conflicts_count', 'conflict_conflicts_details']:
+                continue  # 이전 방식의 컬럼은 스킵
+            non_null_count = df[col].count()
+            if non_null_count > 0:
+                if df[col].dtype in ['float64', 'int64']:
+                    stats = df[col].describe()
+                    print(f"  {col}: 평균={stats['mean']:.3f}, 최대={stats['max']:.3f}, 최소={stats['min']:.3f}")
+                else:
+                    print(f"  {col}: {non_null_count}개 값")
+    
+    # 기존 방식의 충돌 정보 (하위 호환성)
+    if 'conflicts_count' in df.columns:
+        conflict_stats = df['conflicts_count'].describe()
+        print(f"\n기존 충돌 정보:")
+        print(f"  평균 충돌 수: {conflict_stats['mean']:.2f}")
+        print(f"  최대 충돌 수: {conflict_stats['max']:.0f}")
+        print(f"  충돌이 있는 레코드: {(df['conflicts_count'] > 0).sum()}개")
 
 def main_example():
-    """강화학습 트레이딩 AI 사용 예시 - Parquet 저장 및 재시작 지원"""
+    """Decision 데이터 생성 전용 - Parquet 저장 및 재시작 지원"""
+    print("\n📊 Decision 데이터를 생성합니다...")
     
-    print("=== 강화학습 트레이딩 AI 훈련 시작 ===")
-    
-    # 1. 기존 Decision 데이터 확인
-    has_existing_data = check_existing_decision_data()
-    
-    if has_existing_data:
-        print("\n🚀 기존 Decision 데이터를 사용하여 바로 강화학습을 시작합니다!")
-        
-        # 가격 데이터 로드 (강화학습에 필요)
-        price_data, price_data_15m, price_data_1h = load_ethusdc_data()
-        if price_data is None:
-            print("가격 데이터 로드 실패. 프로그램을 종료합니다.")
-            return
-        
-        # Decision 데이터를 signal_data로 변환
-        inspect_parquet_structure()
-        signal_data = load_signal_data_directly()
-        
-        if not signal_data:
-            print("signal_data 로드에 실패했습니다.")
-            return
-        
-        # 바로 강화학습 실행
-        return run_reinforcement_learning(price_data, signal_data)
-    
-    else:
-        print("\n📊 Decision 데이터를 새로 생성합니다...")
-        
-        # 2. 실제 ETHUSDC 데이터 로드 (3분, 15분, 1시간봉)
-        price_data, price_data_15m, price_data_1h = load_ethusdc_data()
-        
-        if price_data is None:
-            print("데이터 로드 실패. 프로그램을 종료합니다.")
-            return
-        
-        print(f"가격 데이터 정보:")
-        print(f"   - 총 캔들 수: {len(price_data)}개")
-        print(f"   - 가격 범위: ${price_data['close'].min():.2f} ~ ${price_data['close'].max():.2f}")
-        
-        # 3. CSV 데이터로 실제 지표 업데이트 및 전략 실행 (재시작 지원)
-        success = generate_signal_data_with_indicators(price_data, price_data_15m, price_data_1h, resume_from_progress=True)
-
-        if success:
-            print("Decision 데이터가 Parquet 파일로 저장되었습니다.")
-            
-            # 저장된 데이터 확인
+    # 1. 기존 데이터 확인
+    if check_existing_decision_data():
+        response = input("기존 데이터가 있습니다. 새로 생성하시겠습니까? (y/N): ")
+        if response.lower() != 'y':
+            print("기존 데이터를 사용합니다.")
             df = load_decisions_from_parquet()
             if df is not None:
-                print(f"저장된 데이터 요약:")
-                print(f"   - 총 레코드 수: {len(df)}")
-                print(f"   - 시간 범위: {df['timestamp'].min()} ~ {df['timestamp'].max()}")
-                print(f"   - 컬럼 수: {len(df.columns)}")
+                analyze_decision_data(df)
+            return
+    
+    # 2. 실제 ETHUSDC 데이터 로드 (3분, 15분, 1시간봉)
+    price_data, price_data_15m, price_data_1h = load_ethusdc_data()
+    
+    if price_data is None:
+        print("데이터 로드 실패. 프로그램을 종료합니다.")
+        return
+    
+    print(f"가격 데이터 정보:")
+    print(f"   - 총 캔들 수: {len(price_data)}개")
+    print(f"   - 가격 범위: ${price_data['close'].min():.2f} ~ ${price_data['close'].max():.2f}")
+    
+    # 3. CSV 데이터로 실제 지표 업데이트 및 전략 실행 (재시작 지원)
+    success = generate_signal_data_with_indicators(price_data, price_data_15m, price_data_1h, resume_from_progress=True)
+
+    if success:
+        print("\n✅ Decision 데이터가 Parquet 파일로 저장되었습니다.")
+        
+        # 저장된 데이터 확인 및 분석
+        df = load_decisions_from_parquet()
+        if df is not None:
+            print(f"\n저장된 데이터 요약:")
+            print(f"   - 총 레코드 수: {len(df)}")
+            print(f"   - 시간 범위: {df['timestamp'].min()} ~ {df['timestamp'].max()}")
+            print(f"   - 컬럼 수: {len(df.columns)}")
             
-            # Decision 데이터를 signal_data로 변환
+            # 상세 분석
+            analyze_decision_data(df)
+            
+            # Parquet 구조 확인
             inspect_parquet_structure()
-            signal_data = load_signal_data_directly()
             
-            if not signal_data:
-                print("signal_data 로드에 실패했습니다.")
-                return
-            
-            # 강화학습 실행
-            return run_reinforcement_learning(price_data, signal_data)
-        else:
-            print("데이터 생성이 완료되지 않았습니다. 나중에 재시작할 수 있습니다.")
-            return None, None, None
+            print(f"\n🎯 Decision 데이터 생성 완료!")
+            print(f"   - 파일 위치: agent/decisions_data.parquet")
+            print(f"   - 이 데이터를 강화학습이나 다른 분석에 사용할 수 있습니다.")
+        
+    else:
+        print("❌ 데이터 생성이 완료되지 않았습니다. 나중에 재시작할 수 있습니다.")
+        print("   - 진행 상태가 저장되어 있어서 다음에 이어서 실행할 수 있습니다.")
 
 if __name__ == "__main__":
     # 예시 실행
