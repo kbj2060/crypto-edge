@@ -264,16 +264,20 @@ class MediumTermSynergyEngine:
         sell_score = np.mean([s['final_score'] for s in sell_signals]) if sell_signals else 0.0
         
         # 8. 시너지 보너스 적용
+        total_bonus_applied = 0
         for bonus_type, bonus_value in bonuses.items():
             if buy_score > sell_score:
                 buy_score *= (1 + bonus_value)
+                total_bonus_applied += bonus_value
             else:
                 sell_score *= (1 + bonus_value)
+                total_bonus_applied += bonus_value
         
         # 9. 최종 결과
         net_score = buy_score - sell_score
         return self._create_final_result(net_score, buy_score, sell_score, market_context, 
-                                       conflicts, bonuses, filtered_signals, 'MEDIUM_TERM')
+                                       conflicts, bonuses, filtered_signals, weighted_signals,
+                                       total_bonus_applied, 'MEDIUM_TERM')
     
     def _get_affected_strategies(self, conflict_type: str) -> List[str]:
         """충돌 유형별 영향받는 전략들"""
@@ -298,13 +302,25 @@ class MediumTermSynergyEngine:
             'conflicts_detected': [],
             'bonuses_applied': [],
             'signals_used': 0,
-            'category': category
+            'category': category,
+            'breakdown': {
+                'buy_signals': [],
+                'sell_signals': []
+            },
+            'meta': {
+                'total_bonus_applied': 0.0,
+                'conflict_count': 0,
+                'strong_signals': [],
+                'trend_strength': 'WEAK',
+                'consolidation_level': 'NEUTRAL'
+            }
         }
     
     def _create_final_result(self, net_score: float, buy_score: float, sell_score: float,
-                           context: str, conflicts: Dict, bonuses: Dict, signals: List, category: str) -> Dict[str, Any]:
+                           context: str, conflicts: Dict, bonuses: Dict, signals: List, 
+                           weighted_signals: List, total_bonus: float, category: str) -> Dict[str, Any]:
         """최종 결과 생성"""
-        # 임계값: 장기는 0.25
+        # 임계값: 중기는 0.25
         min_threshold = 0.25
         
         if abs(net_score) < min_threshold:
@@ -332,9 +348,49 @@ class MediumTermSynergyEngine:
             'signals_used': len(signals),
             'category': category,
             'breakdown': {
-                'buy_signals': [{'name': s['name'], 'score': s.get('final_score', s['score'])} 
-                               for s in signals if s['action'] == 'BUY'],
-                'sell_signals': [{'name': s['name'], 'score': s.get('final_score', s['score'])} 
-                                for s in signals if s['action'] == 'SELL']
+                'buy_signals': [{'name': s['name'], 'score': s.get('final_score', s['score']), 
+                                'base_weight': s.get('base_weight', 1.0), 'penalty': s.get('penalty_applied', 1.0)} 
+                                for s in weighted_signals if s['action'] == 'BUY'],
+                'sell_signals': [{'name': s['name'], 'score': s.get('final_score', s['score']),
+                                'base_weight': s.get('base_weight', 1.0), 'penalty': s.get('penalty_applied', 1.0)} 
+                                for s in weighted_signals if s['action'] == 'SELL']
+            },
+            'meta': {
+                'total_bonus_applied': total_bonus,
+                'conflict_count': len(conflicts),
+                'strong_signals': [s['name'] for s in signals if s['score'] > 0.8],
+                'trend_strength': self._calculate_trend_strength(weighted_signals, context),
+                'consolidation_level': self._calculate_consolidation_level(weighted_signals, context)
             }
         }
+    
+    def _calculate_trend_strength(self, weighted_signals: List[Dict[str, Any]], context: str) -> str:
+        """트렌드 강도 계산"""
+        trend_signals = ['HTF_TREND', 'MULTI_TIMEFRAME']
+        trend_scores = [s['final_score'] for s in weighted_signals if s['name'] in trend_signals]
+        
+        if not trend_scores:
+            return 'WEAK'
+        
+        avg_trend_score = np.mean(trend_scores)
+        
+        if context == 'STRONG_TREND' and avg_trend_score > 0.8:
+            return 'STRONG'
+        elif avg_trend_score > 0.6:
+            return 'MEDIUM'
+        else:
+            return 'WEAK'
+    
+    def _calculate_consolidation_level(self, weighted_signals: List[Dict[str, Any]], context: str) -> str:
+        """통합 수준 계산"""
+        sr_signal = next((s for s in weighted_signals if s['name'] == 'SUPPORT_RESISTANCE'), None)
+        
+        if not sr_signal:
+            return 'NEUTRAL'
+        
+        if context == 'CONSOLIDATION' and sr_signal['final_score'] > 0.8:
+            return 'HIGH'
+        elif sr_signal['final_score'] > 0.6:
+            return 'MEDIUM'
+        else:
+            return 'LOW'

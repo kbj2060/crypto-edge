@@ -35,12 +35,123 @@ class SynergyConfig:
                 'vol_orderflow_conflict': 0.7,    # 거래량 해석 차이
                 'momentum_reversion_conflict': 0.75  # 방향성 충돌
             }
+    
+    def _create_hold_result(self, category: str, context: str = 'NEUTRAL') -> Dict[str, Any]:
+        """HOLD 결과 생성"""
+        return {
+            'action': 'HOLD',
+            'score': 0.0,
+            'net_score': 0.0,
+            'buy_score': 0.0,
+            'sell_score': 0.0,
+            'confidence': 'LOW',
+            'market_context': context,
+            'conflicts_detected': [],
+            'bonuses_applied': [],
+            'signals_used': 0,
+            'category': category,
+            'breakdown': {
+                'buy_signals': [],
+                'sell_signals': []
+            },
+            'meta': {
+                'total_bonus_applied': 0.0,
+                'conflict_count': 0,
+                'strong_signals': [],
+                'trend_strength': 'WEAK',
+                'consolidation_level': 'NEUTRAL'
+            }
+        }
+    
+    
 
 class ShortTermSynergyEngine:
     """SHORT_TERM 전략 시너지 최적화 엔진"""
     
     def __init__(self, config: SynergyConfig = SynergyConfig()):
         self.config = config
+    
+    def _create_final_result(self, net_score: float, buy_score: float, sell_score: float,
+                           context: str, conflicts: Dict, bonuses: Dict, signals: List, 
+                           weighted_signals: List, total_bonus: float, category: str) -> Dict[str, Any]:
+        """최종 결과 생성"""
+        # 임계값: 단기는 0.1
+        min_threshold = self.config.min_net_threshold
+        
+        if abs(net_score) < min_threshold:
+            action = 'HOLD'
+            confidence = 'LOW'
+        else:
+            action = 'BUY' if net_score > 0 else 'SELL'
+            if abs(net_score) > 0.4:
+                confidence = 'HIGH'
+            elif abs(net_score) > 0.25:
+                confidence = 'MEDIUM'
+            else:
+                confidence = 'LOW'
+        
+        return {
+            'action': action,
+            'score': abs(net_score),
+            'net_score': net_score,
+            'buy_score': buy_score,
+            'sell_score': sell_score,
+            'confidence': confidence,
+            'market_context': context,
+            'conflicts_detected': list(conflicts.keys()),
+            'bonuses_applied': list(bonuses.keys()),
+            'signals_used': len(signals),
+            'category': category,
+            'breakdown': {
+                'buy_signals': [{'name': s['name'], 'score': s.get('final_score', s['score']), 
+                               'base_weight': s.get('base_weight', 1.0), 'penalty': s.get('penalty_applied', 1.0)} 
+                               for s in weighted_signals if s['action'] == 'BUY'],
+                'sell_signals': [{'name': s['name'], 'score': s.get('final_score', s['score']),
+                                'base_weight': s.get('base_weight', 1.0), 'penalty': s.get('penalty_applied', 1.0)} 
+                                for s in weighted_signals if s['action'] == 'SELL']
+            },
+            'meta': {
+                'total_bonus_applied': total_bonus,
+                'conflict_count': len(conflicts),
+                'strong_signals': [s['name'] for s in signals if s['score'] > 0.8],
+                'trend_strength': self._calculate_trend_strength(weighted_signals, context),
+                'consolidation_level': self._calculate_consolidation_level(weighted_signals, context)
+            }
+        }
+    
+    def _calculate_trend_strength(self, weighted_signals: List[Dict[str, Any]], context: str) -> str:
+        """트렌드 강도 계산"""
+        trend_signals = ['VOL_SPIKE', 'ORDERFLOW_CVD']
+        trend_scores = [s['final_score'] for s in weighted_signals if s['name'] in trend_signals]
+        
+        if not trend_scores:
+            return 'WEAK'
+        
+        avg_trend_score = np.mean(trend_scores)
+        
+        if context == 'TRENDING' and avg_trend_score > 0.8:
+            return 'STRONG'
+        elif avg_trend_score > 0.6:
+            return 'MEDIUM'
+        else:
+            return 'WEAK'
+    
+    def _calculate_consolidation_level(self, weighted_signals: List[Dict[str, Any]], context: str) -> str:
+        """통합 수준 계산"""
+        consolidation_signals = ['VWAP_PINBALL', 'ZSCORE_MEAN_REVERSION']
+        consolidation_scores = [s['final_score'] for s in weighted_signals if s['name'] in consolidation_signals]
+        
+        if not consolidation_scores:
+            return 'NEUTRAL'
+        
+        avg_consolidation_score = np.mean(consolidation_scores)
+        
+        if context == 'RANGING' and avg_consolidation_score > 0.8:
+            return 'HIGH'
+        elif avg_consolidation_score > 0.6:
+            return 'MEDIUM'
+        else:
+            return 'LOW'
     
     def _convert_signal_format(self, signals) -> List[Dict[str, Any]]:
         """다양한 신호 형식을 표준 리스트 형태로 변환"""
@@ -172,18 +283,7 @@ class ShortTermSynergyEngine:
         filtered_signals = [s for s in adjusted_signals if s['score'] >= self.config.min_score_threshold]
         
         if not filtered_signals:
-            return {
-                'action': 'HOLD', 
-                'score': 0.0, 
-                'net_score': 0.0,
-                'buy_score': 0.0,
-                'sell_score': 0.0,
-                'confidence': 'LOW', 
-                'market_context': market_context,
-                'conflicts_detected': [],
-                'signals_used': 0,
-                'breakdown': {'buy_signals': [], 'sell_signals': []}
-            }
+            return self._create_hold_result('SHORT_TERM', market_context)
         
         # 4. 충돌 감지 및 페널티 적용
         conflicts = self.detect_conflicts(filtered_signals)
@@ -227,30 +327,13 @@ class ShortTermSynergyEngine:
         # 8. 최종 결과 계산
         net_score = buy_score - sell_score
         
-        if abs(net_score) < self.config.min_net_threshold:
-            action = 'HOLD'
-            confidence = 'LOW'
-        else:
-            action = 'BUY' if net_score > 0 else 'SELL'
-            if abs(net_score) > 0.4:
-                confidence = 'HIGH'
-            elif abs(net_score) > 0.25:
-                confidence = 'MEDIUM'
-            else:
-                confidence = 'LOW'
+        # 시너지 보너스 총합 계산
+        total_bonus_applied = 0
+        if len(buy_signals) >= 3:
+            total_bonus_applied += self.config.consensus_bonus
+        if len(sell_signals) >= 3:
+            total_bonus_applied += self.config.consensus_bonus
         
-        return {
-            'action': action,
-            'score': abs(net_score),
-            'net_score': net_score,
-            'buy_score': buy_score,
-            'sell_score': sell_score,
-            'confidence': confidence,
-            'market_context': market_context,
-            'conflicts_detected': list(conflicts.keys()),
-            'signals_used': len(filtered_signals),
-            'breakdown': {
-                'buy_signals': [{'name': s['name'], 'score': s['final_score']} for s in buy_signals],
-                'sell_signals': [{'name': s['name'], 'score': s['final_score']} for s in sell_signals]
-            }
-        }
+        return self._create_final_result(net_score, buy_score, sell_score, market_context, 
+                                        conflicts, {}, filtered_signals, weighted_signals,
+                                        total_bonus_applied, 'SHORT_TERM')
