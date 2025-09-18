@@ -259,7 +259,7 @@ def save_progress_state(current_index: int, total_count: int, filename: str = "a
         }
         with open(filename, 'wb') as f:
             pickle.dump(state, f)
-        print(f"진행 상태 저장: {current_index}/{total_count}")
+        print(f"진행 상태 저장: 인덱스 {current_index} (다음 재시작 시 {current_index + 1}부터)")
     except Exception as e:
         print(f"진행 상태 저장 오류: {e}")
 
@@ -267,13 +267,15 @@ def load_progress_state(filename: str = "agent/progress_state.pkl") -> Optional[
     """진행 상태 로드"""
     try:
         if not os.path.exists(filename):
+            print("진행 상태 파일이 없습니다. 처음부터 시작합니다.")
             return None
         
         with open(filename, 'rb') as f:
             state = pickle.load(f)
         
-        print(f"진행 상태 복원: {state['current_index']}/{state['total_count']} "
+        print(f"진행 상태 복원: 인덱스 {state['current_index']}/{state['total_count']} "
               f"(저장 시간: {state['timestamp']})")
+        print(f"다음 재시작 시 인덱스 {state['current_index'] + 1}부터 시작됩니다.")
         return state
     except Exception as e:
         print(f"진행 상태 로드 오류: {e}")
@@ -346,8 +348,9 @@ def generate_signal_data_with_indicators(
     
     # 시작 위치 결정
     if progress_state:
-        start_idx = progress_state['current_index']
-        print(f"이전 진행 상태에서 재시작: {start_idx}번째 캔들부터")
+        # 저장된 인덱스는 이미 처리된 마지막 인덱스이므로 +1부터 시작
+        start_idx = progress_state['current_index'] + 1
+        print(f"이전 진행 상태에서 재시작: {start_idx}번째 캔들부터 (저장된 위치: {progress_state['current_index']})")
     else:
         # 최근 데이터부터 처리 (최대 max_periods개)
         target_datetime = price_data.iloc[0].name + timedelta(days=4)
@@ -422,7 +425,8 @@ def generate_signal_data_with_indicators(
             if (i - start_idx) % 100 == 0:
                 save_progress_state(i, end_idx)
                 total_periods = end_idx - start_idx
-                print(f"   진행률: {i - start_idx + 1}/{total_periods} ({((i - start_idx + 1) / total_periods) * 100:.1f}%)")
+                processed = i - start_idx + 1
+                print(f"   진행률: {processed}/{total_periods} ({processed / total_periods * 100:.1f}%) - 인덱스 {i} 저장됨")
         
         # 남은 decision 데이터가 있으면 저장
         if temp_decision_data:

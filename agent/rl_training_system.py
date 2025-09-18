@@ -1,6 +1,7 @@
 """
-80차원 Signal 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 1
-- Signal의 모든 indicator와 raw score 활용
+61차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 1
+- 새로운 RL Decision 스키마 활용 (action_value, confidence_value 등)
+- Conflict 정보 및 시너지 메타데이터 활용
 - 중복 계산 제거 및 정보 활용 극대화
 """
 
@@ -10,13 +11,14 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from collections import deque, namedtuple
 import random
 import gym
+import os
+
+from collections import deque, namedtuple
 from gym import spaces
 from datetime import datetime
 from typing import Dict, List, Tuple, Any, Optional
-import os
 from pathlib import Path
 
 # PyTorch 호환성 설정
@@ -94,35 +96,38 @@ class RewardCalculator:
         return position * price_change
     
     def _calculate_signal_reward(self, signal_data: Dict, position: float) -> float:
-        """Signal 데이터 기반 추가 보상"""
+        """Signal 데이터 기반 추가 보상 - 새로운 RL 스키마 기반"""
         signal_reward = 0.0
         
         # 각 시간대별 신호와 포지션 일치도
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            action = signal_data.get(f'{timeframe}_action', 'HOLD')
+            action_value = float(signal_data.get(f'{timeframe}_action_value', 0.0))
             net_score = float(signal_data.get(f'{timeframe}_net_score', 0.0))
-            confidence = signal_data.get(f'{timeframe}_confidence', 'LOW')
+            confidence_value = float(signal_data.get(f'{timeframe}_confidence_value', 0.0))
             
-            confidence_weight = 1.0 if confidence == 'HIGH' else (0.5 if confidence == 'MEDIUM' else 0.1)
-            
-            if action == 'LONG' and position > 0:
-                signal_reward += abs(net_score) * confidence_weight * 0.5
-            elif action == 'SHORT' and position < 0:
-                signal_reward += abs(net_score) * confidence_weight * 0.5
-            elif action == 'HOLD' and abs(position) < 0.1:
-                signal_reward += 0.1 * confidence_weight
+            # Action value와 포지션 일치도 (action_value: -1~1, position: -1~1)
+            action_match = 1.0 - abs(action_value - position) / 2.0  # 0~1 범위
+            signal_reward += action_match * abs(net_score) * confidence_value * 0.3
+        
+        # Conflict 정보 활용
+        conflict_penalty = float(signal_data.get('conflict_conflict_penalty', 0.0))
+        conflict_consensus = float(signal_data.get('conflict_directional_consensus', 0.0))
+        
+        # Conflict가 적고 consensus가 높을 때 보상
+        if conflict_penalty == 0.0 and conflict_consensus > 0.5:
+            signal_reward += 0.2
         
         return signal_reward
 
 class DuelingDQN(nn.Module):
-    """80차원 입력을 위한 Dueling DQN 네트워크"""
+    """61차원 입력을 위한 Dueling DQN 네트워크"""
     
     def __init__(self, state_size: int, action_size: int = 3, hidden_size: int = 256):
         super().__init__()
         
         self.input_norm = nn.LayerNorm(state_size)
         
-        # 공통 특성 추출 (80차원 입력 처리)
+        # 공통 특성 추출 (61차원 입력 처리)
         self.feature_extractor = nn.Sequential(
             nn.Linear(state_size, hidden_size),
             nn.ReLU(),
@@ -181,7 +186,7 @@ class DuelingDQN(nn.Module):
         return pos_q, lev_q, hold_q
 
 class TradingEnvironment(gym.Env):
-    """80차원 Signal 기반 암호화폐 거래 강화학습 환경"""
+    """61차원 RL Decision 기반 암호화폐 거래 강화학습 환경"""
     
     def __init__(self, price_data: pd.DataFrame, signal_data: List[Dict], 
                  initial_balance: float = 10000.0, max_position: float = 1.0):
@@ -201,10 +206,10 @@ class TradingEnvironment(gym.Env):
             dtype=np.float32
         )
         
-        # 80차원 상태 공간
+        # 61차원 상태 공간
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
-            shape=(80,),  # 20(가격) + 25(기술점수) + 25(결정) + 10(포트폴리오)
+            shape=(61,),  # 20(가격) + 6(기술점수) + 26(결정) + 9(포트폴리오) = 61차원
             dtype=np.float32
         )
         
@@ -276,9 +281,9 @@ class TradingEnvironment(gym.Env):
         return self._get_observation(), reward, done, info
     
     def _get_observation(self) -> np.ndarray:
-        """80차원 상태 관찰값 반환"""
+        """61차원 상태 관찰값 반환"""
         if self.current_step >= min(len(self.price_data), len(self.signal_data)):
-            return np.zeros(80, dtype=np.float32)
+            return np.zeros(61, dtype=np.float32)
         
         # Signal과 현재 캔들 데이터
         current_signal = self.signal_data[self.current_step]
@@ -287,26 +292,21 @@ class TradingEnvironment(gym.Env):
             'high': self.price_data.iloc[self.current_step]['high'],
             'low': self.price_data.iloc[self.current_step]['low'],
             'close': self.price_data.iloc[self.current_step]['close'],
-            'volume': self.price_data.iloc[self.current_step]['volume'],
+            'quote_volume': self.price_data.iloc[self.current_step]['quote_volume'],
         }
         
         # 1. Price Indicators (20차원)
         price_features = self._extract_price_indicators(current_signal, current_candle)
-        
-        # 2. Technical Scores (25차원)  
+        # 2. Technical Scores (6차원)  
         technical_features = self._extract_technical_scores(current_signal)
-        
-        # 3. Decision Features (25차원)
+        # 3. Decision Features (26차원)
         decision_features = self._extract_decision_features(current_signal)
-        
-        # 4. Portfolio Features (10차원)
+        # 4. Portfolio Features (9차원)
         portfolio_features = self._get_portfolio_state()
-        
         return np.concatenate([price_features, technical_features, decision_features, portfolio_features]).astype(np.float32)
     
     def _extract_price_indicators(self, signal_data: Dict, current_candle: Dict) -> np.ndarray:
         """Signal의 indicator들을 price feature로 활용 (20차원)"""
-        features = []
         current_price = current_candle['close']
         
         # 1. 가격 대비 지표 위치
@@ -315,21 +315,9 @@ class TradingEnvironment(gym.Env):
         hvn = signal_data.get('indicator_hvn', current_price)
         lvn = signal_data.get('indicator_lvn', current_price)
         
-        features.extend([
-            (current_price - vwap) / current_price if current_price > 0 else 0.0,
-            (current_price - poc) / current_price if current_price > 0 else 0.0,   
-            (current_price - hvn) / current_price if current_price > 0 else 0.0,   
-            (current_price - lvn) / current_price if current_price > 0 else 0.0,   
-        ])
-        
         # 2. 변동성 지표들
         atr = signal_data.get('indicator_atr', 0.0)
         vwap_std = signal_data.get('indicator_vwap_std', 0.0)
-        
-        features.extend([
-            atr / current_price if current_price > 0 else 0.0,
-            vwap_std / current_price if current_price > 0 else 0.0,
-        ])
         
         # 3. 일별 기준점들
         prev_high = signal_data.get('indicator_prev_day_high', current_price)
@@ -343,55 +331,95 @@ class TradingEnvironment(gym.Env):
         or_range = or_high - or_low  
         or_position = (current_price - or_low) / or_range if or_range > 0 else 0.5
         
-        features.extend([
+        # 4. 현재 캔들 정보
+        high, low, close, open_price = current_candle['high'], current_candle['low'], current_candle['close'], current_candle['open']
+        quote_volume = current_candle.get('quote_volume', 0)
+        
+        return np.array([
+            # 가격 대비 지표 위치 (4개)
+            (current_price - vwap) / current_price if current_price > 0 else 0.0,
+            (current_price - poc) / current_price if current_price > 0 else 0.0,   
+            (current_price - hvn) / current_price if current_price > 0 else 0.0,   
+            (current_price - lvn) / current_price if current_price > 0 else 0.0,
+            
+            # 변동성 지표들 (2개)
+            atr / current_price if current_price > 0 else 0.0,
+            vwap_std / current_price if current_price > 0 else 0.0,
+            
+            # 일별 기준점들 (4개)
             prev_day_position,
             or_position,
             (current_price - prev_high) / current_price if current_price > 0 else 0.0,
             (prev_low - current_price) / current_price if current_price > 0 else 0.0,
-        ])
-        
-        # 4. 현재 캔들 정보
-        high, low, close, open_price = current_candle['high'], current_candle['low'], current_candle['close'], current_candle['open']
-        volume = current_candle.get('volume', 0)
-        
-        candle_features = [
+            
+            # 현재 캔들 정보 (8개)
             (close - open_price) / open_price if open_price > 0 else 0.0,
             (high - low) / close if close > 0 else 0.0,
             (high - close) / (high - low) if high > low else 0.5,
             (close - low) / (high - low) if high > low else 0.5,
             (close - open_price) / (high - low) if high > low else 0.0,
-            min(volume / 1000000, 2.0) if volume > 0 else 0.0,
+            min(quote_volume / 1000000, 2.0) if quote_volume > 0 else 0.0,
             1.0 if close > open_price else 0.0,
-            (high - max(open_price, close)) / (high - low) if high > low else 0.0
-        ]
-        
-        features.extend(candle_features[:8])
-        
-        return np.array(features[:20], dtype=np.float32)
+            (high - max(open_price, close)) / (high - low) if high > low else 0.0,
+            
+            # 추가 캔들 정보 (2개)
+            (low - min(open_price, close)) / (high - low) if high > low else 0.0,
+            abs(close - open_price) / (high - low) if high > low else 0.0
+        ], dtype=np.float32)
     
     def _extract_technical_scores(self, signals: Dict) -> np.ndarray:
-        """각 전략의 raw score들 (25차원)"""
-        features = []
+        """각 전략의 raw score들 (25차원) - 새로운 RL 스키마 기반"""
+        # 새로운 RL 스키마에서 사용 가능한 점수들 수집
+        score_fields = []
         
-        all_raw_scores = []
-        for key, value in signals.items():
-            if '_raw_' in key and '_score' in key and value is not None:
-                try:
-                    all_raw_scores.append(float(value))
-                except:
-                    all_raw_scores.append(0.0)
+        # 각 시간대별 점수들
+        # for timeframe in ['short_term', 'medium_term', 'long_term']:
+        #     score_fields.extend([
+        #         f'{timeframe}_net_score',
+        #         f'{timeframe}_buy_score', 
+        #         f'{timeframe}_sell_score',
+        #         f'{timeframe}_confidence',
+        #         f'{timeframe}_market_context'
+        #     ])
         
-        if len(all_raw_scores) >= 25:
-            sorted_scores = sorted(all_raw_scores, key=abs, reverse=True)
-            features = sorted_scores[:25]
+        # Conflict 관련 점수들 (중복 제거 - Decision Features에서 처리)
+        # score_fields.extend([
+        #     'conflict_conflict_severity',
+        #     'conflict_directional_consensus',
+        #     'conflict_conflict_penalty',
+        #     'conflict_consensus_bonus',
+        #     'conflict_diversity_bonus'
+        # ])
+        
+        # Indicator 관련 점수들
+        indicator_fields = [
+            'indicator_vwap', 'indicator_atr', 'indicator_poc', 
+            'indicator_hvn', 'indicator_lvn', 'indicator_vwap_std'
+        ]
+        
+        # 수집된 점수들 정규화
+        all_scores = []
+        for field in score_fields + indicator_fields:
+            value = signals.get(field)
+            try:
+                score = float(value)
+                # 정규화 (대부분 0~1 범위로 가정)
+                if 'indicator_' in field:
+                    # Indicator는 가격 대비 비율로 정규화
+                    score = min(abs(score) / 1000.0, 1.0)  # 가격 대비 0.1% 단위
+                all_scores.append(score)
+            except:
+                all_scores.append(0.0)
+        
+        # 6차원으로 맞추기 (Indicator만 사용)
+        if len(all_scores) >= 6:
+            return np.array(all_scores[:6], dtype=np.float32)
         else:
-            features = all_raw_scores + [0.0] * (25 - len(all_raw_scores))
-        
-        return np.array(features, dtype=np.float32)
+            return np.array(all_scores + [0.0] * (6 - len(all_scores)), dtype=np.float32)
     
     def _get_portfolio_state(self) -> np.ndarray:
-        """포트폴리오 상태 정보 (10차원)"""
-        features = [
+        """포트폴리오 상태 정보 (9차원)"""
+        return np.array([
             self.current_position,
             self.current_leverage / 20.0,
             (self.balance - self.initial_balance) / self.initial_balance,
@@ -400,53 +428,46 @@ class TradingEnvironment(gym.Env):
             self.winning_trades / max(self.total_trades, 1),
             self.max_drawdown,
             min(self.consecutive_losses / 10.0, 1.0),
-            min(self.holding_time / 1440.0, 1.0),
-            1.0 if self.in_position else 0.0
-        ]
-        return np.array(features, dtype=np.float32)
+            min(self.holding_time / 1440.0, 1.0)
+        ], dtype=np.float32)
     
     def _extract_decision_features(self, signals: Dict) -> np.ndarray:
-        """Decision 특성들 (25차원)"""
-        features = []
-        
+        """Decision 특성들 (26차원) - 새로운 RL 스키마 기반"""
         # 각 시간대별 특성 (3 × 6 = 18개)
+        timeframe_features = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            action = signals.get(f'{timeframe}_action', 'HOLD')
-            action_strength = 1.0 if action == 'LONG' else (-1.0 if action == 'SHORT' else 0.0)
-            
+            # 새로운 RL 스키마 필드들 사용
+            action_value = float(signals.get(f'{timeframe}_action', 0.0))
             net_score = float(signals.get(f'{timeframe}_net_score', 0.0))
             buy_score = float(signals.get(f'{timeframe}_buy_score', 0.0))
             sell_score = float(signals.get(f'{timeframe}_sell_score', 0.0))
+            confidence_value = float(signals.get(f'{timeframe}_confidence', 0.0))
+            market_context_value = float(signals.get(f'{timeframe}_market_context', 0.0))
             
-            confidence = signals.get(f'{timeframe}_confidence', 'LOW')
-            confidence_val = 1.0 if confidence == 'HIGH' else (0.5 if confidence == 'MEDIUM' else 0.0)
-            
-            leverage = min(float(signals.get(f'{timeframe}_leverage', 1.0)) / 20.0, 1.0)
-            
-            features.extend([action_strength, net_score, buy_score, sell_score, confidence_val, leverage])
+            timeframe_features.extend([action_value, net_score, buy_score, sell_score, confidence_value, market_context_value])
         
-        # 추가 메타 정보 (7개)
+        # 추가 메타 정보 (3개)
         signals_used = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
             used = signals.get(f'{timeframe}_signals_used', 0)
+            
             signals_used.append(min(float(used) / 10.0, 1.0))
         
-        market_contexts = []
-        for timeframe in ['short_term', 'medium_term', 'long_term']:
-            context = signals.get(f'{timeframe}_market_context', 'NEUTRAL')
-            context_val = 1.0 if context == 'TRENDING' else 0.0
-            market_contexts.append(context_val)
+        # Conflict 정보 (3개)
+        conflict_severity = float(signals.get('conflict_conflict_severity', 0.0))
+        conflict_consensus = float(signals.get('conflict_directional_consensus', 0.0))
+        conflict_penalty = float(signals.get('conflict_conflict_penalty', 0.0))
         
-        bias = signals.get('long_term_institutional_bias', 'NEUTRAL')
-        bias_val = 1.0 if bias == 'BULLISH' else (-1.0 if bias == 'BEARISH' else 0.0)
+        # Long term 특화 정보 (2개)
+        institutional_bias = float(signals.get('long_term_institutional_bias', 0.0))
+        macro_trend_strength = float(signals.get('long_term_macro_trend_strength', 0.0))
         
-        strength = signals.get('long_term_macro_trend_strength', 'MEDIUM')
-        strength_val = 1.0 if strength == 'HIGH' else (0.5 if strength == 'MEDIUM' else 0.0)
-        
-        additional_features = signals_used + market_contexts + [bias_val, strength_val]
-        features.extend(additional_features)
-        
-        return np.array(features[:25], dtype=np.float32)
+        return np.array(
+            timeframe_features + 
+            signals_used + 
+            [conflict_severity, conflict_consensus, conflict_penalty, institutional_bias, macro_trend_strength],
+            dtype=np.float32
+        )
     
     
     def _process_position_change(self, position_change: float, leverage: float, 
@@ -540,15 +561,15 @@ class TradingEnvironment(gym.Env):
         }
 
 """
-80차원 Signal 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 2
+61차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 2
 - RLAgent 클래스 및 훈련/평가 시스템
-- 데이터 로더 및 유틸리티 함수들
+- 새로운 Decision 스키마 데이터 로더 및 유틸리티 함수들
 """
 
 class RLAgent:
-    """80차원 Signal 기반 강화학습 에이전트"""
+    """61차원 RL Decision 기반 강화학습 에이전트"""
     
-    def __init__(self, state_size: int = 80, learning_rate: float = 5e-5, 
+    def __init__(self, state_size: int = 61, learning_rate: float = 5e-5, 
                  gamma: float = 0.995, epsilon: float = 0.9, epsilon_decay: float = 0.9995):
         
         self.state_size = state_size
@@ -706,7 +727,7 @@ class RLAgent:
             }
             
             torch.save(save_dict, filepath)
-            print(f"80차원 모델 저장 완료: {filepath}")
+            print(f"61차원 모델 저장 완료: {filepath}")
             return True
             
         except Exception as e:
@@ -740,7 +761,7 @@ class RLAgent:
             self.win_rates = checkpoint.get('win_rates', [])
             self.update_count = checkpoint.get('update_count', 0)
             
-            print(f"✅ 80차원 모델 로드 성공! 엡실론: {self.epsilon:.3f}")
+            print(f"✅ 61차원 모델 로드 성공! 엡실론: {self.epsilon:.3f}")
             return True
             
         except Exception as e:
@@ -748,7 +769,7 @@ class RLAgent:
             return False
 
     def load_model_with_compatibility(self, filepath: str) -> bool:
-        """호환성을 고려한 80차원 모델 로드"""
+        """호환성을 고려한 61차원 모델 로드"""
         if not os.path.exists(filepath):
             print(f"모델 파일이 없습니다: {filepath}")
             return False
@@ -758,8 +779,8 @@ class RLAgent:
             
             # 상태 크기 확인
             model_state_size = checkpoint.get('state_size', 60)
-            if model_state_size != 80:
-                print(f"❌ 이 모델은 {model_state_size}차원입니다. 80차원 모델이 필요합니다.")
+            if model_state_size != 61:
+                print(f"❌ 이 모델은 {model_state_size}차원입니다. 61차원 모델이 필요합니다.")
                 return False
             
             # state_dict 키 이름 변환 (필요시)
@@ -793,7 +814,7 @@ class RLAgent:
             self.optimizer.load_state_dict(checkpoint['optimizer'])
             self.epsilon = checkpoint.get('epsilon', self.epsilon)
             
-            print(f"✅ 80차원 호환성 모델 로드 성공!")
+            print(f"✅ 61차원 호환성 모델 로드 성공!")
             return True
             
         except Exception as e:
@@ -801,7 +822,7 @@ class RLAgent:
             return False
 
 class DataLoader:
-    """80차원 Signal 기반 데이터 로딩 클래스"""
+    """61차원 RL Decision 기반 데이터 로딩 클래스"""
     
     @staticmethod
     def load_price_data(file_path: str = 'data/ETHUSDC_3m_historical_data.csv') -> Optional[pd.DataFrame]:
@@ -824,7 +845,7 @@ class DataLoader:
     
     @staticmethod
     def load_signal_data(agent_folder: str = "agent") -> Optional[List[Dict]]:
-        """80차원용 Signal 데이터 로드"""
+        """61차원용 RL Decision 데이터 로드"""
         parquet_files = []
         
         if Path(agent_folder).exists():
@@ -846,33 +867,46 @@ class DataLoader:
     
     @staticmethod
     def _convert_parquet_to_signal_dicts(signal_df: pd.DataFrame) -> List[Dict]:
-        """Parquet을 Signal Dict 리스트로 변환 (80차원용)"""
+        """Parquet을 Signal Dict 리스트로 변환 (61차원용) - 새로운 RL 스키마"""
         signal_data = []
         
-        print("80차원용 Signal 데이터 변환 중...")
+        print("61차원용 RL 스키마 Signal 데이터 변환 중...")
         
         for idx, row in signal_df.iterrows():
-            # 각 행을 딕셔너리로 변환 (Flatten 형태 유지)
+            # 각 행을 딕셔너리로 변환 (새로운 RL 스키마 형태 유지)
             signal_dict = {}
             
             for col, value in row.items():
                 if pd.notna(value):
+                    # 수치 데이터는 그대로 유지
                     signal_dict[col] = value
                 else:
-                    signal_dict[col] = 0 if 'score' in col else ('HOLD' if 'action' in col else 'LOW' if 'confidence' in col else value)
+                    # 기본값 설정 (새로운 RL 스키마에 맞게)
+                    if 'action_value' in col or 'net_score' in col or 'buy_score' in col or 'sell_score' in col:
+                        signal_dict[col] = 0.0
+                    elif 'confidence_value' in col or 'market_context_value' in col:
+                        signal_dict[col] = 0.0
+                    elif 'conflict_' in col:
+                        signal_dict[col] = 0.0
+                    elif 'leverage' in col or 'signals_used' in col or 'strategies_count' in col:
+                        signal_dict[col] = 0
+                    elif 'max_holding_minutes' in col:
+                        signal_dict[col] = 0
+                    else:
+                        signal_dict[col] = 0.0
             
             signal_data.append(signal_dict)
             
             if (idx + 1) % 5000 == 0:
                 print(f"   변환 진행: {idx + 1:,}/{len(signal_df):,}")
         
-        print(f"80차원용 Signal 데이터 변환 완료: {len(signal_data):,}개")
+        print(f"61차원용 RL 스키마 Signal 데이터 변환 완료: {len(signal_data):,}개")
         return signal_data
     
     @staticmethod
     def generate_enhanced_signals(length: int) -> List[Dict]:
-        """80차원용 향상된 기본 신호 데이터 생성"""
-        print(f"80차원용 향상된 신호 데이터 생성 중: {length:,}개")
+        """61차원용 향상된 기본 신호 데이터 생성"""
+        print(f"61차원용 향상된 신호 데이터 생성 중: {length:,}개")
         
         signal_data = []
         for i in range(length):
@@ -896,30 +930,33 @@ class DataLoader:
             base_price = 2300 + np.sin(i * 0.01) * 100
             
             signal_dict = {
-                # 시간대별 액션
-                'short_term_action': short_action,
+                # 시간대별 액션 (새로운 RL 스키마)
+                'short_term_action_value': 1.0 if short_action == 'LONG' else (-1.0 if short_action == 'SHORT' else 0.0),
                 'short_term_net_score': short_score if short_action != 'HOLD' else 0.0,
                 'short_term_buy_score': short_score if short_action == 'LONG' else 0.0,
                 'short_term_sell_score': short_score if short_action == 'SHORT' else 0.0,
-                'short_term_confidence': short_conf,
+                'short_term_confidence_value': 1.0 if short_conf == 'HIGH' else (0.5 if short_conf == 'MEDIUM' else 0.0),
+                'short_term_market_context_value': 1.0 if market_phase < 70 else 0.0,
                 'short_term_leverage': min(int(short_score * 5) + 1, 5),
                 'short_term_signals_used': 3,
                 'short_term_max_holding_minutes': 60,
                 
-                'medium_term_action': 'HOLD',
+                'medium_term_action_value': 0.0,
                 'medium_term_net_score': 0.0,
                 'medium_term_buy_score': 0.0,
                 'medium_term_sell_score': 0.0,
-                'medium_term_confidence': 'LOW',
+                'medium_term_confidence_value': 0.0,
+                'medium_term_market_context_value': 0.5,
                 'medium_term_leverage': 1,
                 'medium_term_signals_used': 2,
                 'medium_term_max_holding_minutes': 240,
                 
-                'long_term_action': 'HOLD',
+                'long_term_action_value': 0.0,
                 'long_term_net_score': 0.0,
                 'long_term_buy_score': 0.0,
                 'long_term_sell_score': 0.0,
-                'long_term_confidence': 'LOW',
+                'long_term_confidence_value': 0.0,
+                'long_term_market_context_value': 0.5,
                 'long_term_leverage': 1,
                 'long_term_signals_used': 2,
                 'long_term_max_holding_minutes': 1440,
@@ -955,28 +992,41 @@ class DataLoader:
                 'long_term_raw_funding_rate_score': np.random.uniform(-0.3, 0.3),
                 'long_term_raw_ichimoku_score': np.random.uniform(-0.5, 0.5),
                 
-                # 메타 정보
-                'short_term_market_context': 'RANGING' if market_phase < 70 else 'TRENDING',
-                'medium_term_market_context': 'NEUTRAL',
-                'long_term_market_context': 'NEUTRAL',
-                'long_term_institutional_bias': 'BULLISH' if market_phase < 40 else ('BEARISH' if market_phase > 60 else 'NEUTRAL'),
-                'long_term_macro_trend_strength': 'MEDIUM',
+                # Conflict 정보 (새로운 RL 스키마)
+                'conflict_conflict_severity': 0.0,
+                'conflict_directional_consensus': 1.0 if short_action != 'HOLD' else 0.5,
+                'conflict_conflict_penalty': 0.0,
+                'conflict_consensus_bonus': 0.2 if short_action != 'HOLD' else 0.0,
+                'conflict_diversity_bonus': 0.1,
+                'conflict_active_categories': 1 if short_action != 'HOLD' else 0,
+                'conflict_hold_ratio': 0.67 if short_action == 'HOLD' else 0.33,
+                'conflict_max_leverage_used': min(int(short_score * 5) + 1, 5),
+                'conflict_total_exposure': 1 if short_action != 'HOLD' else 0,
+                'conflict_timeframe_diversity': 1,
+                'conflict_long_count': 1 if short_action == 'LONG' else 0,
+                'conflict_short_count': 1 if short_action == 'SHORT' else 0,
+                'conflict_hold_count': 1 if short_action == 'HOLD' else 0,
+                'conflict_risk_penalty': 0.0,
+                
+                # 메타 정보 (수치화)
+                'long_term_institutional_bias': 1.0 if market_phase < 40 else (-1.0 if market_phase > 60 else 0.0),
+                'long_term_macro_trend_strength': 0.5,
                 
                 'timestamp': int(datetime.now().timestamp() * 1000) + i * 180000  # 3분 간격
             }
             
             signal_data.append(signal_dict)
         
-        print("80차원용 향상된 신호 데이터 생성 완료")
+        print("61차원용 향상된 신호 데이터 생성 완료")
         return signal_data
 
 class PerformanceAnalyzer:
-    """80차원 Signal 기반 성능 분석 클래스"""
+    """61차원 RL Decision 기반 성능 분석 클래스"""
     
     @staticmethod
     def evaluate_agent(agent: RLAgent, env: TradingEnvironment, num_episodes: int = 10) -> Tuple[List[Dict], Dict]:
-        """80차원 에이전트 성능 평가"""
-        print(f"80차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
+        """61차원 에이전트 성능 평가"""
+        print(f"61차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
         
         original_epsilon = agent.epsilon
         agent.epsilon = 0.0
@@ -1037,9 +1087,9 @@ class PerformanceAnalyzer:
     
     @staticmethod
     def print_performance_report(results: List[Dict], stats: Dict):
-        """80차원 성능 리포트 출력"""
+        """61차원 성능 리포트 출력"""
         print("\n" + "="*60)
-        print(f"80차원 Signal 기반 성능 평가 결과")
+        print(f"61차원 RL Decision 기반 성능 평가 결과")
         print("="*60)
         print(f"모델 차원: {stats['model_dimension']}차원")
         print(f"전체 승률: {stats['overall_win_rate']:.3f}")
@@ -1091,7 +1141,7 @@ class PerformanceAnalyzer:
             recommendations.append("승률이 낮습니다. Signal 특성을 더 활용한 보상 함수 개선이 필요합니다.")
         
         if stats['avg_return'] < 0.02:
-            recommendations.append("수익률이 낮습니다. 80차원 상태 공간의 장점을 더 활용하세요.")
+            recommendations.append("수익률이 낮습니다. 61차원 상태 공간의 장점을 더 활용하세요.")
         
         if stats['avg_max_drawdown'] > 0.2:
             recommendations.append("최대 낙폭이 큽니다. Signal 기반 리스크 관리를 강화하세요.")
@@ -1103,33 +1153,38 @@ class PerformanceAnalyzer:
             recommendations.append("거래 빈도가 낮습니다. Signal 감도를 조정해보세요.")
         
         if not recommendations:
-            recommendations.append("80차원 Signal 기반 시스템이 잘 작동하고 있습니다!")
+            recommendations.append("61차원 RL Decision 기반 시스템이 잘 작동하고 있습니다!")
         
         return recommendations
 
 class TrainingManager:
-    """80차원 Signal 기반 훈련 관리 클래스"""
+    """61차원 RL Decision 기반 훈련 관리 클래스"""
     
     @staticmethod
-    def train_agent(agent: RLAgent, env: TradingEnvironment, 
-                   episodes: int = 500, save_interval: int = 100) -> Tuple[RLAgent, List[float], List[float]]:
-        """80차원 Signal 기반 에이전트 훈련"""
-        print(f"80차원 Signal 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
-        print(f"상태 공간: {env.observation_space.shape[0]}차원")
+    def train_agent(agent: RLAgent, train_env: TradingEnvironment, 
+                   episodes: int = 200, save_interval: int = 100, 
+                   test_env: TradingEnvironment = None) -> Tuple[RLAgent, List[float], List[float]]:
+        """61차원 RL Decision 기반 에이전트 훈련 (테스트 환경 모니터링 포함)"""
+        print(f"61차원 RL Decision 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
+        print(f"상태 공간: {train_env.observation_space.shape[0]}차원")
+        if test_env:
+            print(f"테스트 환경 모니터링: 활성화")
         
         episode_rewards = []
         episode_win_rates = []
+        test_win_rates = []  # 테스트 데이터셋 승률 추적
         best_win_rate = 0.0
+        best_test_win_rate = 0.0
         
         for episode in range(episodes):
-            state = env.reset()
+            state = train_env.reset()
             total_reward = 0
             episode_trades = []
             steps = 0
             
             while steps < 500:
                 action = agent.act(state)
-                next_state, reward, done, info = env.step(action)
+                next_state, reward, done, info = train_env.step(action)
                 
                 agent.remember(state, action, reward, next_state, done)
                 
@@ -1154,6 +1209,25 @@ class TrainingManager:
             agent.training_rewards.append(total_reward)
             agent.win_rates.append(episode_win_rate)
             
+            # 테스트 데이터셋으로 성능 평가 (20 에피소드마다)
+            if test_env and episode % 20 == 0 and episode > 0:
+                print(f"\n📊 Episode {episode}: 테스트 데이터셋 성능 평가 중...")
+                test_results, test_stats = PerformanceAnalyzer.evaluate_agent(agent, test_env, num_episodes=3)
+                test_win_rate = test_stats['overall_win_rate']
+                test_win_rates.append(test_win_rate)
+                
+                print(f"   테스트 승률: {test_win_rate:.3f} (이전 최고: {best_test_win_rate:.3f})")
+                
+                if test_win_rate > best_test_win_rate:
+                    best_test_win_rate = test_win_rate
+                    # 에피소드별 모델 저장
+                    agent.save_model(f'best_test_model_ep{episode}_wr{test_win_rate:.3f}.pth')
+                    # 최고 성능 모델 업데이트
+                    agent.save_model('agent/best_test_performance_model_wr{:.3f}.pth'.format(test_win_rate))
+                    print(f"🎯 새로운 테스트 데이터셋 최고 성능! 승률: {test_win_rate:.3f}")
+                    print(f"   최고 성능 모델 업데이트: best_test_performance_model_wr{test_win_rate:.3f}.pth")
+                print()  # 빈 줄 추가
+            
             # 진행 상황 출력
             if episode % 10 == 0 or episode < 10:
                 recent_rewards = episode_rewards[-50:] if len(episode_rewards) >= 50 else episode_rewards
@@ -1161,46 +1235,82 @@ class TrainingManager:
                 
                 avg_reward = np.mean(recent_rewards)
                 avg_win_rate = np.mean(recent_win_rates)
+                
+                # 테스트 성능도 함께 표시
+                test_info = ""
+                if test_win_rates:
+                    recent_test_win_rate = np.mean(test_win_rates[-5:]) if len(test_win_rates) >= 5 else test_win_rates[-1]
+                    test_info = f" | 테스트: {recent_test_win_rate:.3f}"
+                
                 print(f"Episode {episode:4d} | "
-                        f"승률: {avg_win_rate:.3f} | "
+                        f"훈련승률: {avg_win_rate:.3f}{test_info} | "
                         f"리워드: {avg_reward:7.1f} | "
                         f"잔고: ${info['balance']:7.0f} | "
                         f"ε: {agent.epsilon:.3f} | "
-                        f"80D")
+                        f"81D")
             
-            # 베스트 모델 저장
+            # 베스트 모델 저장 (훈련 데이터 기준)
             if episode % save_interval == 0 and episode > 0:
                 current_avg_win_rate = np.mean(episode_win_rates[-100:]) if len(episode_win_rates) >= 100 else np.mean(episode_win_rates)
                 
                 if current_avg_win_rate > best_win_rate:
                     best_win_rate = current_avg_win_rate
-                    agent.save_model(f'best_model_80d_ep{episode}_wr{current_avg_win_rate:.3f}.pth')
-                    print(f"🎯 새로운 80차원 최고 성능! 승률: {current_avg_win_rate:.3f}")
+                    agent.save_model(f'best_train_model_ep{episode}_wr{current_avg_win_rate:.3f}.pth')
+                    print(f"🎯 새로운 훈련 데이터셋 최고 성능! 승률: {current_avg_win_rate:.3f}")
             
-            # 조기 종료 조건
-            if episode > 200:
-                recent_100_win_rate = np.mean(episode_win_rates[-100:])
-                if recent_100_win_rate >= 0.65:
-                    print(f"🏆 80차원 목표 달성! 승률 {recent_100_win_rate:.3f} 도달")
+            # 조기 종료 조건 (테스트 데이터셋 기준)
+            if episode > 200 and test_win_rates:
+                recent_test_win_rate = np.mean(test_win_rates[-5:]) if len(test_win_rates) >= 5 else test_win_rates[-1]
+                if recent_test_win_rate >= 0.65:
+                    print(f"🏆 61차원 목표 달성! 테스트 데이터셋 승률 {recent_test_win_rate:.3f} 도달")
                     agent.save_model('agent/final_optimized_model_80d.pth')
                     break
         
-        print(f"\n80차원 Signal 기반 훈련 완료!")
+        print(f"\n61차원 RL Decision 기반 훈련 완료!")
         print(f"   총 에피소드: {episode + 1}")
-        print(f"   최고 승률: {best_win_rate:.3f}")
-        print(f"   최종 승률: {np.mean(episode_win_rates[-50:]) if episode_win_rates else 0:.3f}")
-        print(f"   상태 차원: 80차원 (Signal 기반)")
+        print(f"   훈련 데이터 최고 승률: {best_win_rate:.3f}")
+        print(f"   훈련 데이터 최종 승률: {np.mean(episode_win_rates[-50:]) if episode_win_rates else 0:.3f}")
+        if test_win_rates:
+            print(f"   테스트 데이터 최고 승률: {best_test_win_rate:.3f}")
+            print(f"   테스트 데이터 최종 승률: {test_win_rates[-1]:.3f}")
+        print(f"   상태 차원: 61차원 (RL Decision 기반)")
+        
+        # 테스트 데이터셋 최고 성능 모델 저장
+        if test_win_rates and best_test_win_rate > 0:
+            best_test_model_path = f'agent/best_test_performance_model_wr{best_test_win_rate:.3f}.pth'
+            agent.save_model(best_test_model_path)
+            print(f"✅ 테스트 데이터셋 최고 성능 모델 저장: {best_test_model_path}")
         
         return agent, episode_rewards, episode_win_rates
 
+def split_data(price_data: pd.DataFrame, signal_data: List[Dict], 
+               train_ratio: float = 0.8, test_ratio: float = 0.2) -> Tuple[pd.DataFrame, List[Dict], pd.DataFrame, List[Dict]]:
+    """데이터를 훈련용과 테스트용으로 분할"""
+    total_length = min(len(price_data), len(signal_data))
+    train_size = int(total_length * train_ratio)
+    
+    # 훈련 데이터
+    train_price = price_data.iloc[:train_size].reset_index(drop=True)
+    train_signal = signal_data[:train_size]
+    
+    # 테스트 데이터
+    test_price = price_data.iloc[train_size:].reset_index(drop=True)
+    test_signal = signal_data[train_size:]
+    
+    print(f"데이터 분할 완료:")
+    print(f"  - 훈련 데이터: {len(train_price):,}개 ({train_ratio*100:.1f}%)")
+    print(f"  - 테스트 데이터: {len(test_price):,}개 ({test_ratio*100:.1f}%)")
+    
+    return train_price, train_signal, test_price, test_signal
+
 def main():
-    """80차원 Signal 기반 메인 실행 함수"""
-    print("80차원 Signal 기반 강화학습 트레이딩 시스템")
+    """61차원 RL Decision 기반 메인 실행 함수"""
+    print("61차원 RL Decision 기반 강화학습 트레이딩 시스템")
     print("=" * 80)
     
     try:
         # 1. 데이터 로딩
-        print("\n1️⃣ 80차원용 데이터 로딩...")
+        print("\n1️⃣ 61차원용 데이터 로딩...")
         price_data = DataLoader.load_price_data()
         if price_data is None:
             print("가격 데이터 로드 실패")
@@ -1215,65 +1325,96 @@ def main():
         price_data = price_data.iloc[:min_length].reset_index(drop=True)
         signal_data = signal_data[:min_length]
         
-        print(f"최종 80차원용 데이터 준비 완료: {min_length:,}개")
+        print(f"최종 61차원용 데이터 준비 완료: {min_length:,}개")
         
-        # 2. 환경 및 에이전트 생성
-        print("\n2️⃣ 80차원 환경 및 에이전트 생성...")
-        env = TradingEnvironment(price_data, signal_data)
-        agent = RLAgent(env.observation_space.shape[0])  # 80차원
+        # 2. 데이터 분할 (훈련 80%, 테스트 20%)
+        print("\n2️⃣ 데이터 분할...")
+        train_price, train_signal, test_price, test_signal = split_data(price_data, signal_data, 0.8, 0.2)
         
-        print(f"상태 공간: {env.observation_space.shape[0]}차원")
+        # 3. 환경 및 에이전트 생성
+        print("\n3️⃣ 61차원 환경 및 에이전트 생성...")
+        train_env = TradingEnvironment(train_price, train_signal)
+        test_env = TradingEnvironment(test_price, test_signal)
+        agent = RLAgent(train_env.observation_space.shape[0])  # 61차원
+        
+        print(f"상태 공간: {train_env.observation_space.shape[0]}차원")
         print("Signal의 모든 indicator와 raw score 활용")
         
-        # 기존 80차원 모델 로드 시도
-        model_files = ['agent/final_optimized_model_80d.pth', 'agent/best_model_80d.pth']
+        # 기존 61차원 모델 로드 시도 (테스트 성능 우선)
+        model_files = [
+            'agent/best_test_performance_model_wr*.pth',  # 테스트 최고 성능 모델
+            'agent/final_optimized_model_80d.pth',       # 최종 모델
+            'agent/best_model_80d.pth'                   # 기존 모델
+        ]
         model_loaded = False
         
-        for model_file in model_files:
-            if agent.load_model(model_file):
+        # 테스트 성능 모델 우선 로드
+        import glob
+        test_model_files = glob.glob('agent/best_test_performance_model_wr*.pth')
+        if test_model_files:
+            # 가장 높은 승률의 테스트 모델 선택
+            best_test_model = max(test_model_files, key=lambda x: float(x.split('wr')[1].split('.pth')[0]))
+            if agent.load_model(best_test_model):
                 model_loaded = True
-                break
+                print(f"✅ 테스트 데이터셋 최고 성능 모델 로드: {best_test_model}")
+        
+        # 테스트 모델이 없으면 다른 모델들 시도
+        if not model_loaded:
+            for model_file in ['agent/final_optimized_model_80d.pth', 'agent/best_model_80d.pth']:
+                if agent.load_model(model_file):
+                    model_loaded = True
+                    break
         
         if not model_loaded:
-            print("새로운 80차원 모델로 시작합니다.")
+            print("새로운 61차원 모델로 시작합니다.")
         
-        # 3. 현재 성능 평가
-        print("\n3️⃣ 80차원 모델 현재 성능 평가...")
-        results, stats = PerformanceAnalyzer.evaluate_agent(agent, env, num_episodes=5)
-        PerformanceAnalyzer.print_performance_report(results, stats)
+        # 4. 훈련 전 테스트 데이터셋 성능 평가 (베이스라인)
+        print("\n4️⃣ 훈련 전 테스트 데이터셋 성능 평가...")
+        baseline_results, baseline_stats = PerformanceAnalyzer.evaluate_agent(agent, test_env, num_episodes=5)
+        print("=== 훈련 전 테스트 데이터셋 성능 ===")
+        PerformanceAnalyzer.print_performance_report(baseline_results, baseline_stats)
         
-        # 4. 훈련 여부 결정
-        if stats['overall_win_rate'] < 0.55 or not model_loaded:
-            print(f"\n4️⃣ 80차원 Signal 기반 훈련 시작...")
-            print(f"   현재 승률: {stats['overall_win_rate']:.3f}")
-            print(f"   목표 승률: 0.65+")
-            print(f"   Signal 특성 활용: 최대화")
-            
-            # 훈련 실행
-            trained_agent, rewards, win_rates = TrainingManager.train_agent(agent, env, episodes=500)
-            
-            # 훈련 후 성능 재평가
-            print("\n5️⃣ 80차원 모델 훈련 후 성능 평가...")
-            final_results, final_stats = PerformanceAnalyzer.evaluate_agent(trained_agent, env, num_episodes=10)
-            PerformanceAnalyzer.print_performance_report(final_results, final_stats)
-            
-            # 개선도 출력
-            improvement = final_stats['overall_win_rate'] - stats['overall_win_rate']
-            print(f"\n🚀 80차원 Signal 기반 성능 개선도:")
-            print(f"   승률: {stats['overall_win_rate']:.3f} → {final_stats['overall_win_rate']:.3f} ({improvement:+.3f})")
-            print(f"   평균 수익률: {stats['avg_return']:.3f} → {final_stats['avg_return']:.3f}")
-            print(f"   Signal 활용도: 최대화됨")
-            
-            # 최종 모델 저장
-            trained_agent.save_model('agent/final_optimized_model_80d.pth')
-            
-        else:
-            print(f"80차원 모델 성능이 양호합니다 (승률: {stats['overall_win_rate']:.3f})")
-            
-            user_input = input("\n추가 80차원 훈련을 원하시나요? (y/n): ")
+        # 5. 훈련 데이터셋으로 훈련
+        print(f"\n5️⃣ 훈련 데이터셋으로 61차원 RL Decision 기반 훈련 시작...")
+        print(f"   훈련 데이터: {len(train_price):,}개")
+        print(f"   테스트 데이터: {len(test_price):,}개")
+        print(f"   목표 승률: 0.65+")
+        print(f"   Signal 특성 활용: 최대화")
+        
+        # 훈련 실행 (테스트 환경 모니터링 포함)
+        trained_agent, rewards, win_rates = TrainingManager.train_agent(agent, train_env, episodes=500, test_env=test_env)
+        
+        # 6. 훈련 후 테스트 데이터셋으로 성능 평가
+        print("\n6️⃣ 훈련 후 테스트 데이터셋 성능 평가...")
+        final_results, final_stats = PerformanceAnalyzer.evaluate_agent(trained_agent, test_env, num_episodes=10)
+        print("=== 훈련 후 테스트 데이터셋 성능 ===")
+        PerformanceAnalyzer.print_performance_report(final_results, final_stats)
+        
+        # 7. 성능 개선도 분석
+        improvement = final_stats['overall_win_rate'] - baseline_stats['overall_win_rate']
+        print(f"\n🚀 61차원 RL Decision 기반 성능 개선도 (테스트 데이터셋 기준):")
+        print(f"   승률: {baseline_stats['overall_win_rate']:.3f} → {final_stats['overall_win_rate']:.3f} ({improvement:+.3f})")
+        print(f"   평균 수익률: {baseline_stats['avg_return']:.3f} → {final_stats['avg_return']:.3f}")
+        print(f"   Signal 활용도: 최대화됨")
+        
+        # 8. 최종 모델 저장
+        trained_agent.save_model('agent/final_optimized_model_80d.pth')
+        print(f"\n✅ 최종 모델이 저장되었습니다: agent/final_optimized_model_80d.pth")
+        
+        # 9. 추가 훈련 여부 확인
+        if final_stats['overall_win_rate'] < 0.6:
+            user_input = input("\n성능이 목표에 미달합니다. 추가 훈련을 원하시나요? (y/n): ")
             if user_input.lower() == 'y':
-                print("80차원 추가 훈련 시작...")
-                TrainingManager.train_agent(agent, env, episodes=200)
+                print("61차원 추가 훈련 시작...")
+                TrainingManager.train_agent(trained_agent, train_env, episodes=200, test_env=test_env)
+                
+                # 추가 훈련 후 재평가
+                print("\n추가 훈련 후 테스트 데이터셋 성능 평가...")
+                additional_results, additional_stats = PerformanceAnalyzer.evaluate_agent(trained_agent, test_env, num_episodes=10)
+                print("=== 추가 훈련 후 테스트 데이터셋 성능 ===")
+                PerformanceAnalyzer.print_performance_report(additional_results, additional_stats)
+        else:
+            print(f"\n🎉 목표 성능 달성! (테스트 데이터셋 승률: {final_stats['overall_win_rate']:.3f})")
     
     except KeyboardInterrupt:
         print("\n사용자에 의해 중단되었습니다.")

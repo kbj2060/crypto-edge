@@ -71,6 +71,33 @@ class ShortTermSynergyEngine:
     def __init__(self, config: SynergyConfig = SynergyConfig()):
         self.config = config
     
+    def _create_hold_result(self, category: str, context: str = 'NEUTRAL') -> Dict[str, Any]:
+        """HOLD 결과 생성"""
+        return {
+            'action': 'HOLD',
+            'score': 0.0,
+            'net_score': 0.0,
+            'buy_score': 0.0,
+            'sell_score': 0.0,
+            'confidence': 'LOW',
+            'market_context': context,
+            'conflicts_detected': [],
+            'bonuses_applied': [],
+            'signals_used': 0,
+            'category': category,
+            'breakdown': {
+                'buy_signals': [],
+                'sell_signals': []
+            },
+            'meta': {
+                'total_bonus_applied': 0.0,
+                'conflict_count': 0,
+                'strong_signals': [],
+                'trend_strength': 'WEAK',
+                'consolidation_level': 'NEUTRAL'
+            }
+        }
+    
     def _create_final_result(self, net_score: float, buy_score: float, sell_score: float,
                            context: str, conflicts: Dict, bonuses: Dict, signals: List, 
                            weighted_signals: List, total_bonus: float, category: str) -> Dict[str, Any]:
