@@ -6,7 +6,7 @@
 import requests
 import pandas as pd
 import time
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 import os
 from typing import List
 import logging
@@ -50,35 +50,40 @@ class BinanceDataCollector:
             logger.error(f"API 요청 실패: {e}")
             return []
     
-    def get_historical_data(self, symbol: str, interval: str, days_back: int = 365) -> pd.DataFrame:
+    def get_historical_data(self, symbol: str, interval: str, start_time, end_time) -> pd.DataFrame:
         """
         지정된 기간 동안의 히스토리컬 데이터를 가져옵니다.
         
         Args:
             symbol: 거래쌍
             interval: 시간 간격
-            days_back: 몇 일 전까지의 데이터를 가져올지
+            start_time: 시작 시간 (datetime 객체)
+            end_time: 종료 시간 (datetime 객체)
         """
-        logger.info(f"{symbol} {interval} 데이터 수집 시작 (최근 {days_back}일)")
+        logger.info(f"{symbol} {interval} 데이터 수집 시작 ({start_time} ~ {end_time})")
         
-        # 종료 시간 (현재 시간)
-        end_time = int(datetime.now().timestamp() * 1000)
+        # datetime을 밀리초 타임스탬프로 변환 (UTC 기준)
+        start_timestamp = int(start_time.timestamp() * 1000)
+        end_timestamp = int(end_time.timestamp() * 1000)
         
-        # 시작 시간 (days_back일 전의 0시 0분)
-        start_time = int((datetime.now() - timedelta(days=days_back)).replace(hour=0, minute=0, second=0, microsecond=0).timestamp() * 1000)
+        logger.info(f"시작 타임스탬프: {start_timestamp} ({datetime.fromtimestamp(start_timestamp/1000)})")
+        logger.info(f"종료 타임스탬프: {end_timestamp} ({datetime.fromtimestamp(end_timestamp/1000)})")
         
         all_data = []
-        current_end_time = end_time
+        current_end_time = end_timestamp
         
-        while current_end_time > start_time:
+        while current_end_time > start_timestamp:
             # API 제한을 고려하여 1000개씩 가져오기
+            # end_time만 지정하여 최신 데이터부터 역순으로 가져오기
             klines = self.get_klines(symbol, interval, end_time=current_end_time, limit=1000)
             
             if not klines:
                 logger.warning(f"데이터를 가져올 수 없습니다: {symbol} {interval}")
                 break
                 
-            all_data.extend(klines)
+            # 시작 시간보다 오래된 데이터는 제외
+            filtered_klines = [k for k in klines if k[0] >= start_timestamp]
+            all_data.extend(filtered_klines)
             
             # 다음 배치를 위한 시간 설정 (가장 오래된 데이터의 시간 - 1ms)
             current_end_time = klines[0][0] - 1
@@ -87,6 +92,10 @@ class BinanceDataCollector:
             time.sleep(0.1)
             
             logger.info(f"수집된 데이터: {len(all_data)}개")
+            
+            # 시작 시간에 도달했으면 중단
+            if klines[0][0] <= start_timestamp:
+                break
         
         # DataFrame으로 변환
         df = pd.DataFrame(all_data, columns=[
@@ -112,15 +121,19 @@ class BinanceDataCollector:
         # 시간순 정렬
         df = df.sort_values('timestamp').reset_index(drop=True)
         
+        # 지정된 시간 범위 내의 데이터만 필터링
+        df = df[(df['timestamp'] >= pd.to_datetime(start_time, utc=True)) & 
+                (df['timestamp'] < pd.to_datetime(end_time, utc=True))]
+        
         logger.info(f"{symbol} {interval} 데이터 수집 완료: {len(df)}개")
         return df
     
-    def save_to_csv(self, df: pd.DataFrame, symbol: str, interval: str, output_dir: str = "data"):
+    def save_to_csv(self, df: pd.DataFrame, symbol: str, interval: str, start_time, end_time, output_dir: str = "data"):
         """DataFrame을 CSV 파일로 저장합니다."""
         if not os.path.exists(output_dir):
             os.makedirs(output_dir)
         
-        filename = f"{symbol}_{interval}_historical_data.csv"
+        filename = f"{symbol}_{interval}_{start_time.strftime('%Y%m%d')}_{end_time.strftime('%Y%m%d')}.csv"
         filepath = os.path.join(output_dir, filename)
         
         df.to_csv(filepath, index=False)
@@ -135,13 +148,10 @@ def main():
     symbols = ['ETHUSDC']
     intervals = [ '1h', '3m', '15m']
     
-    # 수집할 기간 (일)
-    days_back = 365  # 1년치 데이터
-    
     logger.info("바이낸스 데이터 수집 시작")
     logger.info(f"거래쌍: {symbols}")
     logger.info(f"시간 간격: {intervals}")
-    logger.info(f"수집 기간: 최근 {days_back}일")
+    logger.info(f"수집 기간: 2023년 9월 13일 00시 00분 ~ 2024년 9월 13일 00시 00분")
     
     for symbol in symbols:
         for interval in intervals:
@@ -150,12 +160,15 @@ def main():
                 logger.info(f"수집 중: {symbol} {interval}")
                 logger.info(f"{'='*50}")
                 
+                # UTC 시간으로 정확히 설정 (한국 시간 - 9시간)
+                start_time = datetime(2023, 9, 13, 0, 0, 0, tzinfo=timezone.utc)  # 2023년 9월 13일 00시 00분 UTC
+                end_time = datetime(2024, 9, 13, 0, 0, 0, tzinfo=timezone.utc)    # 2024년 9월 13일 00시 00분 UTC
                 # 데이터 수집
-                df = collector.get_historical_data(symbol, interval, days_back)
+                df = collector.get_historical_data(symbol, interval, start_time, end_time)
                 
                 if not df.empty:
                     # CSV 저장
-                    collector.save_to_csv(df, symbol, interval)
+                    collector.save_to_csv(df, symbol, interval, start_time, end_time)
                     
                     # 데이터 요약 정보 출력
                     logger.info(f"수집된 데이터 요약:")

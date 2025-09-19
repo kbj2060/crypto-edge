@@ -373,7 +373,7 @@ def generate_signal_data_with_indicators(
     decision_engine = TradeDecisionEngine()
 
     end_idx = len(price_data)
-    batch_size = 100  # 500개씩 배치로 저장 (Parquet은 더 큰 배치가 효율적)
+    batch_size = 1000  # 500개씩 배치로 저장 (Parquet은 더 큰 배치가 효율적)
     temp_decision_data = []  # 임시 저장용
     
     try:

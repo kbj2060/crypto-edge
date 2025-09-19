@@ -49,12 +49,19 @@ class SessionORAnalyzer:
         o, _h, _l, c = ohlc["o"], ohlc["h"], ohlc["l"], ohlc["c"]
         
         body = abs(c - o)
-        body_ok = (body / range_val) >= self.cfg.body_ratio_min
+        
+        # range_val이 0이거나 매우 작은 값일 때 0으로 나누기 방지
+        if range_val <= 0:
+            body_ok = False
+            body_ratio = 0
+        else:
+            body_ratio = body / range_val
+            body_ok = body_ratio >= self.cfg.body_ratio_min
         
         return {
             "body": body,
             "body_ok": body_ok,
-            "body_ratio": body / range_val if range_val > 0 else 0
+            "body_ratio": body_ratio
         }
 
     def check_break_conditions(self, ohlc: Dict[str, float], or_high: float, or_low: float) -> Dict[str, Any]:
