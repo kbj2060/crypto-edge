@@ -1147,33 +1147,162 @@ class RLAgent:
             
             # 호환 가능한 레이어만 로드
             compatible_state_dict = {}
+            loaded_count = 0
+            initialized_count = 0
+            
             for key in current_state_dict.keys():
                 if key in loaded_state_dict:
                     # 크기가 같은 경우만 로드
                     if current_state_dict[key].shape == loaded_state_dict[key].shape:
                         compatible_state_dict[key] = loaded_state_dict[key]
                         print(f"   ✅ {key}: 로드됨")
+                        loaded_count += 1
                     else:
                         compatible_state_dict[key] = current_state_dict[key]
-                        print(f"   ⚠️ {key}: 크기 불일치, 새로 초기화")
+                        print(f"   ⚠️ {key}: 크기 불일치 ({loaded_state_dict[key].shape} → {current_state_dict[key].shape}), 새로 초기화")
+                        initialized_count += 1
                 else:
                     compatible_state_dict[key] = current_state_dict[key]
                     print(f"   ❌ {key}: 누락, 새로 초기화")
+                    initialized_count += 1
+            
+            # 누락된 레이어들 확인
+            missing_in_current = set(loaded_state_dict.keys()) - set(current_state_dict.keys())
+            if missing_in_current:
+                print(f"   📝 현재 모델에 없는 레이어들: {len(missing_in_current)}개")
+                for key in sorted(missing_in_current):
+                    print(f"      - {key}: {loaded_state_dict[key].shape}")
             
             # 호환 가능한 state_dict로 로드
-            self.q_network.load_state_dict(compatible_state_dict)
-            self.target_network.load_state_dict(compatible_state_dict)
+            try:
+                self.q_network.load_state_dict(compatible_state_dict)
+                self.target_network.load_state_dict(compatible_state_dict)
+                print("   ✅ 네트워크 가중치 로드 완료")
+            except Exception as e:
+                print(f"   ❌ 네트워크 가중치 로드 실패: {e}")
+                # 부분적 로드를 시도
+                try:
+                    self.q_network.load_state_dict(compatible_state_dict, strict=False)
+                    self.target_network.load_state_dict(compatible_state_dict, strict=False)
+                    print("   ⚠️ 부분적 로드로 복구됨")
+                except Exception as e2:
+                    print(f"   ❌ 부분적 로드도 실패: {e2}")
+                    return False
             
-            # 나머지 파라미터들
-            self.optimizer.load_state_dict(checkpoint['optimizer'])
+            # 옵티마이저 로드 (호환성 확인)
+            try:
+                if 'optimizer' in checkpoint:
+                    self.optimizer.load_state_dict(checkpoint['optimizer'])
+                    print("   ✅ 옵티마이저 상태 로드됨")
+                else:
+                    print("   ⚠️ 옵티마이저 상태 없음, 기본값 사용")
+            except Exception as e:
+                print(f"   ⚠️ 옵티마이저 로드 실패: {e}, 기본값 사용")
+            
+            # 기타 파라미터들
             self.epsilon = checkpoint.get('epsilon', self.epsilon)
+            self.training_rewards = checkpoint.get('training_rewards', [])
+            self.losses = checkpoint.get('losses', [])
+            self.win_rates = checkpoint.get('win_rates', [])
+            self.update_count = checkpoint.get('update_count', 0)
             
             print(f"✅ {model_state_size}차원 → 61차원 호환성 모델 로드 성공!")
+            print(f"   - 로드된 레이어: {loaded_count}개")
+            print(f"   - 새로 초기화된 레이어: {initialized_count}개")
+            
+            # 모델 검증
+            try:
+                # 간단한 테스트로 모델이 정상 작동하는지 확인
+                test_input = torch.randn(1, self.state_size).to(self.device)
+                with torch.no_grad():
+                    _ = self.q_network(test_input)
+                print("   ✅ 모델 검증 완료 - 정상 작동")
+            except Exception as e:
+                print(f"   ⚠️ 모델 검증 실패: {e}")
+                print("   모델이 로드되었지만 예상과 다르게 작동할 수 있습니다.")
+            
             return True
             
         except Exception as e:
-            print(f"호환성 모델 로드 실패: {e}")
+            print(f"❌ 호환성 모델 로드 실패: {e}")
+            print(f"   오류 타입: {type(e).__name__}")
+            import traceback
+            print(f"   상세 오류: {traceback.format_exc()}")
             return False
+
+    def create_compatible_model(self, old_model_path: str, new_model_type: str = "advanced") -> bool:
+        """기존 모델을 새로운 아키텍처로 변환"""
+        try:
+            print(f"🔄 기존 모델을 {new_model_type} 아키텍처로 변환 중...")
+            
+            # 기존 모델 로드
+            checkpoint = torch.load(old_model_path, map_location=self.device, weights_only=False)
+            old_state_dict = checkpoint['q_network']
+            
+            # 새로운 모델 생성
+            if new_model_type == "advanced":
+                new_model = AdvancedProfitDQN(self.state_size, 3, self.hidden_size).to(self.device)
+            else:
+                new_model = SimpleProfitDQN(self.state_size, 3, self.hidden_size).to(self.device)
+            
+            new_state_dict = new_model.state_dict()
+            
+            # 호환 가능한 가중치만 복사
+            compatible_weights = {}
+            for key in new_state_dict.keys():
+                if key in old_state_dict and new_state_dict[key].shape == old_state_dict[key].shape:
+                    compatible_weights[key] = old_state_dict[key]
+                    print(f"   ✅ {key}: 변환됨")
+                else:
+                    compatible_weights[key] = new_state_dict[key]
+                    print(f"   ❌ {key}: 새로 초기화")
+            
+            # 새로운 모델에 가중치 로드
+            new_model.load_state_dict(compatible_weights)
+            
+            # 현재 에이전트의 네트워크 교체
+            self.q_network = new_model
+            self.target_network = new_model.__class__(self.state_size, 3, self.hidden_size).to(self.device)
+            self.target_network.load_state_dict(compatible_weights)
+            
+            print(f"✅ {new_model_type} 아키텍처로 변환 완료!")
+            return True
+            
+        except Exception as e:
+            print(f"❌ 모델 변환 실패: {e}")
+            return False
+
+    def diagnose_model_compatibility(self, model_path: str) -> Dict:
+        """모델 호환성 진단"""
+        try:
+            checkpoint = torch.load(model_path, map_location=self.device, weights_only=False)
+            old_state_dict = checkpoint['q_network']
+            current_state_dict = self.q_network.state_dict()
+            
+            diagnosis = {
+                'total_old_layers': len(old_state_dict),
+                'total_new_layers': len(current_state_dict),
+                'compatible_layers': 0,
+                'incompatible_layers': 0,
+                'missing_layers': 0,
+                'compatibility_rate': 0.0
+            }
+            
+            for key in current_state_dict.keys():
+                if key in old_state_dict:
+                    if current_state_dict[key].shape == old_state_dict[key].shape:
+                        diagnosis['compatible_layers'] += 1
+                    else:
+                        diagnosis['incompatible_layers'] += 1
+                else:
+                    diagnosis['missing_layers'] += 1
+            
+            diagnosis['compatibility_rate'] = diagnosis['compatible_layers'] / len(current_state_dict)
+            
+            return diagnosis
+            
+        except Exception as e:
+            return {'error': str(e)}
 
 class DataLoader:
     """61차원 RL Decision 기반 데이터 로딩 클래스"""
@@ -1415,7 +1544,7 @@ class TrainingManager:
     
     @staticmethod
     def train_agent(agent: RLAgent, train_env: TradingEnvironment, 
-                   episodes: int = 200, save_interval: int = 100, 
+                   episodes: int = 1000, save_interval: int = 100, 
                    test_env: TradingEnvironment = None) -> Tuple[RLAgent, List[float], List[float]]:
         """61차원 RL Decision 기반 에이전트 훈련 (테스트 환경 모니터링 포함)"""
         print(f"61차원 RL Decision 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
@@ -1608,15 +1737,9 @@ def main():
         print(f"상태 공간: {train_env.observation_space.shape[0]}차원")
         print("Signal의 모든 indicator와 raw score 활용")
         
-        # 기존 61차원 모델 로드 시도 (테스트 성능 우선)
-        model_files = [
-            'agent/best_test_performance_model_wr*.pth',  # 테스트 최고 성능 모델
-            'agent/final_optimized_model_61d.pth',       # 최종 모델
-            'agent/best_model_61d.pth'                   # 기존 모델
-        ]
         model_loaded = False
         
-        # 테스트 성능 모델 우선 로드
+        # 1. 테스트 성능 모델 우선 로드
         import glob
         test_model_files = glob.glob('agent/best_test_performance_model_wr*.pth')
         if test_model_files:
@@ -1626,12 +1749,31 @@ def main():
                 model_loaded = True
                 print(f"✅ 테스트 데이터셋 최고 성능 모델 로드: {best_test_model}")
         
-        # 테스트 모델이 없으면 다른 모델들 시도 (호환성 모드)
+        # 2. 호환성 모드로 기존 모델 로드 시도
         if not model_loaded:
             for model_file in ['agent/final_optimized_model_80d.pth', 'agent/best_model_80d.pth']:
-                if agent.load_model_with_compatibility(model_file):
-                    model_loaded = True
-                    break
+                if os.path.exists(model_file):
+                    print(f"🔄 호환성 모드로 {model_file} 로드 시도...")
+                    
+                    # 모델 호환성 진단
+                    diagnosis = agent.diagnose_model_compatibility(model_file)
+                    if 'error' not in diagnosis:
+                        print(f"   📊 호환성 진단: {diagnosis['compatibility_rate']:.1%} ({diagnosis['compatible_layers']}/{diagnosis['total_new_layers']} 레이어)")
+                    
+                    if agent.load_model_with_compatibility(model_file):
+                        model_loaded = True
+                        print(f"✅ 호환성 모드로 모델 로드 성공: {model_file}")
+                        break
+        
+        # 3. 모델 변환 시도 (기존 모델을 새로운 아키텍처로)
+        if not model_loaded:
+            for model_file in ['agent/final_optimized_model_80d.pth', 'agent/best_model_80d.pth']:
+                if os.path.exists(model_file):
+                    print(f"🔄 모델 변환 시도: {model_file}")
+                    if agent.create_compatible_model(model_file, "advanced"):
+                        model_loaded = True
+                        print(f"✅ 모델 변환 성공: {model_file}")
+                        break
         
         if not model_loaded:
             print("새로운 61차원 모델로 시작합니다.")
@@ -1674,7 +1816,7 @@ def main():
             user_input = input("\n수익률이 목표(5%)에 미달합니다. 추가 훈련을 원하시나요? (y/n): ")
             if user_input.lower() == 'y':
                 print("61차원 수익률 중심 추가 훈련 시작...")
-                TrainingManager.train_agent(trained_agent, train_env, episodes=200, test_env=test_env)
+                TrainingManager.train_agent(trained_agent, train_env, episodes=1000, test_env=test_env)
                 
                 # 추가 훈련 후 재평가
                 print("\n추가 훈련 후 테스트 데이터셋 성능 평가...")
