@@ -5,6 +5,7 @@ import os
 import sys
 import pickle
 from typing import Dict, Any, List, Optional
+import psutil
 
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -448,8 +449,7 @@ def generate_signal_data_with_indicators(
             # 거래 결정
             decision = decision_engine.decide_trade_realtime(signals)
             decision.update({'timestamp': current_time, 'indicators': indicators})
-            print(decision)
-            raise Exception("test")
+
             temp_decision_data.append(decision)
             
             # 배치 크기마다 Parquet 파일에 저장

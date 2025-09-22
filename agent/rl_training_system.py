@@ -1,5 +1,5 @@
 """
-61차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 1
+58차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 1
 - 새로운 RL Decision 스키마 활용 (action_value, confidence_value 등)
 - Conflict 정보 및 시너지 메타데이터 활용
 - 중복 계산 제거 및 정보 활용 극대화
@@ -14,7 +14,6 @@ import torch.nn.functional as F
 import random
 import gymnasium as gym
 import os
-import math
 
 from collections import deque, namedtuple
 from gymnasium import spaces
@@ -66,25 +65,24 @@ class RewardCalculator:
         
     def calculate_reward(self, current_price: float, entry_price: float, position: float, 
                     action: str, holding_time: int, trade_pnl: Optional[float] = None) -> float:
-        """극단적으로 단순화된 보상 시스템"""
+        """안정적인 보상 시스템"""
         reward = 0.0
         
-        # 거래 완료 시: 단순한 수익률 기반 보상
+        # 거래 완료 시: 수익률을 그대로 사용 (극단적 증폭 제거)
         if trade_pnl is not None:
-            # 수익률을 100배 증폭 (단순화)
-            reward = trade_pnl * 100
+            reward = trade_pnl
             
             # 수익 시 작은 보너스
             if trade_pnl > 0:
-                reward += 10
+                reward += 0.01
             # 손실 시 작은 페널티
             elif trade_pnl < 0:
-                reward -= 10
+                reward -= 0.01
         
         # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (매우 작게)
         elif abs(position) > 0.01 and entry_price > 0:
             unrealized_pnl = self._calculate_unrealized_pnl(current_price, entry_price, position)
-            reward = unrealized_pnl * 10  # 매우 작은 보상
+            reward = unrealized_pnl * 0.1  # 매우 작은 보상
         
         return reward
     
@@ -103,9 +101,9 @@ class RewardCalculator:
         
         # 각 시간대별 신호와 포지션 일치도
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            action_value = float(signal_data.get(f'{timeframe}_action_value', 0.0))
+            action_value = float(signal_data.get(f'{timeframe}_action', 0.0))
             net_score = float(signal_data.get(f'{timeframe}_net_score', 0.0))
-            confidence_value = float(signal_data.get(f'{timeframe}_confidence_value', 0.0))
+            confidence_value = float(signal_data.get(f'{timeframe}_confidence', 0.0))
             
             # Action value와 포지션 일치도 (action_value: -1~1, position: -1~1)
             action_match = 1.0 - abs(action_value - position) / 2.0  # 0~1 범위
@@ -121,200 +119,69 @@ class RewardCalculator:
         
         return signal_reward
 
-class MultiHeadAttentionBlock(nn.Module):
-    """다중 헤드 어텐션 블록"""
-    
-    def __init__(self, hidden_size: int, num_heads: int, dropout: float = 0.1):
-        super().__init__()
-        self.hidden_size = hidden_size
-        self.num_heads = num_heads
-        self.head_dim = hidden_size // num_heads
-        
-        assert hidden_size % num_heads == 0, "hidden_size는 num_heads로 나누어떨어져야 합니다"
-        
-        # 어텐션 레이어들
-        self.query = nn.Linear(hidden_size, hidden_size)
-        self.key = nn.Linear(hidden_size, hidden_size)
-        self.value = nn.Linear(hidden_size, hidden_size)
-        
-        # 출력 프로젝션
-        self.output_projection = nn.Linear(hidden_size, hidden_size)
-        
-        # 정규화 및 드롭아웃
-        self.layer_norm = nn.LayerNorm(hidden_size)
-        self.dropout = nn.Dropout(dropout)
-        
-    def forward(self, x):
-        batch_size, seq_len, hidden_size = x.shape
-        
-        # 어텐션 계산
-        Q = self.query(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        K = self.key(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        V = self.value(x).view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
-        
-        # 스케일드 닷 프로덕트 어텐션
-        attention_scores = torch.matmul(Q, K.transpose(-2, -1)) / (self.head_dim ** 0.5)
-        attention_weights = torch.softmax(attention_scores, dim=-1)
-        attention_weights = self.dropout(attention_weights)
-        
-        # 어텐션 적용
-        attention_output = torch.matmul(attention_weights, V)
-        attention_output = attention_output.transpose(1, 2).contiguous().view(
-            batch_size, seq_len, hidden_size
-        )
-        
-        # 출력 프로젝션 및 잔차 연결
-        output = self.output_projection(attention_output)
-        output = self.layer_norm(x + output)
-        
-        return output
 
-class SimpleDQN(nn.Module):
-    """단순하고 안정적인 DQN (과적합 방지)"""
-    
-    def __init__(self, state_size: int, action_size: int = 3, hidden_size: int = 128):
-        super().__init__()
-        
-        self.state_size = state_size
-        self.hidden_size = hidden_size
-        
-        # 단순한 피드포워드 네트워크
-        self.fc1 = nn.Linear(state_size, hidden_size)
-        self.fc2 = nn.Linear(hidden_size, hidden_size)
-        self.fc3 = nn.Linear(hidden_size, hidden_size // 2)
-        
-        # 액션 헤드들
-        self.position_head = nn.Linear(hidden_size // 2, 21)
-        self.leverage_head = nn.Linear(hidden_size // 2, 10)
-        self.holding_head = nn.Linear(hidden_size // 2, 20)
-        
-        # 수익률 예측
-        self.profit_predictor = nn.Linear(hidden_size // 2, 1)
-        
-        # 드롭아웃
-        self.dropout = nn.Dropout(0.1)
-        
-        # 가중치 초기화
-        self.apply(self._init_weights)
-    
-    def _init_weights(self, module):
-        """Xavier 초기화"""
-        if isinstance(module, nn.Linear):
-            nn.init.xavier_uniform_(module.weight)
-            nn.init.constant_(module.bias, 0)
-    
-    def forward(self, x):
-        # 배치 차원 확인
-        if x.dim() == 1:
-            x = x.unsqueeze(0)
-            single_sample = True
-        else:
-            single_sample = False
-        
-        # 피드포워드
-        x = F.relu(self.fc1(x))
-        x = self.dropout(x)
-        x = F.relu(self.fc2(x))
-        x = self.dropout(x)
-        x = F.relu(self.fc3(x))
-        x = self.dropout(x)
-        
-        # 각 액션 차원별 Q값
-        position_q = self.position_head(x)
-        leverage_q = self.leverage_head(x)
-        holding_q = self.holding_head(x)
-        profit_pred = self.profit_predictor(x)
-        
-        # 단일 샘플이면 배치 차원 제거
-        if single_sample:
-            position_q = position_q.squeeze(0)
-            leverage_q = leverage_q.squeeze(0)
-            holding_q = holding_q.squeeze(0)
-            profit_pred = profit_pred.squeeze(0)
-        
-        return position_q, leverage_q, holding_q, profit_pred
 
-class TransformerDQN(nn.Module):
-    """Transformer 기반 DQN (과적합 방지 + 강력한 표현력)"""
+class DuelingDQN(nn.Module):
+    """Dueling DQN (Value + Advantage 분리로 안정적인 학습)"""
     
     def __init__(self, state_size: int, action_size: int = 3, hidden_size: int = 256, 
-                 num_layers: int = 4, num_heads: int = 8, dropout: float = 0.1):
+                 dropout: float = 0.1):
         super().__init__()
         
         self.state_size = state_size
         self.hidden_size = hidden_size
-        self.num_layers = num_layers
-        self.num_heads = num_heads
         
-        # 입력 임베딩 및 위치 인코딩
-        self.input_embedding = nn.Linear(state_size, hidden_size)
-        self.positional_encoding = self._create_positional_encoding(hidden_size)
-        
-        # Transformer Encoder Layers
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=hidden_size,
-            nhead=num_heads,
-            dim_feedforward=hidden_size * 4,  # FFN 크기
-            dropout=dropout,
-            activation='gelu',  # GELU 활성화 함수
-            batch_first=True,
-            norm_first=True  # Pre-LN 구조 (과적합 방지)
-        )
-        
-        self.transformer_encoder = nn.TransformerEncoder(
-            encoder_layer, 
-            num_layers=num_layers
-        )
-        
-        # 출력 정규화
-        self.output_norm = nn.LayerNorm(hidden_size)
-        
-        # 액션 헤드들 (Transformer 출력 활용)
-        self.position_head = self._build_transformer_head(hidden_size, 21)
-        self.leverage_head = self._build_transformer_head(hidden_size, 10)
-        self.holding_head = self._build_transformer_head(hidden_size, 20)
-        
-        # 수익률 예측 (Multi-Head Attention 활용)
-        self.profit_attention = nn.MultiheadAttention(
-            embed_dim=hidden_size,
-            num_heads=4,
-            dropout=dropout,
-            batch_first=True
-        )
-        self.profit_predictor = nn.Sequential(
+        # 공통 특징 추출기 (Feature Extractor)
+        self.feature_extractor = nn.Sequential(
+            nn.Linear(state_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            
+            nn.Linear(hidden_size, hidden_size),
+            nn.LayerNorm(hidden_size),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            
             nn.Linear(hidden_size, hidden_size // 2),
             nn.LayerNorm(hidden_size // 2),
             nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        
+        # Value Stream (상태의 가치)
+        self.value_stream = nn.Sequential(
+            nn.Linear(hidden_size // 2, hidden_size // 4),
+            nn.LayerNorm(hidden_size // 4),
+            nn.GELU(),
             nn.Dropout(dropout),
-            nn.Linear(hidden_size // 2, 1)
+            nn.Linear(hidden_size // 4, 1)  # 단일 Value 출력
+        )
+        
+        # Advantage Stream (액션별 장점)
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(hidden_size // 2, hidden_size // 4),
+            nn.LayerNorm(hidden_size // 4),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 각 액션 차원별 Advantage 헤드
+        self.position_advantage = nn.Linear(hidden_size // 4, 21)  # 포지션 -1~1 (21개 구간)
+        self.leverage_advantage = nn.Linear(hidden_size // 4, 10)  # 레버리지 1~30 (10개 구간)
+        self.holding_advantage = nn.Linear(hidden_size // 4, 20)   # 홀딩 10~120분 (20개 구간)
+        
+        # 수익률 예측 (Value Stream 활용)
+        self.profit_predictor = nn.Sequential(
+            nn.Linear(hidden_size // 2, hidden_size // 4),
+            nn.LayerNorm(hidden_size // 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_size // 4, 1)
         )
         
         # 가중치 초기화
         self.apply(self._init_weights)
-    
-    def _create_positional_encoding(self, hidden_size: int, max_len: int = 1000):
-        """위치 인코딩 생성 (Transformer용)"""
-        pe = torch.zeros(max_len, hidden_size)
-        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, hidden_size, 2).float() * 
-                           (-math.log(10000.0) / hidden_size))
-        pe[:, 0::2] = torch.sin(position * div_term)
-        pe[:, 1::2] = torch.cos(position * div_term)
-        return pe.unsqueeze(0)  # [1, max_len, hidden_size]
-    
-    def _build_transformer_head(self, input_size: int, output_size: int):
-        """Transformer 출력을 위한 헤드"""
-        return nn.Sequential(
-            nn.Linear(input_size, input_size // 2),
-            nn.LayerNorm(input_size // 2),
-            nn.GELU(),
-            nn.Dropout(0.1),
-            nn.Linear(input_size // 2, input_size // 4),
-            nn.LayerNorm(input_size // 4),
-            nn.GELU(),
-            nn.Dropout(0.05),
-            nn.Linear(input_size // 4, output_size)
-        )
     
     def _init_weights(self, module):
         """Xavier 초기화"""
@@ -330,37 +197,28 @@ class TransformerDQN(nn.Module):
         else:
             single_sample = False
         
-        batch_size = x.size(0)
+        # 공통 특징 추출
+        features = self.feature_extractor(x)  # [batch_size, hidden_size//2]
         
-        # 입력 임베딩
-        x = self.input_embedding(x)  # [batch_size, state_size] -> [batch_size, hidden_size]
+        # Value Stream (상태의 가치)
+        value = self.value_stream(features)  # [batch_size, 1]
         
-        # 시퀀스 차원 추가 및 위치 인코딩
-        x = x.unsqueeze(1)  # [batch_size, 1, hidden_size]
+        # Advantage Stream (액션별 장점)
+        advantage_features = self.advantage_stream(features)  # [batch_size, hidden_size//4]
         
-        # 위치 인코딩 추가 (시퀀스 길이 1이므로 첫 번째 위치만 사용)
-        pos_encoding = self.positional_encoding[:, :1, :].to(x.device)  # [1, 1, hidden_size]
-        x = x + pos_encoding
+        # 각 액션 차원별 Advantage 계산
+        position_adv = self.position_advantage(advantage_features)  # [batch_size, 21]
+        leverage_adv = self.leverage_advantage(advantage_features)  # [batch_size, 10]
+        holding_adv = self.holding_advantage(advantage_features)    # [batch_size, 20]
         
-        # Transformer Encoder 통과
-        transformer_output = self.transformer_encoder(x)  # [batch_size, 1, hidden_size]
+        # Dueling 구조: Q(s,a) = V(s) + A(s,a) - mean(A(s,a))
+        # 각 액션 차원별로 평균 Advantage를 빼서 안정성 확보
+        position_q = value + position_adv - position_adv.mean(dim=1, keepdim=True)
+        leverage_q = value + leverage_adv - leverage_adv.mean(dim=1, keepdim=True)
+        holding_q = value + holding_adv - holding_adv.mean(dim=1, keepdim=True)
         
-        # 출력 정규화
-        transformer_output = self.output_norm(transformer_output)
-        
-        # 시퀀스 차원 제거
-        features = transformer_output.squeeze(1)  # [batch_size, hidden_size]
-        
-        # 각 액션 차원별 Q값
-        position_q = self.position_head(features)
-        leverage_q = self.leverage_head(features)
-        holding_q = self.holding_head(features)
-        
-        # 수익률 예측 (Multi-Head Attention 활용)
-        # 자기 자신과의 어텐션으로 중요한 특성 강조
-        attn_output, _ = self.profit_attention(transformer_output, transformer_output, transformer_output)
-        profit_features = attn_output.squeeze(1)  # [batch_size, hidden_size]
-        profit_pred = self.profit_predictor(profit_features)
+        # 수익률 예측 (공통 특징 활용)
+        profit_pred = self.profit_predictor(features)
         
         # 단일 샘플이면 배치 차원 제거
         if single_sample:
@@ -372,92 +230,11 @@ class TransformerDQN(nn.Module):
         return position_q, leverage_q, holding_q, profit_pred
 
 
-def analyze_transformer_model(state_size: int = 3, hidden_size: int = 256):
-    """TransformerDQN 모델 분석 함수"""
-    print("🚀 TransformerDQN 모델 분석")
-    print("=" * 50)
-    
-    # Transformer 모델
-    transformer_model = TransformerDQN(state_size, 3, hidden_size)
-    transformer_params = sum(p.numel() for p in transformer_model.parameters())
-    
-    print(f"🚀 TransformerDQN:")
-    print(f"   - 파라미터 수: {transformer_params:,}")
-    print(f"   - 특징: Transformer Encoder, Multi-Head Attention, Positional Encoding, GELU")
-    print(f"   - 장점: 강력한 표현력, 장거리 의존성 학습, 과적합 방지")
-    print(f"   - 단점: 더 많은 파라미터, 학습 시간 증가, 메모리 사용량 증가")
-    print("=" * 50)
-    
-    return transformer_model
 
-def test_model_forward_pass(model, input_size: int = 3, batch_size: int = 32):
-    """모델의 forward pass 테스트"""
-    import time
-    print(f"🧪 {model.__class__.__name__} Forward Pass 테스트")
-    
-    # 테스트 입력 생성
-    test_input = torch.randn(batch_size, input_size)
-    
-    try:
-        with torch.no_grad():
-            start_time = time.time()
-            position_q, leverage_q, holding_q, profit_pred = model(test_input)
-            end_time = time.time()
-            
-        print(f"   ✅ Forward pass 성공")
-        print(f"   - 실행 시간: {(end_time - start_time)*1000:.2f}ms")
-        print(f"   - Position Q shape: {position_q.shape}")
-        print(f"   - Leverage Q shape: {leverage_q.shape}")
-        print(f"   - Holding Q shape: {holding_q.shape}")
-        print(f"   - Profit pred shape: {profit_pred.shape}")
-        
-        # 출력 범위 확인
-        print(f"   - Position Q 범위: [{position_q.min():.3f}, {position_q.max():.3f}]")
-        print(f"   - Leverage Q 범위: [{leverage_q.min():.3f}, {leverage_q.max():.3f}]")
-        print(f"   - Holding Q 범위: [{holding_q.min():.3f}, {holding_q.max():.3f}]")
-        print(f"   - Profit pred 범위: [{profit_pred.min():.3f}, {profit_pred.max():.3f}]")
-        
-        return True
-        
-    except Exception as e:
-        print(f"   ❌ Forward pass 실패: {e}")
-        return False
 
-def benchmark_transformer_model(state_size: int = 3, hidden_size: int = 256, num_tests: int = 100):
-    """TransformerDQN 성능 벤치마크"""
-    import time
-    print("⚡ TransformerDQN 성능 벤치마크")
-    print("=" * 50)
-    
-    # 모델 생성
-    transformer_model = TransformerDQN(state_size, 3, hidden_size)
-    
-    # 테스트 입력
-    test_input = torch.randn(32, state_size)
-    
-    # Transformer 모델 벤치마크
-    print("🚀 TransformerDQN 벤치마크:")
-    transformer_times = []
-    for _ in range(num_tests):
-        start_time = time.time()
-        with torch.no_grad():
-            _ = transformer_model(test_input)
-        transformer_times.append(time.time() - start_time)
-    
-    transformer_avg_time = np.mean(transformer_times) * 1000
-    transformer_std_time = np.std(transformer_times) * 1000
-    
-    print(f"   - 평균 실행 시간: {transformer_avg_time:.2f}ms ± {transformer_std_time:.2f}ms")
-    print(f"   - 파라미터 수: {sum(p.numel() for p in transformer_model.parameters()):,}")
-    
-    return {
-        'transformer_avg_time': transformer_avg_time,
-        'transformer_std_time': transformer_std_time,
-        'parameter_count': sum(p.numel() for p in transformer_model.parameters())
-    }
 
 class TradingEnvironment(gym.Env):
-    """61차원 RL Decision 기반 암호화폐 거래 강화학습 환경 (Gymnasium 호환)"""
+    """58차원 RL Decision 기반 암호화폐 거래 강화학습 환경 (Gymnasium 호환) - Open 가격 기반"""
     
     def __init__(self, price_data: pd.DataFrame, signal_data: List[Dict], 
                  initial_balance: float = 10000.0, max_position: float = 1.0):
@@ -470,17 +247,17 @@ class TradingEnvironment(gym.Env):
         
         self.reward_calculator = RewardCalculator()
         
-        # 액션/상태 스페이스 정의 (포지션 -1~1 범위)
+        # 액션/상태 스페이스 정의 (포지션 -0.5~0.5 범위로 축소)
         self.action_space = spaces.Box(
-            low=np.array([-1.0, 1.0, 10.0]),  # 포지션 -1~1 범위
-            high=np.array([1.0, 30.0, 120.0]),  # 레버리지 1~30, 홀딩 10~120분
+            low=np.array([-0.5, 1.0, 10.0]),  # 포지션 -0.5~0.5 범위로 축소
+            high=np.array([0.5, 5.0, 60.0]),  # 레버리지 1~5, 홀딩 10~60분
             dtype=np.float32
         )
         
         # 거래 제한 설정 (단타 최적화)
         self.min_trade_interval = 1  # 최소 1스텝 간격 (더 자주 거래 허용)
         self.last_trade_step = -self.min_trade_interval  # 초기값
-        self.trading_cost = 0.0001  # 0.01% 거래 비용 (더 낮은 비용)
+        self.trading_cost = 0.001  # 0.1% 거래 비용 (현실적인 비용)
         
         # 58차원 상태 공간 (기술적 지표 + 포트폴리오 + 의사결정 특성)
         self.observation_space = spaces.Box(
@@ -518,16 +295,18 @@ class TradingEnvironment(gym.Env):
         return observation, info
     
     def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """환경 스텝 실행 (Gymnasium 호환)"""
+        """환경 스텝 실행 (Gymnasium 호환) - Open 가격 기반"""
         if self.current_step >= min(len(self.price_data), len(self.signal_data)) - 1:
             return self._get_observation(), 0.0, True, False, {}
         
-        position_change = np.clip(action[0], -1.0, 1.0)  # 포지션 -1~1 범위
-        leverage = np.clip(action[1], 1.0, 30.0)  # 레버리지 1~30
-        target_holding_minutes = np.clip(action[2], 10.0, 120.0)  # 10분~120분
+        position_change = np.clip(action[0], -0.5, 0.5)  # 포지션 -0.5~0.5 범위
+        leverage = np.clip(action[1], 1.0, 5.0)  # 레버리지 1~5
+        target_holding_minutes = np.clip(action[2], 10.0, 60.0)  # 10분~60분
         
-        current_price = self.price_data.iloc[self.current_step]['close']
-        next_price = self.price_data.iloc[self.current_step + 1]['close']
+        # 현재 스텝의 open 가격 (실제 거래에서 알 수 있는 가격)
+        current_price = self.price_data.iloc[self.current_step]['open']
+        # 다음 스텝의 open 가격 (다음 캔들 시작 시점)
+        next_price = self.price_data.iloc[self.current_step + 1]['open']
         
         # 포지션 및 거래 처리
         trade_completed, old_position = self._process_position_change(
@@ -541,11 +320,14 @@ class TradingEnvironment(gym.Env):
         # Signal 데이터 가져오기
         current_signal = self.signal_data[self.current_step] if self.current_step < len(self.signal_data) else {}
         
-        # 보상 계산 (Signal 정보 활용) - 거래 완료 시에만 보상
+        # 보상 계산 (Signal 정보 활용) - Open 가격 기반
         if trade_completed:
-            # 거래 완료 시: 실제 수익률 기반 보상
+            # 거래 완료 시: 실제 수익률 기반 보상 (이전 캔들의 close 가격 사용)
+            if self.current_step > 0:
+                # 이전 캔들이 완성된 close 가격으로 수익률 계산
+                prev_close_price = self.price_data.iloc[self.current_step - 1]['close']
             reward = self.reward_calculator.calculate_reward(
-                current_price=next_price,
+                    current_price=prev_close_price,  # 완성된 close 가격 사용
                 entry_price=self.entry_price,
                 position=old_position,  # 거래 전 포지션 사용
                 action='TRADE',
@@ -553,9 +335,9 @@ class TradingEnvironment(gym.Env):
                 trade_pnl=self.last_trade_pnl
             )
         else:
-            # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (작은 가중치)
+            # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (현재 open 가격 사용)
             reward = self.reward_calculator.calculate_reward(
-                current_price=next_price,
+                current_price=current_price,  # 현재 open 가격 사용
                 entry_price=self.entry_price,
                 position=self.current_position,
                 action='HOLD',
@@ -576,14 +358,14 @@ class TradingEnvironment(gym.Env):
         return self._get_observation(), reward, done, truncated, info
     
     def _get_observation(self) -> np.ndarray:
-        """58차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성)"""
+        """58차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성) - Open 가격 기반"""
         if self.current_step >= min(len(self.price_data), len(self.signal_data)):
             return np.zeros(58, dtype=np.float32)
         
-        # 현재 가격과 이전 가격 비교 (3차원)
-        current_price = self.price_data.iloc[self.current_step]['close']
+        # 현재 가격과 이전 가격 비교 (3차원) - Open 가격 사용
+        current_price = self.price_data.iloc[self.current_step]['open']
         if self.current_step > 0:
-            prev_price = self.price_data.iloc[self.current_step - 1]['close']
+            prev_price = self.price_data.iloc[self.current_step - 1]['open']
             price_change = (current_price - prev_price) / prev_price
         else:
             price_change = 0.0
@@ -614,8 +396,8 @@ class TradingEnvironment(gym.Env):
         return observation
     
     def _extract_price_indicators(self, signal_data: Dict, current_candle: Dict) -> np.ndarray:
-        """Signal의 indicator들을 price feature로 활용 (20차원)"""
-        current_price = current_candle['close']
+        """Signal의 indicator들을 price feature로 활용 (20차원) - Open 가격 기반"""
+        current_price = current_candle['open']  # Open 가격 사용
         
         # 1. 가격 대비 지표 위치
         vwap = signal_data.get('indicator_vwap')
@@ -695,26 +477,26 @@ class TradingEnvironment(gym.Env):
         timeframe_features = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
             # 새로운 RL 스키마 필드들 사용
-            action_value = float(signals.get(f'{timeframe}_action'))
-            net_score = float(signals.get(f'{timeframe}_net_score'))
-            buy_score = float(signals.get(f'{timeframe}_buy_score'))
-            sell_score = float(signals.get(f'{timeframe}_sell_score'))
-            confidence_value = float(signals.get(f'{timeframe}_confidence'))
-            market_context_value = float(signals.get(f'{timeframe}_market_context'))
+            action_value = float(signals.get(f'{timeframe}_action', 0.0))
+            net_score = float(signals.get(f'{timeframe}_net_score', 0.0))
+            buy_score = float(signals.get(f'{timeframe}_buy_score', 0.0))
+            sell_score = float(signals.get(f'{timeframe}_sell_score', 0.0))
+            confidence_value = float(signals.get(f'{timeframe}_confidence', 0.0))
+            market_context_value = float(signals.get(f'{timeframe}_market_context', 0.0))
             
             timeframe_features.extend([action_value, net_score, buy_score, sell_score, confidence_value, market_context_value])
         
         # 추가 메타 정보 (3개)
         signals_used = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            used = signals.get(f'{timeframe}_signals_used')
+            used = signals.get(f'{timeframe}_signals_used', 0)
             
             signals_used.append(min(float(used) / 10.0, 1.0))
         
         # Conflict 정보 (3개)
-        conflict_severity = float(signals.get('conflict_conflict_severity'))
-        conflict_consensus = float(signals.get('conflict_directional_consensus'))
-        conflict_penalty = float(signals.get('conflict_conflict_penalty'))
+        conflict_severity = float(signals.get('conflict_conflict_severity', 0.0))
+        conflict_consensus = float(signals.get('conflict_directional_consensus', 0.0))
+        conflict_penalty = float(signals.get('conflict_conflict_penalty', 0.0))
         
         # Long term 특화 정보 (2개)
         institutional_bias = float(signals.get('long_term_institutional_bias', 0.0))
@@ -730,26 +512,33 @@ class TradingEnvironment(gym.Env):
     
     def _process_position_change(self, position_change: float, leverage: float, 
                                 current_price: float, target_holding_minutes: float) -> Tuple[bool, float]:
-        """포지션 변경 처리 (순수 RL 에이전트 결정)"""
+        """포지션 변경 처리 (순수 RL 에이전트 결정) - Open 가격 기반"""
         old_position = self.current_position
         trade_completed = False
         
-        # RL 에이전트의 결정만으로 포지션 변경 (-1~1 범위)
-        target_position = np.clip(self.current_position + position_change, -1.0, 1.0)
+        # RL 에이전트의 결정만으로 포지션 변경 (-0.5~0.5 범위)
+        target_position = np.clip(self.current_position + position_change, -0.5, 0.5)
         
         # 포지션 변경이 필요한지 확인
         if abs(target_position - self.current_position) > 0.001:
-            # 기존 포지션 청산
+            # 기존 포지션 청산 (이전 캔들의 close 가격으로 청산)
             if abs(self.current_position) > 0.01:
                 trade_completed = True
-                self.last_trade_pnl = self._calculate_trade_pnl(current_price, self.entry_price, old_position)
-                self._close_position(current_price)
+                if self.current_step > 0:
+                    # 이전 캔들이 완성된 close 가격으로 청산
+                    prev_close_price = self.price_data.iloc[self.current_step - 1]['close']
+                    self.last_trade_pnl = self._calculate_trade_pnl(prev_close_price, self.entry_price, old_position)
+                    self._close_position(prev_close_price)
+                else:
+                    # 첫 번째 스텝에서는 현재 open 가격 사용
+                    self.last_trade_pnl = self._calculate_trade_pnl(current_price, self.entry_price, old_position)
+                    self._close_position(current_price)
             
-            # 새 포지션 진입
+            # 새 포지션 진입 (현재 open 가격으로 진입)
             if abs(target_position) > 0.001:
                 self.current_position = target_position
                 self.current_leverage = leverage
-                self.entry_price = current_price
+                self.entry_price = current_price  # Open 가격으로 진입
                 self.holding_time = 0
                 self.in_position = True
                 
@@ -807,8 +596,8 @@ class TradingEnvironment(gym.Env):
             self.max_drawdown = max(self.max_drawdown, drawdown)
     
     def _create_info_dict(self) -> Dict:
-        """정보 딕셔너리 생성"""
-        current_price = self.price_data.iloc[min(self.current_step, len(self.price_data)-1)]['close']
+        """정보 딕셔너리 생성 - Open 가격 기반"""
+        current_price = self.price_data.iloc[min(self.current_step, len(self.price_data)-1)]['open']
         
         return {
             'balance': self.balance,
@@ -825,16 +614,16 @@ class TradingEnvironment(gym.Env):
         }
 
 """
-61차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 2
+58차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 2
 - RLAgent 클래스 및 훈련/평가 시스템
 - 새로운 Decision 스키마 데이터 로더 및 유틸리티 함수들
 """
 
 class RLAgent:
-    """61차원 RL Decision 기반 강화학습 에이전트"""
+    """58차원 RL Decision 기반 강화학습 에이전트"""
     
-    def __init__(self, state_size: int = 3, learning_rate: float = 1e-3, 
-                    gamma: float = 0.99, epsilon: float = 0.2, epsilon_decay: float = 0.995,
+    def __init__(self, state_size: int = 3, learning_rate: float = 1e-4, 
+                    gamma: float = 0.99, epsilon: float = 0.8, epsilon_decay: float = 0.995,
                     hidden_size: int = 128):
         
         self.state_size = state_size
@@ -843,11 +632,11 @@ class RLAgent:
         self.epsilon_decay = epsilon_decay
         self.hidden_size = hidden_size
         self.learning_rate = learning_rate  # learning_rate 속성 추가
-        self.epsilon_min = 0.05  # 5%로 설정 (수익률 학습에 집중)
+        self.epsilon_min = 0.2  # 20%로 설정 (더 많은 탐험)
         
         # ε 값이 너무 낮으면 초기화
         if self.epsilon < self.epsilon_min:
-            self.epsilon = 0.3  # 30%로 초기화 (충분한 탐험)
+            self.epsilon = 0.8  # 80%로 초기화 (충분한 탐험)
         
         # GPU 사용 가능 여부 확인 및 디바이스 설정
         if torch.cuda.is_available():
@@ -861,16 +650,16 @@ class RLAgent:
             print("   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
         print(f"Using device: {self.device} for {state_size}차원 모델")
         
-        # 네트워크 초기화 (SimpleDQN 사용 - 단순하고 안정적인 구조)
-        print("🚀 SimpleDQN 아키텍처 사용 (단순하고 안정적인 구조)")
-        self.q_network = SimpleDQN(state_size, 3, hidden_size).to(self.device)
-        self.target_network = SimpleDQN(state_size, 3, hidden_size).to(self.device)
+        # 네트워크 초기화 (DuelingDQN 사용 - Value + Advantage 분리로 안정적인 학습)
+        print("🚀 DuelingDQN 아키텍처 사용 (Value + Advantage 분리로 안정적인 학습)")
+        self.q_network = DuelingDQN(state_size, 3, hidden_size).to(self.device)
+        self.target_network = DuelingDQN(state_size, 3, hidden_size).to(self.device)
         
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
         
         # 경험 리플레이 (수익률 학습 최적화)
-        self.memory = deque(maxlen=20000)  # 메모리 크기 증가 (더 많은 경험)
-        self.batch_size = 128  # 배치 크기 증가 (더 안정적인 학습)
+        self.memory = deque(maxlen=10000)  # 메모리 크기 축소 (과적합 방지)
+        self.batch_size = 64  # 배치 크기 축소 (더 안정적인 학습)
         
         # 학습 추적
         self.training_rewards = []
@@ -878,19 +667,9 @@ class RLAgent:
         self.win_rates = []
         
         # 타겟 네트워크 업데이트 (수익률 학습 최적화)
-        self.target_update_freq = 100  # 더 자주 업데이트 (빠른 학습)
+        self.target_update_freq = 50  # 더 자주 업데이트 (안정적인 학습)
         self.update_count = 0
         
-        # Stochastic Weight Averaging (SWA) 설정
-        self.swa_enabled = True
-        self.swa_start = 50  # 50 에피소드 후 SWA 시작
-        self.swa_count = 0
-        self.swa_weights = {}
-        
-        # 커리큘럼 학습 설정
-        self.curriculum_stage = 0  # 0: 초급, 1: 중급, 2: 고급
-        self.curriculum_thresholds = [0.1, 0.3, 0.5]  # 승률 임계값
-        self.curriculum_episodes = [100, 200, 300]  # 단계별 에피소드 수
         
         # 액션 공간 설정 (환경에서 가져옴)
         self.action_space = None  # 환경에서 설정됨
@@ -899,21 +678,6 @@ class RLAgent:
         """경험 저장"""
         self.memory.append(Experience(state, action, reward, next_state, done))
     
-    def update_curriculum(self, episode: int, win_rate: float):
-        """커리큘럼 학습 단계 업데이트"""
-        if self.curriculum_stage < len(self.curriculum_thresholds) - 1:
-            if (episode >= self.curriculum_episodes[self.curriculum_stage] and 
-                win_rate >= self.curriculum_thresholds[self.curriculum_stage]):
-                self.curriculum_stage += 1
-                print(f"🎓 커리큘럼 단계 업그레이드: {self.curriculum_stage}단계 (승률: {win_rate:.3f})")
-                
-                # 단계별 파라미터 조정
-                if self.curriculum_stage == 1:  # 중급
-                    self.epsilon = max(self.epsilon * 0.8, self.epsilon_min)  # 탐험 감소
-                    self.learning_rate *= 0.9  # 학습률 미세 조정
-                elif self.curriculum_stage == 2:  # 고급
-                    self.epsilon = max(self.epsilon * 0.7, self.epsilon_min)  # 더 적은 탐험
-                    self.learning_rate *= 0.8  # 더 안정적인 학습
     
     def adaptive_learning_rate(self, recent_rewards: List[float], recent_win_rates: List[float]):
         """적응형 학습률 조정"""
@@ -968,17 +732,17 @@ class RLAgent:
                     else:
                         # 기본 클리핑 (position_change, leverage, holding_time)
                         action = np.clip(base_action + noise, 
-                                       [-1.0, 1.0, 10.0], 
-                                       [1.0, 30.0, 120.0])
+                                       [-0.5, 1.0, 10.0], 
+                                       [0.5, 5.0, 60.0])
         
         return action
     
     def _get_random_action(self) -> np.ndarray:
         """보수적인 랜덤 액션"""
         return np.array([
-            np.random.uniform(-1.0, 1.0),  # 더 정밀한 포지션 범위
-            np.random.uniform(1.0, 30.0), # 레버리지 최대 30
-            np.random.uniform(10.0, 120.0) # 단타 최적화된 홀딩 시간
+            np.random.uniform(-0.5, 0.5),  # 포지션 범위 축소
+            np.random.uniform(1.0, 5.0), # 레버리지 최대 5
+            np.random.uniform(10.0, 60.0) # 홀딩 시간 축소
         ])
     
     def _get_greedy_action(self, state: np.ndarray) -> np.ndarray:
@@ -993,10 +757,10 @@ class RLAgent:
             leverage_idx = torch.argmax(leverage_q).item()
             holding_idx = torch.argmax(holding_q).item()
             
-            # 인덱스를 실제 값으로 변환 (-1~1 범위)
-            position = -1.0 + (position_idx * 0.1)   # -1.0~1.0 (21개 구간)
-            leverage = 1.0 + (leverage_idx * 2.9)   # 1.0~30.0 (10개 구간)
-            holding = 10.0 + (holding_idx * 5.5)    # 10~120분 (20개 구간)
+            # 인덱스를 실제 값으로 변환 (-0.5~0.5 범위)
+            position = -0.5 + (position_idx * 0.05)   # -0.5~0.5 (21개 구간)
+            leverage = 1.0 + (leverage_idx * 0.4)   # 1.0~5.0 (10개 구간)
+            holding = 10.0 + (holding_idx * 2.5)    # 10~60분 (20개 구간)
             
             return np.array([position, leverage, holding])
     
@@ -1046,9 +810,6 @@ class RLAgent:
         
         self.optimizer.step()
         
-        # SWA 업데이트 (과적합 방지)
-        if self.swa_enabled and len(self.training_rewards) > self.swa_start:
-            self._update_swa_weights()
         
         self.losses.append(loss.item())
         
@@ -1059,15 +820,15 @@ class RLAgent:
                 recent_rewards = self.training_rewards[-20:]
                 avg_recent_reward = np.mean(recent_rewards)
                 
-                # 수익률 기반 감소 (더 공격적)
-                if avg_recent_reward > 500:  # 높은 수익률
-                    self.epsilon *= 0.90  # 빠른 감소
-                elif avg_recent_reward > 100:  # 양의 수익률
-                    self.epsilon *= 0.95  # 중간 감소
-                elif avg_recent_reward > 0:  # 약간의 수익률
-                    self.epsilon *= 0.98  # 느린 감소
-                else:  # 손실
+                # 수익률 기반 감소 (더 보수적)
+                if avg_recent_reward > 0.1:  # 높은 수익률 (0.1% 이상)
+                    self.epsilon *= 0.98  # 더 느린 감소
+                elif avg_recent_reward > 0.05:  # 양의 수익률 (0.05% 이상)
                     self.epsilon *= 0.99  # 매우 느린 감소
+                elif avg_recent_reward > 0:  # 약간의 수익률
+                    self.epsilon *= 0.995  # 극도로 느린 감소
+                else:  # 손실
+                    self.epsilon *= 0.999  # 거의 감소하지 않음
             else:
                 self.epsilon *= 0.995  # 초기에는 매우 느린 감소
         
@@ -1097,9 +858,9 @@ class RLAgent:
             target_holding_q = current_holding_q.clone()
             
             for i, (action, reward, done) in enumerate(zip(actions, rewards, dones)):
-                pos_idx = int(np.clip((action[0] + 1.0) / 0.1, 0, 20))   # -1.0~1.0 범위
-                lev_idx = int(np.clip((action[1] - 1.0) / 2.9, 0, 9))    # 1.0~30.0 범위
-                hold_idx = int(np.clip((action[2] - 10.0) / 5.5, 0, 19)) # 10~120분 범위
+                pos_idx = int(np.clip((action[0] + 0.5) / 0.05, 0, 20))   # -0.5~0.5 범위
+                lev_idx = int(np.clip((action[1] - 1.0) / 0.4, 0, 9))    # 1.0~5.0 범위
+                hold_idx = int(np.clip((action[2] - 10.0) / 2.5, 0, 19)) # 10~60분 범위
                 
                 if not done:
                     # 수익률 기반 타겟 (더 강한 보상 가중치)
@@ -1137,34 +898,10 @@ class RLAgent:
         
         return total_loss
     
-    def _update_swa_weights(self):
-        """Stochastic Weight Averaging 업데이트"""
-        self.swa_count += 1
-        current_state = self.q_network.state_dict()
-        
-        if not self.swa_weights:
-            # 첫 번째 SWA 가중치 초기화
-            self.swa_weights = {k: v.clone() for k, v in current_state.items()}
-        else:
-            # 지수 이동 평균으로 업데이트
-            alpha = 1.0 / self.swa_count
-            for k in self.swa_weights:
-                self.swa_weights[k] = (1 - alpha) * self.swa_weights[k] + alpha * current_state[k]
-    
-    def apply_swa_weights(self):
-        """SWA 가중치를 메인 네트워크에 적용"""
-        if self.swa_weights:
-            self.q_network.load_state_dict(self.swa_weights)
-            print("✅ SWA 가중치 적용 완료")
     
     def update_target_network(self):
-        """타겟 네트워크 업데이트 (SWA 우선)"""
-        if self.swa_weights and len(self.training_rewards) > self.swa_start:
-            # SWA 가중치를 타겟 네트워크에 적용
-            self.target_network.load_state_dict(self.swa_weights)
-        else:
-            # 일반적인 타겟 네트워크 업데이트
-            self.target_network.load_state_dict(self.q_network.state_dict())
+        """타겟 네트워크 업데이트"""
+        self.target_network.load_state_dict(self.q_network.state_dict())
     
     def save_model(self, filepath: str) -> bool:
         """모델 저장"""
@@ -1184,7 +921,7 @@ class RLAgent:
             }
             
             torch.save(save_dict, filepath)
-            print(f"61차원 모델 저장 완료: {filepath}")
+            print(f"58차원 모델 저장 완료: {filepath}")
             return True
             
         except Exception as e:
@@ -1218,7 +955,7 @@ class RLAgent:
             self.win_rates = checkpoint.get('win_rates', [])
             self.update_count = checkpoint.get('update_count', 0)
             
-            print(f"✅ 61차원 모델 로드 성공! 엡실론: {self.epsilon:.3f}")
+            print(f"✅ 58차원 모델 로드 성공! 엡실론: {self.epsilon:.3f}")
             return True
             
         except Exception as e:
@@ -1307,7 +1044,7 @@ class RLAgent:
             self.win_rates = checkpoint.get('win_rates', [])
             self.update_count = checkpoint.get('update_count', 0)
             
-            print(f"✅ {model_state_size}차원 → 61차원 호환성 모델 로드 성공!")
+            print(f"✅ {model_state_size}차원 → 58차원 호환성 모델 로드 성공!")
             print(f"   - 로드된 레이어: {loaded_count}개")
             print(f"   - 새로 초기화된 레이어: {initialized_count}개")
             
@@ -1340,8 +1077,8 @@ class RLAgent:
             checkpoint = torch.load(old_model_path, map_location=self.device, weights_only=False)
             old_state_dict = checkpoint['q_network']
             
-            # 새로운 TransformerDQN 모델 생성
-            new_model = TransformerDQN(self.state_size, 3, self.hidden_size).to(self.device)
+            # 새로운 DuelingDQN 모델 생성
+            new_model = DuelingDQN(self.state_size, 3, self.hidden_size).to(self.device)
             new_state_dict = new_model.state_dict()
             
             # 호환 가능한 가중치만 복사
@@ -1359,10 +1096,10 @@ class RLAgent:
             
             # 현재 에이전트의 네트워크 교체
             self.q_network = new_model
-            self.target_network = TransformerDQN(self.state_size, 3, self.hidden_size).to(self.device)
+            self.target_network = DuelingDQN(self.state_size, 3, self.hidden_size).to(self.device)
             self.target_network.load_state_dict(compatible_weights)
             
-            print(f"✅ TransformerDQN 아키텍처로 변환 완료!")
+            print(f"✅ DuelingDQN 아키텍처로 변환 완료!")
             return True
             
         except Exception as e:
@@ -1402,7 +1139,7 @@ class RLAgent:
             return {'error': str(e)}
 
 class DataLoader:
-    """61차원 RL Decision 기반 데이터 로딩 클래스"""
+    """58차원 RL Decision 기반 데이터 로딩 클래스"""
     
     @staticmethod
     def load_price_data(file_path: str = 'data/ETHUSDC_3m_historical_data.csv') -> Optional[pd.DataFrame]:
@@ -1425,7 +1162,7 @@ class DataLoader:
     
     @staticmethod
     def load_signal_data(agent_folder: str = "agent") -> Optional[List[Dict]]:
-        """61차원용 RL Decision 데이터 로드"""
+        """58차원용 RL Decision 데이터 로드"""
         parquet_files = []
         
         if Path(agent_folder).exists():
@@ -1447,10 +1184,10 @@ class DataLoader:
     
     @staticmethod
     def _convert_parquet_to_signal_dicts(signal_df: pd.DataFrame) -> List[Dict]:
-        """Parquet을 Signal Dict 리스트로 변환 (61차원용) - 새로운 RL 스키마"""
+        """Parquet을 Signal Dict 리스트로 변환 (58차원용) - 새로운 RL 스키마"""
         signal_data = []
         
-        print("61차원용 RL 스키마 Signal 데이터 변환 중...")
+        print("58차원용 RL 스키마 Signal 데이터 변환 중...")
         
         for idx, row in signal_df.iterrows():
             # 각 행을 딕셔너리로 변환 (새로운 RL 스키마 형태 유지)
@@ -1480,17 +1217,17 @@ class DataLoader:
             if (idx + 1) % 5000 == 0:
                 print(f"   변환 진행: {idx + 1:,}/{len(signal_df):,}")
         
-        print(f"61차원용 RL 스키마 Signal 데이터 변환 완료: {len(signal_data):,}개")
+        print(f"58차원용 RL 스키마 Signal 데이터 변환 완료: {len(signal_data):,}개")
         return signal_data
     
 
 class PerformanceAnalyzer:
-    """61차원 RL Decision 기반 성능 분석 클래스"""
+    """58차원 RL Decision 기반 성능 분석 클래스"""
     
     @staticmethod
     def evaluate_agent(agent: RLAgent, env: TradingEnvironment, num_episodes: int = 10) -> Tuple[List[Dict], Dict]:
-        """61차원 에이전트 성능 평가"""
-        print(f"61차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
+        """58차원 에이전트 성능 평가"""
+        print(f"58차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
         
         original_epsilon = agent.epsilon
         agent.epsilon = 0.01  # 테스트에서도 약간의 탐험 허용
@@ -1558,9 +1295,9 @@ class PerformanceAnalyzer:
     
     @staticmethod
     def print_performance_report(results: List[Dict], stats: Dict):
-        """61차원 성능 리포트 출력"""
+        """58차원 성능 리포트 출력"""
         print("\n" + "="*60)
-        print(f"61차원 RL Decision 기반 성능 평가 결과")
+        print(f"58차원 RL Decision 기반 성능 평가 결과")
         print("="*60)
         print(f"모델 차원: {stats['model_dimension']}차원")
         print(f"전체 승률: {stats['overall_win_rate']:.3f}")
@@ -1617,7 +1354,7 @@ class PerformanceAnalyzer:
             recommendations.append("수익률이 5% 미만입니다. 수익률 중심 보상 함수를 더 강화하세요.")
         
         if stats['avg_return'] < 0.10:
-            recommendations.append("수익률이 10% 미만입니다. 61차원 상태 공간의 수익률 최적화를 더 활용하세요.")
+            recommendations.append("수익률이 10% 미만입니다. 58차원 상태 공간의 수익률 최적화를 더 활용하세요.")
         
         if stats['avg_return'] < 0.15:
             recommendations.append("수익률이 15% 미만입니다. Signal 기반 수익률 예측을 개선하세요.")
@@ -1639,19 +1376,19 @@ class PerformanceAnalyzer:
             recommendations.append("승률이 매우 낮습니다. 수익률과 승률의 균형을 고려하세요.")
         
         if not recommendations:
-            recommendations.append("61차원 RL Decision 기반 수익률 중심 시스템이 잘 작동하고 있습니다!")
+            recommendations.append("58차원 RL Decision 기반 수익률 중심 시스템이 잘 작동하고 있습니다!")
         
         return recommendations
 
 class TrainingManager:
-    """61차원 RL Decision 기반 훈련 관리 클래스"""
+    """58차원 RL Decision 기반 훈련 관리 클래스"""
     
     @staticmethod
     def train_agent(agent: RLAgent, train_env: TradingEnvironment, 
                    episodes: int = 1000, save_interval: int = 100, 
                    test_env: TradingEnvironment = None) -> Tuple[RLAgent, List[float], List[float]]:
-        """61차원 RL Decision 기반 에이전트 훈련 (테스트 환경 모니터링 포함)"""
-        print(f"61차원 RL Decision 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
+        """58차원 RL Decision 기반 에이전트 훈련 (테스트 환경 모니터링 포함)"""
+        print(f"58차원 RL Decision 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
         print(f"상태 공간: {train_env.observation_space.shape[0]}차원")
         if test_env:
             print(f"테스트 환경 모니터링: 활성화")
@@ -1705,8 +1442,6 @@ class TrainingManager:
             agent.training_rewards.append(total_reward)
             agent.win_rates.append(episode_win_rate)
             
-            # 커리큘럼 학습 업데이트
-            agent.update_curriculum(episode, episode_win_rate)
             
             # 적응형 학습률 업데이트 (10에피소드마다)
             if episode % 10 == 0 and episode > 0:
@@ -1771,7 +1506,6 @@ class TrainingManager:
                         f"거래: {info.get('total_trades', 0):3d}개 | "
                         f"ε: {agent.epsilon:.3f} | "
                         f"LR: {agent.learning_rate:.2e} | "
-                        f"단계: {agent.curriculum_stage} | "
                         f"58D")
             
             # 베스트 모델 저장 (훈련 데이터 기준 - 수익률 중심)
@@ -1814,31 +1548,21 @@ class TrainingManager:
                         break
                 
                 if recent_test_return >= 0.20:  # 수익률 20% 이상 달성
-                    print(f"🏆 61차원 목표 달성! 테스트 데이터셋 수익률 {recent_test_return:.3f} ({recent_test_return*100:.1f}%) 도달")
-                    agent.save_model('agent/final_optimized_model_61d.pth')
+                    print(f"🏆 58차원 목표 달성! 테스트 데이터셋 수익률 {recent_test_return:.3f} ({recent_test_return*100:.1f}%) 도달")
+                    agent.save_model('agent/final_optimized_model_58d.pth')
                     break
         
-        # 훈련 종료 시 SWA 적용
-        if agent.swa_enabled and agent.swa_weights:
-            print("\n🔄 SWA 가중치 적용 중...")
-            agent.apply_swa_weights()
-            
-            # SWA 적용 후 테스트 성능 평가
-            if test_env:
-                print("📊 SWA 적용 후 테스트 성능 평가...")
-                swa_results, swa_stats = PerformanceAnalyzer.evaluate_agent(agent, test_env, num_episodes=5)
-                print(f"   SWA 적용 후 테스트 수익률: {swa_stats['avg_return']:.3f} ({swa_stats['avg_return']*100:.1f}%)")
         
-        print(f"\n61차원 RL Decision 기반 훈련 완료!")
+        print(f"\n58차원 RL Decision 기반 훈련 완료!")
         print(f"   총 에피소드: {episode + 1}")
         print(f"   훈련 데이터 최고 승률: {best_win_rate:.3f}")
         print(f"   훈련 데이터 최종 승률: {np.mean(episode_win_rates[-50:]) if episode_win_rates else 0:.3f}")
         if test_win_rates:
             print(f"   테스트 데이터 최고 승률: {best_test_win_rate:.3f}")
             print(f"   테스트 데이터 최종 승률: {test_win_rates[-1]:.3f}")
-        print(f"   상태 차원: 61차원 (RL Decision 기반)")
-        print(f"   아키텍처: Transformer Encoder, Multi-Head Attention, Positional Encoding")
-        print(f"   정규화 기법: SWA, 엔트로피 정규화, Spectral Normalization, 적응적 드롭아웃")
+        print(f"   상태 차원: 58차원 (RL Decision 기반)")
+        print(f"   아키텍처: DuelingDQN (Value + Advantage 분리)")
+        print(f"   정규화 기법: 엔트로피 정규화, Spectral Normalization, 적응적 드롭아웃")
         
         # 테스트 데이터셋 최고 성능 모델 저장
         if test_win_rates and best_test_win_rate > 0:
@@ -1863,14 +1587,6 @@ def synchronize_data_by_timestamp(price_data: pd.DataFrame, signal_data: List[Di
     
     signal_start_time = signal_data[0]['timestamp']
     signal_end_time = signal_data[-1]['timestamp']
-    
-    # Signal 타임스탬프를 Unix timestamp로 변환
-    if hasattr(signal_start_time, 'timestamp'):
-        signal_start_timestamp = signal_start_time.timestamp()
-    elif isinstance(signal_start_time, str):
-        signal_start_timestamp = pd.to_datetime(signal_start_time).timestamp()
-    else:
-        signal_start_timestamp = float(signal_start_time)
         
     if hasattr(signal_end_time, 'timestamp'):
         signal_end_timestamp = signal_end_time.timestamp()
@@ -1889,9 +1605,6 @@ def synchronize_data_by_timestamp(price_data: pd.DataFrame, signal_data: List[Di
     if len(start_matches) == 0 or len(end_matches) == 0:
         print("❌ 정확한 타임스탬프 매칭을 찾을 수 없습니다.")
         return None, None
-    
-    start_idx = start_matches.index[0]
-    end_idx = end_matches.index[0]
     
     # Signal 데이터의 정확한 타임스탬프에 맞춰 Price 데이터 필터링
     # Signal 데이터에 있는 타임스탬프만 Price 데이터에서 선택
@@ -1943,13 +1656,13 @@ def split_data(price_data: pd.DataFrame, signal_data: List[Dict],
     return train_price, train_signal, test_price, test_signal
 
 def main():
-    """61차원 RL Decision 기반 메인 실행 함수"""
-    print("61차원 RL Decision 기반 강화학습 트레이딩 시스템")
+    """58차원 RL Decision 기반 메인 실행 함수"""
+    print("58차원 RL Decision 기반 강화학습 트레이딩 시스템")
     print("=" * 80)
     
     try:
         # 1. 데이터 로딩
-        print("\n1️⃣ 61차원용 데이터 로딩...")
+        print("\n1️⃣ 58차원용 데이터 로딩...")
         price_data = DataLoader.load_price_data()
         if price_data is None:
             print("가격 데이터 로드 실패")
@@ -1959,7 +1672,6 @@ def main():
         
         # 타임스탬프 기준으로 데이터 동기화
         price_data, signal_data = synchronize_data_by_timestamp(price_data, signal_data)
-        
         if price_data is None or signal_data is None:
             print("데이터 동기화 실패로 프로그램을 종료합니다.")
             return
@@ -1991,7 +1703,7 @@ def main():
         
         # 2. 호환성 모드로 기존 모델 로드 시도
         if not model_loaded:
-            for model_file in ['agent/final_optimized_model_61d.pth', 'agent/best_model_61d.pth']:
+            for model_file in ['agent/final_optimized_model_58d.pth', 'agent/best_model_58d.pth']:
                 if os.path.exists(model_file):
                     print(f"🔄 호환성 모드로 {model_file} 로드 시도...")
                     
@@ -2007,7 +1719,7 @@ def main():
         
         # 3. 모델 변환 시도 (기존 모델을 AdvancedProfitDQN 아키텍처로)
         if not model_loaded:
-            for model_file in ['agent/final_optimized_model_61d.pth', 'agent/best_model_61d.pth']:
+            for model_file in ['agent/final_optimized_model_58d.pth', 'agent/best_model_58d.pth']:
                 if os.path.exists(model_file):
                     print(f"🔄 모델 변환 시도: {model_file}")
                     if agent.create_compatible_model(model_file):
@@ -2016,7 +1728,7 @@ def main():
                         break
         
         if not model_loaded:
-            print("새로운 61차원 모델로 시작합니다.")
+            print("새로운 58차원 모델로 시작합니다.")
         
         # 4. 훈련 전 테스트 데이터셋 성능 평가 (베이스라인)
         print("\n4️⃣ 훈련 전 테스트 데이터셋 성능 평가...")
@@ -2025,7 +1737,7 @@ def main():
         PerformanceAnalyzer.print_performance_report(baseline_results, baseline_stats)
         
         # 5. 훈련 데이터셋으로 훈련
-        print(f"\n5️⃣ 훈련 데이터셋으로 61차원 RL Decision 기반 훈련 시작...")
+        print(f"\n5️⃣ 훈련 데이터셋으로 58차원 RL Decision 기반 훈련 시작...")
         print(f"   훈련 데이터: {len(train_price):,}개")
         print(f"   테스트 데이터: {len(test_price):,}개")
         print(f"   목표 수익률: 5%+ (수익률 중심)")
@@ -2042,20 +1754,20 @@ def main():
         
         # 7. 성능 개선도 분석
         improvement = final_stats['overall_win_rate'] - baseline_stats['overall_win_rate']
-        print(f"\n🚀 61차원 RL Decision 기반 성능 개선도 (테스트 데이터셋 기준):")
+        print(f"\n🚀 58차원 RL Decision 기반 성능 개선도 (테스트 데이터셋 기준):")
         print(f"   승률: {baseline_stats['overall_win_rate']:.3f} → {final_stats['overall_win_rate']:.3f} ({improvement:+.3f})")
         print(f"   평균 수익률: {baseline_stats['avg_return']:.3f} → {final_stats['avg_return']:.3f}")
         print(f"   Signal 활용도: 최대화됨")
         
         # 8. 최종 모델 저장
-        trained_agent.save_model('agent/final_optimized_model_61d.pth')
-        print(f"\n✅ 최종 모델이 저장되었습니다: agent/final_optimized_model_61d.pth")
+        trained_agent.save_model('agent/final_optimized_model_58d.pth')
+        print(f"\n✅ 최종 모델이 저장되었습니다: agent/final_optimized_model_58d.pth")
         
         # 9. 추가 훈련 여부 확인 (수익률 기준)
         if final_stats['avg_return'] < 0.05:  # 수익률 5% 미만
             user_input = input("\n수익률이 목표(5%)에 미달합니다. 추가 훈련을 원하시나요? (y/n): ")
             if user_input.lower() == 'y':
-                print("61차원 수익률 중심 추가 훈련 시작...")
+                print("58차원 수익률 중심 추가 훈련 시작...")
                 TrainingManager.train_agent(trained_agent, train_env, episodes=1000, test_env=test_env)
                 
                 # 추가 훈련 후 재평가
