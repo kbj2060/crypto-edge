@@ -65,24 +65,29 @@ class RewardCalculator:
         
     def calculate_reward(self, current_price: float, entry_price: float, position: float, 
                     action: str, holding_time: int, trade_pnl: Optional[float] = None) -> float:
-        """안정적인 보상 시스템"""
+        """강화된 보상 시스템 (100배 증폭 + 구간별 차등 보상)"""
         reward = 0.0
         
-        # 거래 완료 시: 수익률을 그대로 사용 (극단적 증폭 제거)
+        # 거래 완료 시: 수익률을 100배 증폭 (강한 학습 신호)
         if trade_pnl is not None:
-            reward = trade_pnl
+            reward = trade_pnl * 100  # 100배 증폭
             
-            # 수익 시 작은 보너스
-            if trade_pnl > 0:
-                reward += 0.01
-            # 손실 시 작은 페널티
-            elif trade_pnl < 0:
-                reward -= 0.01
+            # 구간별 차등 보상
+            if trade_pnl >= 0.02:  # 2% 이상 수익
+                reward += 50  # 큰 보너스
+            elif trade_pnl >= 0.01:  # 1% 이상 수익
+                reward += 20  # 중간 보너스
+            elif trade_pnl > 0:  # 양의 수익
+                reward += 5   # 작은 보너스
+            elif trade_pnl <= -0.05:  # 5% 이상 손실
+                reward -= 30  # 큰 페널티
+            elif trade_pnl < 0:  # 손실
+                reward -= 10  # 작은 페널티
         
-        # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (매우 작게)
-        elif abs(position) > 0.01 and entry_price > 0:
+        # 거래 완료가 아닌 경우: 미실현 손익 기반 보상
+        elif abs(position) > 0.0001 and entry_price > 0:  # 임계값 감소
             unrealized_pnl = self._calculate_unrealized_pnl(current_price, entry_price, position)
-            reward = unrealized_pnl * 0.1  # 매우 작은 보상
+            reward = unrealized_pnl * 10  # 10배 보상 (학습 신호 강화)
         
         return reward
     
@@ -167,9 +172,9 @@ class DuelingDQN(nn.Module):
         )
         
         # 각 액션 차원별 Advantage 헤드
-        self.position_advantage = nn.Linear(hidden_size // 4, 21)  # 포지션 -1~1 (21개 구간)
-        self.leverage_advantage = nn.Linear(hidden_size // 4, 10)  # 레버리지 1~30 (10개 구간)
-        self.holding_advantage = nn.Linear(hidden_size // 4, 20)   # 홀딩 10~120분 (20개 구간)
+        self.position_advantage = nn.Linear(hidden_size // 4, 21)  # 포지션 -0.5~0.5 (21개 구간)
+        self.leverage_advantage = nn.Linear(hidden_size // 4, 10)  # 레버리지 1~5 (10개 구간)
+        self.holding_advantage = nn.Linear(hidden_size // 4, 20)   # 홀딩 10~60분 (20개 구간)
         
         # 수익률 예측 (Value Stream 활용)
         self.profit_predictor = nn.Sequential(
@@ -184,9 +189,9 @@ class DuelingDQN(nn.Module):
         self.apply(self._init_weights)
     
     def _init_weights(self, module):
-        """Xavier 초기화"""
+        """Orthogonal 초기화 (DuelingDQN에 더 적합)"""
         if isinstance(module, nn.Linear):
-            nn.init.xavier_uniform_(module.weight)
+            nn.init.orthogonal_(module.weight)
             nn.init.constant_(module.bias, 0)
     
     def forward(self, x):
@@ -257,7 +262,7 @@ class TradingEnvironment(gym.Env):
         # 거래 제한 설정 (단타 최적화)
         self.min_trade_interval = 1  # 최소 1스텝 간격 (더 자주 거래 허용)
         self.last_trade_step = -self.min_trade_interval  # 초기값
-        self.trading_cost = 0.001  # 0.1% 거래 비용 (현실적인 비용)
+        self.trading_cost = 0.0001  # 0.01% 거래 비용 (소액 거래에 적합)
         
         # 58차원 상태 공간 (기술적 지표 + 포트폴리오 + 의사결정 특성)
         self.observation_space = spaces.Box(
@@ -519,10 +524,10 @@ class TradingEnvironment(gym.Env):
         # RL 에이전트의 결정만으로 포지션 변경 (-0.5~0.5 범위)
         target_position = np.clip(self.current_position + position_change, -0.5, 0.5)
         
-        # 포지션 변경이 필요한지 확인
-        if abs(target_position - self.current_position) > 0.001:
+        # 포지션 변경이 필요한지 확인 (임계값 대폭 감소)
+        if abs(target_position - self.current_position) > 0.0001:
             # 기존 포지션 청산 (이전 캔들의 close 가격으로 청산)
-            if abs(self.current_position) > 0.01:
+            if abs(self.current_position) > 0.0001:
                 trade_completed = True
                 if self.current_step > 0:
                     # 이전 캔들이 완성된 close 가격으로 청산
@@ -535,7 +540,7 @@ class TradingEnvironment(gym.Env):
                     self._close_position(current_price)
             
             # 새 포지션 진입 (현재 open 가격으로 진입)
-            if abs(target_position) > 0.001:
+            if abs(target_position) > 0.0001:
                 self.current_position = target_position
                 self.current_leverage = leverage
                 self.entry_price = current_price  # Open 가격으로 진입
@@ -622,8 +627,8 @@ class TradingEnvironment(gym.Env):
 class RLAgent:
     """58차원 RL Decision 기반 강화학습 에이전트"""
     
-    def __init__(self, state_size: int = 3, learning_rate: float = 1e-4, 
-                    gamma: float = 0.99, epsilon: float = 0.8, epsilon_decay: float = 0.995,
+    def __init__(self, state_size: int = 3, learning_rate: float = 3e-4, 
+                    gamma: float = 0.99, epsilon: float = 0.9, epsilon_decay: float = 0.995,
                     hidden_size: int = 128):
         
         self.state_size = state_size
@@ -632,7 +637,7 @@ class RLAgent:
         self.epsilon_decay = epsilon_decay
         self.hidden_size = hidden_size
         self.learning_rate = learning_rate  # learning_rate 속성 추가
-        self.epsilon_min = 0.2  # 20%로 설정 (더 많은 탐험)
+        self.epsilon_min = 0.1  # 10%로 설정 (적절한 탐험)
         
         # ε 값이 너무 낮으면 초기화
         if self.epsilon < self.epsilon_min:
@@ -658,8 +663,8 @@ class RLAgent:
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
         
         # 경험 리플레이 (수익률 학습 최적화)
-        self.memory = deque(maxlen=10000)  # 메모리 크기 축소 (과적합 방지)
-        self.batch_size = 64  # 배치 크기 축소 (더 안정적인 학습)
+        self.memory = deque(maxlen=20000)  # 메모리 크기 증가 (더 많은 경험)
+        self.batch_size = 128  # 배치 크기 증가 (더 안정적인 학습)
         
         # 학습 추적
         self.training_rewards = []
@@ -667,7 +672,7 @@ class RLAgent:
         self.win_rates = []
         
         # 타겟 네트워크 업데이트 (수익률 학습 최적화)
-        self.target_update_freq = 50  # 더 자주 업데이트 (안정적인 학습)
+        self.target_update_freq = 100  # 적절한 업데이트 빈도
         self.update_count = 0
         
         
@@ -765,11 +770,38 @@ class RLAgent:
             return np.array([position, leverage, holding])
     
     def replay(self):
-        """경험 리플레이 학습"""
+        """우선순위 경험 리플레이 학습"""
         if len(self.memory) < self.batch_size * 2:
             return
         
-        batch = random.sample(self.memory, self.batch_size)
+        # 우선순위 샘플링 (긍정적 경험 70%, 중립 20%, 부정 10%)
+        positive_experiences = [exp for exp in self.memory if exp.reward > 10]
+        neutral_experiences = [exp for exp in self.memory if -10 <= exp.reward <= 10]
+        negative_experiences = [exp for exp in self.memory if exp.reward < -10]
+        
+        batch = []
+        batch_size = self.batch_size
+        
+        # 긍정적 경험 70%
+        if positive_experiences:
+            pos_count = int(batch_size * 0.7)
+            batch.extend(random.sample(positive_experiences, min(pos_count, len(positive_experiences))))
+        
+        # 중립 경험 20%
+        if neutral_experiences:
+            neutral_count = int(batch_size * 0.2)
+            batch.extend(random.sample(neutral_experiences, min(neutral_count, len(neutral_experiences))))
+        
+        # 부정적 경험 10%
+        if negative_experiences:
+            neg_count = batch_size - len(batch)
+            batch.extend(random.sample(negative_experiences, min(neg_count, len(negative_experiences))))
+        
+        # 부족한 경우 랜덤 샘플링으로 채움
+        if len(batch) < batch_size:
+            remaining = batch_size - len(batch)
+            batch.extend(random.sample(self.memory, remaining))
+        
         loss = self._compute_loss(batch)
         
         # 역전파
@@ -820,17 +852,31 @@ class RLAgent:
                 recent_rewards = self.training_rewards[-20:]
                 avg_recent_reward = np.mean(recent_rewards)
                 
-                # 수익률 기반 감소 (더 보수적)
-                if avg_recent_reward > 0.1:  # 높은 수익률 (0.1% 이상)
-                    self.epsilon *= 0.98  # 더 느린 감소
-                elif avg_recent_reward > 0.05:  # 양의 수익률 (0.05% 이상)
-                    self.epsilon *= 0.99  # 매우 느린 감소
+                # 수익률 기반 감소 (새로운 보상 범위에 맞춤)
+                if avg_recent_reward > 10.0:  # 높은 수익률 (100% 이상)
+                    self.epsilon *= 0.95  # 빠른 감소
+                elif avg_recent_reward > 5.0:  # 양의 수익률 (50% 이상)
+                    self.epsilon *= 0.97  # 중간 감소
                 elif avg_recent_reward > 0:  # 약간의 수익률
-                    self.epsilon *= 0.995  # 극도로 느린 감소
+                    self.epsilon *= 0.99  # 느린 감소
                 else:  # 손실
-                    self.epsilon *= 0.999  # 거의 감소하지 않음
+                    self.epsilon *= 0.995  # 매우 느린 감소
             else:
                 self.epsilon *= 0.995  # 초기에는 매우 느린 감소
+        
+        # 적응적 학습 전략: 성과 개선이 없으면 탐험률 자동 증가
+        if len(self.training_rewards) > 50:
+            recent_rewards = self.training_rewards[-50:]
+            older_rewards = self.training_rewards[-100:-50] if len(self.training_rewards) >= 100 else self.training_rewards[:-50]
+            
+            if len(older_rewards) > 0:
+                recent_avg = np.mean(recent_rewards)
+                older_avg = np.mean(older_rewards)
+                
+                # 성과 개선이 없으면 탐험률 증가
+                if recent_avg <= older_avg:
+                    self.epsilon = min(self.epsilon * 1.01, 0.9)  # 최대 90%까지 증가
+                    print(f"📈 성과 개선 없음: 탐험률 증가 {self.epsilon:.3f}")
         
         # 타겟 네트워크 업데이트
         self.update_count += 1
@@ -849,9 +895,13 @@ class RLAgent:
         # 현재 Q값들과 수익률 예측
         current_position_q, current_leverage_q, current_holding_q, current_profit_pred = self.q_network(states)
         
-        # 타겟 Q값들
+        # Double DQN: 현재 네트워크로 액션 선택, 타겟 네트워크로 Q값 계산
         with torch.no_grad():
-            next_position_q, next_leverage_q, next_holding_q, next_profit_pred = self.target_network(next_states)
+            # 현재 네트워크로 다음 상태의 액션 선택
+            next_position_q_current, next_leverage_q_current, next_holding_q_current, _ = self.q_network(next_states)
+            
+            # 타겟 네트워크로 Q값 계산
+            next_position_q_target, next_leverage_q_target, next_holding_q_target, _ = self.target_network(next_states)
             
             target_position_q = current_position_q.clone()
             target_leverage_q = current_leverage_q.clone()
@@ -863,11 +913,18 @@ class RLAgent:
                 hold_idx = int(np.clip((action[2] - 10.0) / 2.5, 0, 19)) # 10~60분 범위
                 
                 if not done:
-                    # 수익률 기반 타겟 (더 강한 보상 가중치)
-                    target_q = reward + self.gamma * torch.max(next_position_q[i])
-                    target_position_q[i, pos_idx] = target_q
-                    target_leverage_q[i, lev_idx] = target_q
-                    target_holding_q[i, hold_idx] = target_q
+                    # Double DQN: 현재 네트워크로 선택한 액션의 타겟 네트워크 Q값 사용
+                    best_pos_action = torch.argmax(next_position_q_current[i])
+                    best_lev_action = torch.argmax(next_leverage_q_current[i])
+                    best_hold_action = torch.argmax(next_holding_q_current[i])
+                    
+                    target_q_pos = reward + self.gamma * next_position_q_target[i, best_pos_action]
+                    target_q_lev = reward + self.gamma * next_leverage_q_target[i, best_lev_action]
+                    target_q_hold = reward + self.gamma * next_holding_q_target[i, best_hold_action]
+                    
+                    target_position_q[i, pos_idx] = target_q_pos
+                    target_leverage_q[i, lev_idx] = target_q_lev
+                    target_holding_q[i, hold_idx] = target_q_hold
                 else:
                     # 최종 보상 (수익률 중심)
                     target_position_q[i, pos_idx] = reward
