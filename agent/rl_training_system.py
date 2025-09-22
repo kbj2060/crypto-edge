@@ -64,30 +64,24 @@ class RewardCalculator:
         self.baseline_return = 0.0
         
     def calculate_reward(self, current_price: float, entry_price: float, position: float, 
-                    action: str, holding_time: int, trade_pnl: Optional[float] = None) -> float:
-        """강화된 보상 시스템 (100배 증폭 + 구간별 차등 보상)"""
+                    holding_time: int, trade_pnl: Optional[float] = None) -> float:
+        """단순화된 보상 시스템 (수익률 중심)"""
         reward = 0.0
         
-        # 거래 완료 시: 수익률을 100배 증폭 (강한 학습 신호)
+        # 거래 완료 시: 수익률 기반 보상
         if trade_pnl is not None:
-            reward = trade_pnl * 100  # 100배 증폭
+            reward = trade_pnl * 1000  # 1000배 증폭으로 강한 학습 신호
             
-            # 구간별 차등 보상
-            if trade_pnl >= 0.02:  # 2% 이상 수익
-                reward += 50  # 큰 보너스
-            elif trade_pnl >= 0.01:  # 1% 이상 수익
-                reward += 20  # 중간 보너스
-            elif trade_pnl > 0:  # 양의 수익
-                reward += 5   # 작은 보너스
-            elif trade_pnl <= -0.05:  # 5% 이상 손실
-                reward -= 30  # 큰 페널티
-            elif trade_pnl < 0:  # 손실
-                reward -= 10  # 작은 페널티
+            # 수익/손실에 따른 추가 보상/페널티
+            if trade_pnl > 0:
+                reward += 50  # 수익 시 추가 보상
+            else:
+                reward -= 20  # 손실 시 페널티
         
-        # 거래 완료가 아닌 경우: 미실현 손익 기반 보상
-        elif abs(position) > 0.0001 and entry_price > 0:  # 임계값 감소
+        # 거래 완료가 아닌 경우: 미실현 손익은 매우 작은 보상만
+        elif abs(position) > 0.0001 and entry_price > 0:
             unrealized_pnl = self._calculate_unrealized_pnl(current_price, entry_price, position)
-            reward = unrealized_pnl * 10  # 10배 보상 (학습 신호 강화)
+            reward = unrealized_pnl * 5  # 매우 작은 보상 (학습 방해 방지)
         
         return reward
     
@@ -100,36 +94,13 @@ class RewardCalculator:
         price_change = (current_price - entry_price) / entry_price
         return position * price_change
     
-    def _calculate_signal_reward(self, signal_data: Dict, position: float) -> float:
-        """Signal 데이터 기반 추가 보상 - 새로운 RL 스키마 기반"""
-        signal_reward = 0.0
-        
-        # 각 시간대별 신호와 포지션 일치도
-        for timeframe in ['short_term', 'medium_term', 'long_term']:
-            action_value = float(signal_data.get(f'{timeframe}_action', 0.0))
-            net_score = float(signal_data.get(f'{timeframe}_net_score', 0.0))
-            confidence_value = float(signal_data.get(f'{timeframe}_confidence', 0.0))
-            
-            # Action value와 포지션 일치도 (action_value: -1~1, position: -1~1)
-            action_match = 1.0 - abs(action_value - position) / 2.0  # 0~1 범위
-            signal_reward += action_match * abs(net_score) * confidence_value * 0.3
-        
-        # Conflict 정보 활용
-        conflict_penalty = float(signal_data.get('conflict_conflict_penalty', 0.0))
-        conflict_consensus = float(signal_data.get('conflict_directional_consensus', 0.0))
-        
-        # Conflict가 적고 consensus가 높을 때 보상
-        if conflict_penalty == 0.0 and conflict_consensus > 0.5:
-            signal_reward += 0.2
-        
-        return signal_reward
 
 
 
 class DuelingDQN(nn.Module):
     """Dueling DQN (Value + Advantage 분리로 안정적인 학습)"""
     
-    def __init__(self, state_size: int, action_size: int = 3, hidden_size: int = 256, 
+    def __init__(self, state_size: int, hidden_size: int = 256, 
                  dropout: float = 0.1):
         super().__init__()
         
@@ -171,10 +142,8 @@ class DuelingDQN(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # 각 액션 차원별 Advantage 헤드
-        self.position_advantage = nn.Linear(hidden_size // 4, 21)  # 포지션 -0.5~0.5 (21개 구간)
-        self.leverage_advantage = nn.Linear(hidden_size // 4, 10)  # 레버리지 1~5 (10개 구간)
-        self.holding_advantage = nn.Linear(hidden_size // 4, 20)   # 홀딩 10~60분 (20개 구간)
+        # 포지션만 액션으로 사용
+        self.position_advantage = nn.Linear(hidden_size // 4, 3)  # 0: Hold, 1: Buy, 2: Sell
         
         # 수익률 예측 (Value Stream 활용)
         self.profit_predictor = nn.Sequential(
@@ -211,16 +180,11 @@ class DuelingDQN(nn.Module):
         # Advantage Stream (액션별 장점)
         advantage_features = self.advantage_stream(features)  # [batch_size, hidden_size//4]
         
-        # 각 액션 차원별 Advantage 계산
-        position_adv = self.position_advantage(advantage_features)  # [batch_size, 21]
-        leverage_adv = self.leverage_advantage(advantage_features)  # [batch_size, 10]
-        holding_adv = self.holding_advantage(advantage_features)    # [batch_size, 20]
+        # 포지션 Advantage 계산
+        position_adv = self.position_advantage(advantage_features)  # [batch_size, 3]
         
         # Dueling 구조: Q(s,a) = V(s) + A(s,a) - mean(A(s,a))
-        # 각 액션 차원별로 평균 Advantage를 빼서 안정성 확보
         position_q = value + position_adv - position_adv.mean(dim=1, keepdim=True)
-        leverage_q = value + leverage_adv - leverage_adv.mean(dim=1, keepdim=True)
-        holding_q = value + holding_adv - holding_adv.mean(dim=1, keepdim=True)
         
         # 수익률 예측 (공통 특징 활용)
         profit_pred = self.profit_predictor(features)
@@ -228,41 +192,34 @@ class DuelingDQN(nn.Module):
         # 단일 샘플이면 배치 차원 제거
         if single_sample:
             position_q = position_q.squeeze(0)
-            leverage_q = leverage_q.squeeze(0)
-            holding_q = holding_q.squeeze(0)
             profit_pred = profit_pred.squeeze(0)
         
-        return position_q, leverage_q, holding_q, profit_pred
+        return position_q, profit_pred
 
 
 
 
 
 class TradingEnvironment(gym.Env):
-    """58차원 RL Decision 기반 암호화폐 거래 강화학습 환경 (Gymnasium 호환) - Open 가격 기반"""
+    """58차원 RL Decision 기반 암호화폐 거래 강화학습 환경 (Gymnasium 호환) - 3분봉 기반"""
     
     def __init__(self, price_data: pd.DataFrame, signal_data: List[Dict], 
-                 initial_balance: float = 10000.0, max_position: float = 1.0):
+                 initial_balance: float = 10000.0):
         super().__init__()
         
         self.price_data = price_data
         self.signal_data = signal_data
         self.initial_balance = initial_balance
-        self.max_position = max_position
         
         self.reward_calculator = RewardCalculator()
         
-        # 액션/상태 스페이스 정의 (포지션 -0.5~0.5 범위로 축소)
-        self.action_space = spaces.Box(
-            low=np.array([-0.5, 1.0, 10.0]),  # 포지션 -0.5~0.5 범위로 축소
-            high=np.array([0.5, 5.0, 60.0]),  # 레버리지 1~5, 홀딩 10~60분
-            dtype=np.float32
-        )
+        # 액션/상태 스페이스 정의 (단타에 적합한 단순한 액션)
+        self.action_space = spaces.Discrete(3)  # 0: Hold, 1: Buy, 2: Sell
         
         # 거래 제한 설정 (단타 최적화)
-        self.min_trade_interval = 1  # 최소 1스텝 간격 (더 자주 거래 허용)
+        self.min_trade_interval = 3  # 최소 3스텝 간격 (9분 간격으로 거래 제한)
         self.last_trade_step = -self.min_trade_interval  # 초기값
-        self.trading_cost = 0.0001  # 0.01% 거래 비용 (소액 거래에 적합)
+        self.trading_cost = 0.0005  # 0.05% 거래 비용 (현실적인 수수료)
         
         # 58차원 상태 공간 (기술적 지표 + 포트폴리오 + 의사결정 특성)
         self.observation_space = spaces.Box(
@@ -299,23 +256,30 @@ class TradingEnvironment(gym.Env):
         
         return observation, info
     
-    def step(self, action: np.ndarray) -> Tuple[np.ndarray, float, bool, bool, Dict]:
-        """환경 스텝 실행 (Gymnasium 호환) - Open 가격 기반"""
+    def step(self, action: int) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        """환경 스텝 실행 (Gymnasium 호환) - 3분봉 기반 단순 액션"""
         if self.current_step >= min(len(self.price_data), len(self.signal_data)) - 1:
             return self._get_observation(), 0.0, True, False, {}
         
-        position_change = np.clip(action[0], -0.5, 0.5)  # 포지션 -0.5~0.5 범위
-        leverage = np.clip(action[1], 1.0, 5.0)  # 레버리지 1~5
-        target_holding_minutes = np.clip(action[2], 10.0, 60.0)  # 10분~60분
+        # 이산적인 액션 처리 (position만)
+        # 0: Hold, 1: Buy, 2: Sell
+        if action == 0:  # Hold
+            position_change = 0.0
+        elif action == 1:  # Buy
+            position_change = 1.0  # 전체 포지션을 Long으로
+        elif action == 2:  # Sell
+            position_change = -1.0  # 전체 포지션을 Short로
+        else:
+            position_change = 0.0  # 기본값은 Hold
         
-        # 현재 스텝의 open 가격 (실제 거래에서 알 수 있는 가격)
-        current_price = self.price_data.iloc[self.current_step]['open']
-        # 다음 스텝의 open 가격 (다음 캔들 시작 시점)
-        next_price = self.price_data.iloc[self.current_step + 1]['open']
+        # 현재 완성된 캔들의 close 가격 (관찰용)
+        current_close_price = self.price_data.iloc[self.current_step]['close']
+        # 다음 캔들의 open 가격 (실제 거래 실행 가격)
+        next_open_price = self.price_data.iloc[self.current_step + 1]['open']
         
-        # 포지션 및 거래 처리
+        # 포지션 및 거래 처리 (다음 캔들의 open 가격으로 실행)
         trade_completed, old_position = self._process_position_change(
-            position_change, leverage, current_price, target_holding_minutes
+            position_change, next_open_price
         )
         
         # 거래 완료 시 거래 스텝 업데이트
@@ -325,27 +289,22 @@ class TradingEnvironment(gym.Env):
         # Signal 데이터 가져오기
         current_signal = self.signal_data[self.current_step] if self.current_step < len(self.signal_data) else {}
         
-        # 보상 계산 (Signal 정보 활용) - Open 가격 기반
+        # 보상 계산 (Signal 정보 활용) - 3분봉 기반
         if trade_completed:
-            # 거래 완료 시: 실제 수익률 기반 보상 (이전 캔들의 close 가격 사용)
-            if self.current_step > 0:
-                # 이전 캔들이 완성된 close 가격으로 수익률 계산
-                prev_close_price = self.price_data.iloc[self.current_step - 1]['close']
+            # 거래 완료 시: 실제 수익률 기반 보상 (현재 완성된 close 가격 사용)
             reward = self.reward_calculator.calculate_reward(
-                    current_price=prev_close_price,  # 완성된 close 가격 사용
+                current_price=current_close_price,  # 현재 완성된 close 가격 사용
                 entry_price=self.entry_price,
                 position=old_position,  # 거래 전 포지션 사용
-                action='TRADE',
                 holding_time=self.holding_time,
                 trade_pnl=self.last_trade_pnl
             )
         else:
-            # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (현재 open 가격 사용)
+            # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (현재 close 가격 사용)
             reward = self.reward_calculator.calculate_reward(
-                current_price=current_price,  # 현재 open 가격 사용
+                current_price=current_close_price,  # 현재 완성된 close 가격 사용
                 entry_price=self.entry_price,
                 position=self.current_position,
-                action='HOLD',
                 holding_time=self.holding_time,
                 trade_pnl=None
             )
@@ -363,14 +322,14 @@ class TradingEnvironment(gym.Env):
         return self._get_observation(), reward, done, truncated, info
     
     def _get_observation(self) -> np.ndarray:
-        """58차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성) - Open 가격 기반"""
+        """58차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성) - 3분봉 기반"""
         if self.current_step >= min(len(self.price_data), len(self.signal_data)):
             return np.zeros(58, dtype=np.float32)
         
-        # 현재 가격과 이전 가격 비교 (3차원) - Open 가격 사용
-        current_price = self.price_data.iloc[self.current_step]['open']
+        # 현재 완성된 캔들의 close 가격과 이전 close 가격 비교 (3차원)
+        current_price = self.price_data.iloc[self.current_step]['close']
         if self.current_step > 0:
-            prev_price = self.price_data.iloc[self.current_step - 1]['open']
+            prev_price = self.price_data.iloc[self.current_step - 1]['close']
             price_change = (current_price - prev_price) / prev_price
         else:
             price_change = 0.0
@@ -401,8 +360,8 @@ class TradingEnvironment(gym.Env):
         return observation
     
     def _extract_price_indicators(self, signal_data: Dict, current_candle: Dict) -> np.ndarray:
-        """Signal의 indicator들을 price feature로 활용 (20차원) - Open 가격 기반"""
-        current_price = current_candle['open']  # Open 가격 사용
+        """Signal의 indicator들을 price feature로 활용 (20차원) - 3분봉 기반"""
+        current_price = current_candle['close']  # 완성된 close 가격 사용
         
         # 1. 가격 대비 지표 위치
         vwap = signal_data.get('indicator_vwap')
@@ -515,35 +474,33 @@ class TradingEnvironment(gym.Env):
         )
     
     
-    def _process_position_change(self, position_change: float, leverage: float, 
-                                current_price: float, target_holding_minutes: float) -> Tuple[bool, float]:
-        """포지션 변경 처리 (순수 RL 에이전트 결정) - Open 가격 기반"""
+    def _process_position_change(self, position_change: float, current_price: float) -> Tuple[bool, float]:
+        """포지션 변경 처리 (position만) - 3분봉 기반"""
         old_position = self.current_position
         trade_completed = False
         
-        # RL 에이전트의 결정만으로 포지션 변경 (-0.5~0.5 범위)
-        target_position = np.clip(self.current_position + position_change, -0.5, 0.5)
+        # 단순한 액션 처리: 전체 포지션을 즉시 변경
+        target_position = position_change  # -1.0, 0.0, 1.0 중 하나
         
-        # 포지션 변경이 필요한지 확인 (임계값 대폭 감소)
+        # 거래 간격 체크 (너무 자주 거래하지 않도록)
+        if self.current_step - self.last_trade_step < self.min_trade_interval:
+            return False, old_position  # 거래 간격이 너무 짧으면 거래하지 않음
+        
+        # 포지션 변경이 필요한지 확인
         if abs(target_position - self.current_position) > 0.0001:
-            # 기존 포지션 청산 (이전 캔들의 close 가격으로 청산)
+            # 기존 포지션 청산 (현재 완성된 close 가격으로 청산)
             if abs(self.current_position) > 0.0001:
                 trade_completed = True
-                if self.current_step > 0:
-                    # 이전 캔들이 완성된 close 가격으로 청산
-                    prev_close_price = self.price_data.iloc[self.current_step - 1]['close']
-                    self.last_trade_pnl = self._calculate_trade_pnl(prev_close_price, self.entry_price, old_position)
-                    self._close_position(prev_close_price)
-                else:
-                    # 첫 번째 스텝에서는 현재 open 가격 사용
-                    self.last_trade_pnl = self._calculate_trade_pnl(current_price, self.entry_price, old_position)
-                    self._close_position(current_price)
+                # 현재 완성된 close 가격으로 청산
+                current_close_price = self.price_data.iloc[self.current_step]['close']
+                self.last_trade_pnl = self._calculate_trade_pnl(current_close_price, self.entry_price, old_position)
+                self._close_position(current_close_price)
             
-            # 새 포지션 진입 (현재 open 가격으로 진입)
+            # 새 포지션 진입 (다음 캔들의 open 가격으로 진입)
             if abs(target_position) > 0.0001:
                 self.current_position = target_position
-                self.current_leverage = leverage
-                self.entry_price = current_price  # Open 가격으로 진입
+                self.current_leverage = 2.0  # 고정 레버리지 2배
+                self.entry_price = current_price  # 다음 캔들의 open 가격으로 진입
                 self.holding_time = 0
                 self.in_position = True
                 
@@ -601,8 +558,8 @@ class TradingEnvironment(gym.Env):
             self.max_drawdown = max(self.max_drawdown, drawdown)
     
     def _create_info_dict(self) -> Dict:
-        """정보 딕셔너리 생성 - Open 가격 기반"""
-        current_price = self.price_data.iloc[min(self.current_step, len(self.price_data)-1)]['open']
+        """정보 딕셔너리 생성 - 3분봉 기반"""
+        current_price = self.price_data.iloc[min(self.current_step, len(self.price_data)-1)]['close']
         
         return {
             'balance': self.balance,
@@ -627,8 +584,8 @@ class TradingEnvironment(gym.Env):
 class RLAgent:
     """58차원 RL Decision 기반 강화학습 에이전트"""
     
-    def __init__(self, state_size: int = 3, learning_rate: float = 3e-4, 
-                    gamma: float = 0.99, epsilon: float = 0.9, epsilon_decay: float = 0.995,
+    def __init__(self, state_size: int = 3, learning_rate: float = 1e-3, 
+                    gamma: float = 0.99, epsilon: float = 0.5, epsilon_decay: float = 0.995,
                     hidden_size: int = 128):
         
         self.state_size = state_size
@@ -657,14 +614,14 @@ class RLAgent:
         
         # 네트워크 초기화 (DuelingDQN 사용 - Value + Advantage 분리로 안정적인 학습)
         print("🚀 DuelingDQN 아키텍처 사용 (Value + Advantage 분리로 안정적인 학습)")
-        self.q_network = DuelingDQN(state_size, 3, hidden_size).to(self.device)
-        self.target_network = DuelingDQN(state_size, 3, hidden_size).to(self.device)
+        self.q_network = DuelingDQN(state_size, hidden_size).to(self.device)
+        self.target_network = DuelingDQN(state_size, hidden_size).to(self.device)
         
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
         
         # 경험 리플레이 (수익률 학습 최적화)
-        self.memory = deque(maxlen=20000)  # 메모리 크기 증가 (더 많은 경험)
-        self.batch_size = 128  # 배치 크기 증가 (더 안정적인 학습)
+        self.memory = deque(maxlen=10000)  # 메모리 크기 조정
+        self.batch_size = 64  # 배치 크기 조정 (더 안정적인 학습)
         
         # 학습 추적
         self.training_rewards = []
@@ -679,8 +636,8 @@ class RLAgent:
         # 액션 공간 설정 (환경에서 가져옴)
         self.action_space = None  # 환경에서 설정됨
     
-    def remember(self, state, action, reward, next_state, done):
-        """경험 저장"""
+    def remember(self, state, action: int, reward, next_state, done):
+        """경험 저장 (단순 액션)"""
         self.memory.append(Experience(state, action, reward, next_state, done))
     
     
@@ -706,15 +663,15 @@ class RLAgent:
         for param_group in self.optimizer.param_groups:
             param_group['lr'] = self.learning_rate
     
-    def act(self, state: np.ndarray) -> np.ndarray:
-        """액션 선택 - 향상된 탐험 전략"""
+    def act(self, state: np.ndarray) -> int:
+        """액션 선택 - 향상된 탐험 전략 (단순 액션)"""
         if np.random.random() <= self.epsilon:
             return self._get_smart_random_action(state)
         
         return self._get_greedy_action(state)
     
-    def _get_smart_random_action(self, state: np.ndarray) -> np.ndarray:
-        """지능적인 랜덤 액션 - 상태에 기반한 제한적 탐험"""
+    def _get_smart_random_action(self, state: np.ndarray) -> int:
+        """지능적인 랜덤 액션 - 상태에 기반한 제한적 탐험 (단순 액션)"""
         # 기본 랜덤 액션
         action = self._get_random_action()
         
@@ -725,49 +682,47 @@ class RLAgent:
                 # 최근 성공한 액션 패턴 분석
                 successful_actions = [exp.action for exp in recent_trades]
                 if successful_actions:
-                    # 성공한 액션과 유사한 방향으로 탐험
-                    base_action = np.mean(successful_actions, axis=0)
-                    noise = np.random.normal(0, 0.1, action.shape)
+                    # 성공한 액션의 빈도 계산
+                    action_counts = [0, 0, 0]  # Hold, Buy, Sell
+                    for act in successful_actions:
+                        if isinstance(act, (list, np.ndarray)):
+                            # 기존 연속 액션에서 단순 액션으로 변환
+                            if len(act) > 0:
+                                if act[0] > 0.3:  # Buy
+                                    action_counts[1] += 1
+                                elif act[0] < -0.3:  # Sell
+                                    action_counts[2] += 1
+                                else:  # Hold
+                                    action_counts[0] += 1
+                        else:
+                            # 이미 단순 액션인 경우
+                            if 0 <= act <= 2:
+                                action_counts[act] += 1
                     
-                    # action_space가 있을 때만 클리핑 적용
-                    if self.action_space is not None:
-                        action = np.clip(base_action + noise, 
-                                       self.action_space.low, 
-                                       self.action_space.high)
-                    else:
-                        # 기본 클리핑 (position_change, leverage, holding_time)
-                        action = np.clip(base_action + noise, 
-                                       [-0.5, 1.0, 10.0], 
-                                       [0.5, 5.0, 60.0])
+                    # 가장 성공한 액션을 기반으로 선택
+                    if max(action_counts) > 0:
+                        # 성공한 액션 중에서 랜덤하게 선택 (가중치 적용)
+                        total_success = sum(action_counts)
+                        probabilities = [count / total_success for count in action_counts]
+                        action = np.random.choice(3, p=probabilities)
         
         return action
     
-    def _get_random_action(self) -> np.ndarray:
-        """보수적인 랜덤 액션"""
-        return np.array([
-            np.random.uniform(-0.5, 0.5),  # 포지션 범위 축소
-            np.random.uniform(1.0, 5.0), # 레버리지 최대 5
-            np.random.uniform(10.0, 60.0) # 홀딩 시간 축소
-        ])
+    def _get_random_action(self) -> int:
+        """랜덤 액션 (단순 액션)"""
+        return np.random.randint(0, 3)  # 0: Hold, 1: Buy, 2: Sell
     
-    def _get_greedy_action(self, state: np.ndarray) -> np.ndarray:
-        """Q값 기반 탐욕적 액션 선택 (수익률 최적화)"""
+    def _get_greedy_action(self, state: np.ndarray) -> int:
+        """Q값 기반 탐욕적 액션 선택 (position만)"""
         state_tensor = torch.FloatTensor(state).unsqueeze(0).to(self.device)
         
         with torch.no_grad():
-            position_q, leverage_q, holding_q, profit_pred = self.q_network(state_tensor)
+            position_q, profit_pred = self.q_network(state_tensor)
             
-            # 수익률 예측을 고려한 액션 선택
-            position_idx = torch.argmax(position_q).item()
-            leverage_idx = torch.argmax(leverage_q).item()
-            holding_idx = torch.argmax(holding_q).item()
+            # 단순 액션 선택: position_q만 사용 (Hold, Buy, Sell)
+            action = torch.argmax(position_q).item()  # 0, 1, 2 중 하나
             
-            # 인덱스를 실제 값으로 변환 (-0.5~0.5 범위)
-            position = -0.5 + (position_idx * 0.05)   # -0.5~0.5 (21개 구간)
-            leverage = 1.0 + (leverage_idx * 0.4)   # 1.0~5.0 (10개 구간)
-            holding = 10.0 + (holding_idx * 2.5)    # 10~60분 (20개 구간)
-            
-            return np.array([position, leverage, holding])
+            return action
     
     def replay(self):
         """우선순위 경험 리플레이 학습"""
@@ -893,48 +848,46 @@ class RLAgent:
         dones = [bool(e.done) for e in batch]
         
         # 현재 Q값들과 수익률 예측
-        current_position_q, current_leverage_q, current_holding_q, current_profit_pred = self.q_network(states)
+        current_position_q, current_profit_pred = self.q_network(states)
         
         # Double DQN: 현재 네트워크로 액션 선택, 타겟 네트워크로 Q값 계산
         with torch.no_grad():
             # 현재 네트워크로 다음 상태의 액션 선택
-            next_position_q_current, next_leverage_q_current, next_holding_q_current, _ = self.q_network(next_states)
+            next_position_q_current, _ = self.q_network(next_states)
             
             # 타겟 네트워크로 Q값 계산
-            next_position_q_target, next_leverage_q_target, next_holding_q_target, _ = self.target_network(next_states)
+            next_position_q_target, _ = self.target_network(next_states)
             
             target_position_q = current_position_q.clone()
-            target_leverage_q = current_leverage_q.clone()
-            target_holding_q = current_holding_q.clone()
             
             for i, (action, reward, done) in enumerate(zip(actions, rewards, dones)):
-                pos_idx = int(np.clip((action[0] + 0.5) / 0.05, 0, 20))   # -0.5~0.5 범위
-                lev_idx = int(np.clip((action[1] - 1.0) / 0.4, 0, 9))    # 1.0~5.0 범위
-                hold_idx = int(np.clip((action[2] - 10.0) / 2.5, 0, 19)) # 10~60분 범위
+                # 단순 액션 처리: action은 0, 1, 2 중 하나
+                if isinstance(action, (list, np.ndarray)):
+                    # 기존 연속 액션에서 단순 액션으로 변환
+                    if len(action) > 0:
+                        if action[0] > 0.3:  # Buy
+                            action_idx = 1
+                        elif action[0] < -0.3:  # Sell
+                            action_idx = 2
+                        else:  # Hold
+                            action_idx = 0
+                    else:
+                        action_idx = 0  # 기본값 Hold
+                else:
+                    # 이미 단순 액션인 경우
+                    action_idx = int(action) if 0 <= action <= 2 else 0
                 
                 if not done:
                     # Double DQN: 현재 네트워크로 선택한 액션의 타겟 네트워크 Q값 사용
-                    best_pos_action = torch.argmax(next_position_q_current[i])
-                    best_lev_action = torch.argmax(next_leverage_q_current[i])
-                    best_hold_action = torch.argmax(next_holding_q_current[i])
-                    
-                    target_q_pos = reward + self.gamma * next_position_q_target[i, best_pos_action]
-                    target_q_lev = reward + self.gamma * next_leverage_q_target[i, best_lev_action]
-                    target_q_hold = reward + self.gamma * next_holding_q_target[i, best_hold_action]
-                    
-                    target_position_q[i, pos_idx] = target_q_pos
-                    target_leverage_q[i, lev_idx] = target_q_lev
-                    target_holding_q[i, hold_idx] = target_q_hold
+                    best_action = torch.argmax(next_position_q_current[i])
+                    target_q = reward + self.gamma * next_position_q_target[i, best_action]
+                    target_position_q[i, action_idx] = target_q
                 else:
                     # 최종 보상 (수익률 중심)
-                    target_position_q[i, pos_idx] = reward
-                    target_leverage_q[i, lev_idx] = reward
-                    target_holding_q[i, hold_idx] = reward
+                    target_position_q[i, action_idx] = reward
         
-        # Q-learning 손실 (수익률 가중치 적용)
+        # Q-learning 손실 (position만)
         pos_loss = F.smooth_l1_loss(current_position_q, target_position_q)
-        lev_loss = F.smooth_l1_loss(current_leverage_q, target_leverage_q)
-        hold_loss = F.smooth_l1_loss(current_holding_q, target_holding_q)
         
         # 수익률 예측 손실 (보조 학습)
         profit_targets = rewards.unsqueeze(1)  # 실제 수익률을 타겟으로
@@ -943,15 +896,11 @@ class RLAgent:
         # 엔트로피 정규화 (과적합 방지)
         position_entropy = -torch.sum(F.softmax(current_position_q, dim=1) * 
                                     F.log_softmax(current_position_q, dim=1), dim=1).mean()
-        leverage_entropy = -torch.sum(F.softmax(current_leverage_q, dim=1) * 
-                                    F.log_softmax(current_leverage_q, dim=1), dim=1).mean()
-        holding_entropy = -torch.sum(F.softmax(current_holding_q, dim=1) * 
-                                   F.log_softmax(current_holding_q, dim=1), dim=1).mean()
         
-        entropy_reg = 0.01 * (position_entropy + leverage_entropy + holding_entropy)
+        entropy_reg = 0.01 * position_entropy
         
         # 수익률 중심 가중치 (수익률 예측에 더 높은 가중치)
-        total_loss = (pos_loss + lev_loss + hold_loss) + 2.0 * profit_loss + entropy_reg
+        total_loss = pos_loss + 2.0 * profit_loss + entropy_reg
         
         return total_loss
     
@@ -1135,7 +1084,7 @@ class RLAgent:
             old_state_dict = checkpoint['q_network']
             
             # 새로운 DuelingDQN 모델 생성
-            new_model = DuelingDQN(self.state_size, 3, self.hidden_size).to(self.device)
+            new_model = DuelingDQN(self.state_size, self.hidden_size).to(self.device)
             new_state_dict = new_model.state_dict()
             
             # 호환 가능한 가중치만 복사
@@ -1153,7 +1102,7 @@ class RLAgent:
             
             # 현재 에이전트의 네트워크 교체
             self.q_network = new_model
-            self.target_network = DuelingDQN(self.state_size, 3, self.hidden_size).to(self.device)
+            self.target_network = DuelingDQN(self.state_size, self.hidden_size).to(self.device)
             self.target_network.load_state_dict(compatible_weights)
             
             print(f"✅ DuelingDQN 아키텍처로 변환 완료!")
@@ -1462,6 +1411,7 @@ class TrainingManager:
         
         for episode in range(episodes):
             state, _ = train_env.reset()
+            episode_start_balance = train_env.balance  # 에피소드 시작 잔고 추적
             total_reward = 0
             episode_trades = []
             steps = 0
@@ -1491,9 +1441,8 @@ class TrainingManager:
             episode_win_rates.append(episode_win_rate)
             
             # 훈련 데이터 수익률 계산 (잔고 변화 기반)
-            initial_balance = train_env.initial_balance  # 환경의 실제 초기 잔고 사용
-            final_balance = info.get('balance', initial_balance)
-            episode_return = (final_balance - initial_balance) / initial_balance
+            final_balance = info.get('balance', episode_start_balance)
+            episode_return = (final_balance - episode_start_balance) / episode_start_balance
             episode_returns.append(episode_return)
             
             agent.training_rewards.append(total_reward)
