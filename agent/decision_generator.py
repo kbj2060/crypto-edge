@@ -411,6 +411,7 @@ def generate_signal_data_with_indicators(
             # 현재 캔들 데이터
             series_3m = price_data.iloc[i]
             current_time = price_data.index[i]
+            print(series_3m, current_time)
             
             # 데이터 매니저에 캔들 데이터 업데이트
             data_manager.update_with_candle(series_3m)
