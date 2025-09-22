@@ -65,24 +65,29 @@ class RewardCalculator:
         self.baseline_return = 0.0
         
     def calculate_reward(self, current_price: float, entry_price: float, position: float, 
-                    action: str, holding_time: int, signal_data: Dict = None,
-                    trade_pnl: Optional[float] = None) -> float:
-        """수익률과 일치하는 보상 계산"""
+                    action: str, holding_time: int, trade_pnl: Optional[float] = None) -> float:
+        """극단적으로 단순화된 보상 시스템"""
         reward = 0.0
         
-        # 거래 완료 시: 실제 수익률 기반 보상
+        # 거래 완료 시: 단순한 수익률 기반 보상
         if trade_pnl is not None:
-            # 수익률을 직접 보상으로 사용 (100배 증폭으로 조정)
+            # 수익률을 100배 증폭 (단순화)
             reward = trade_pnl * 100
+            
+            # 수익 시 작은 보너스
+            if trade_pnl > 0:
+                reward += 10
+            # 손실 시 작은 페널티
+            elif trade_pnl < 0:
+                reward -= 10
         
-        # 거래 완료가 아닌 경우: 미실현 손익 기반 보상
+        # 거래 완료가 아닌 경우: 미실현 손익 기반 보상 (매우 작게)
         elif abs(position) > 0.01 and entry_price > 0:
-            # 미실현 손익 계산
             unrealized_pnl = self._calculate_unrealized_pnl(current_price, entry_price, position)
-            # 미실현 손익도 보상에 반영 (더 작은 가중치)
-            reward = unrealized_pnl * 50
+            reward = unrealized_pnl * 10  # 매우 작은 보상
         
         return reward
+    
     
     def _calculate_unrealized_pnl(self, current_price: float, entry_price: float, position: float) -> float:
         """미실현 손익 계산"""
@@ -163,6 +168,71 @@ class MultiHeadAttentionBlock(nn.Module):
         output = self.layer_norm(x + output)
         
         return output
+
+class SimpleDQN(nn.Module):
+    """단순하고 안정적인 DQN (과적합 방지)"""
+    
+    def __init__(self, state_size: int, action_size: int = 3, hidden_size: int = 128):
+        super().__init__()
+        
+        self.state_size = state_size
+        self.hidden_size = hidden_size
+        
+        # 단순한 피드포워드 네트워크
+        self.fc1 = nn.Linear(state_size, hidden_size)
+        self.fc2 = nn.Linear(hidden_size, hidden_size)
+        self.fc3 = nn.Linear(hidden_size, hidden_size // 2)
+        
+        # 액션 헤드들
+        self.position_head = nn.Linear(hidden_size // 2, 21)
+        self.leverage_head = nn.Linear(hidden_size // 2, 10)
+        self.holding_head = nn.Linear(hidden_size // 2, 20)
+        
+        # 수익률 예측
+        self.profit_predictor = nn.Linear(hidden_size // 2, 1)
+        
+        # 드롭아웃
+        self.dropout = nn.Dropout(0.1)
+        
+        # 가중치 초기화
+        self.apply(self._init_weights)
+    
+    def _init_weights(self, module):
+        """Xavier 초기화"""
+        if isinstance(module, nn.Linear):
+            nn.init.xavier_uniform_(module.weight)
+            nn.init.constant_(module.bias, 0)
+    
+    def forward(self, x):
+        # 배치 차원 확인
+        if x.dim() == 1:
+            x = x.unsqueeze(0)
+            single_sample = True
+        else:
+            single_sample = False
+        
+        # 피드포워드
+        x = F.relu(self.fc1(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc2(x))
+        x = self.dropout(x)
+        x = F.relu(self.fc3(x))
+        x = self.dropout(x)
+        
+        # 각 액션 차원별 Q값
+        position_q = self.position_head(x)
+        leverage_q = self.leverage_head(x)
+        holding_q = self.holding_head(x)
+        profit_pred = self.profit_predictor(x)
+        
+        # 단일 샘플이면 배치 차원 제거
+        if single_sample:
+            position_q = position_q.squeeze(0)
+            leverage_q = leverage_q.squeeze(0)
+            holding_q = holding_q.squeeze(0)
+            profit_pred = profit_pred.squeeze(0)
+        
+        return position_q, leverage_q, holding_q, profit_pred
 
 class TransformerDQN(nn.Module):
     """Transformer 기반 DQN (과적합 방지 + 강력한 표현력)"""
@@ -400,22 +470,22 @@ class TradingEnvironment(gym.Env):
         
         self.reward_calculator = RewardCalculator()
         
-        # 액션/상태 스페이스 정의 (단순화 - 과적합 방지)
+        # 액션/상태 스페이스 정의 (포지션 -1~1 범위)
         self.action_space = spaces.Box(
-            low=np.array([-2.0, 1.0, 30.0]),  # 단순화된 범위
-            high=np.array([2.0, 10.0, 200.0]),  # 단순화된 범위
+            low=np.array([-1.0, 1.0, 10.0]),  # 포지션 -1~1 범위
+            high=np.array([1.0, 30.0, 120.0]),  # 레버리지 1~30, 홀딩 10~120분
             dtype=np.float32
         )
         
         # 거래 제한 설정 (단타 최적화)
         self.min_trade_interval = 1  # 최소 1스텝 간격 (더 자주 거래 허용)
         self.last_trade_step = -self.min_trade_interval  # 초기값
-        self.trading_cost = 0.0001  # 0.01% 거래 비용 (수익성 대폭 개선)
+        self.trading_cost = 0.0001  # 0.01% 거래 비용 (더 낮은 비용)
         
-        # 3차원 상태 공간 (매우 단순화)
+        # 58차원 상태 공간 (기술적 지표 + 포트폴리오 + 의사결정 특성)
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
-            shape=(3,),  # [가격변화율, 포지션, 잔고비율] = 3차원
+            shape=(58,),  # 3 + 20 + 9 + 26 = 58차원
             dtype=np.float32
         )
         
@@ -426,7 +496,7 @@ class TradingEnvironment(gym.Env):
         if seed is not None:
             np.random.seed(seed)
         
-        self.current_step = 20
+        self.current_step = 10
         self.balance = self.initial_balance
         self.current_position = 0.0
         self.current_leverage = 1.0
@@ -452,18 +522,9 @@ class TradingEnvironment(gym.Env):
         if self.current_step >= min(len(self.price_data), len(self.signal_data)) - 1:
             return self._get_observation(), 0.0, True, False, {}
         
-        position_change = np.clip(action[0], -2.0, 2.0)
-        leverage = np.clip(action[1], 1.0, 10.0)  # 레버리지 최대 10으로 제한
-        target_holding_minutes = np.clip(action[2], 30.0, 200.0)  # 30분~200분
-        
-        # 거래 간격 제한 완화 (더 자주 거래 허용)
-        steps_since_last_trade = self.current_step - self.last_trade_step
-        if steps_since_last_trade < 1 and abs(position_change) > 0.05:  # 1스텝만 대기
-            position_change = 0.0  # 최소 간격만 유지
-        
-        # 단타를 위한 연속 거래 허용 (조건부)
-        # if abs(position_change) > 0.05 and self.in_position:
-        #     position_change = 0.0  # 포지션이 있을 때는 거래 차단
+        position_change = np.clip(action[0], -1.0, 1.0)  # 포지션 -1~1 범위
+        leverage = np.clip(action[1], 1.0, 30.0)  # 레버리지 1~30
+        target_holding_minutes = np.clip(action[2], 10.0, 120.0)  # 10분~120분
         
         current_price = self.price_data.iloc[self.current_step]['close']
         next_price = self.price_data.iloc[self.current_step + 1]['close']
@@ -489,7 +550,6 @@ class TradingEnvironment(gym.Env):
                 position=old_position,  # 거래 전 포지션 사용
                 action='TRADE',
                 holding_time=self.holding_time,
-                signal_data=current_signal,
                 trade_pnl=self.last_trade_pnl
             )
         else:
@@ -500,18 +560,13 @@ class TradingEnvironment(gym.Env):
                 position=self.current_position,
                 action='HOLD',
                 holding_time=self.holding_time,
-                signal_data=current_signal,
                 trade_pnl=None
             )
         
         # 다음 스텝으로 이동
         self.current_step += 1
         self.holding_time += 3
-        
-        # 홀딩 시간 초과시 강제 청산
-        if self.in_position and self.holding_time >= target_holding_minutes:
-            self._close_position(next_price)
-        
+                
         done = (self.current_step >= min(len(self.price_data), len(self.signal_data)) - 1 or 
                 self.balance <= self.initial_balance * 0.1)
         
@@ -521,11 +576,11 @@ class TradingEnvironment(gym.Env):
         return self._get_observation(), reward, done, truncated, info
     
     def _get_observation(self) -> np.ndarray:
-        """3차원 상태 관찰값 반환 (매우 단순화)"""
+        """58차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성)"""
         if self.current_step >= min(len(self.price_data), len(self.signal_data)):
-            return np.zeros(3, dtype=np.float32)
+            return np.zeros(58, dtype=np.float32)
         
-        # 현재 가격과 이전 가격 비교
+        # 현재 가격과 이전 가격 비교 (3차원)
         current_price = self.price_data.iloc[self.current_step]['close']
         if self.current_step > 0:
             prev_price = self.price_data.iloc[self.current_step - 1]['close']
@@ -533,11 +588,27 @@ class TradingEnvironment(gym.Env):
         else:
             price_change = 0.0
         
-        # 3차원 상태: [가격변화율, 현재포지션, 잔고비율]
-        observation = np.array([
+        basic_observation = np.array([
             price_change,  # 가격 변화율
             self.current_position,  # 현재 포지션 (-1~1)
             self.balance / self.initial_balance  # 잔고 비율
+        ], dtype=np.float32)
+        
+        # Signal 데이터 가져오기
+        current_signal = self.signal_data[self.current_step] if self.current_step < len(self.signal_data) else {}
+        current_candle = self.price_data.iloc[self.current_step].to_dict()
+        
+        # 각 차원별 특성 추출
+        price_indicators = self._extract_price_indicators(current_signal, current_candle)  # 20차원
+        portfolio_state = self._get_portfolio_state()  # 9차원
+        decision_features = self._extract_decision_features(current_signal)  # 26차원
+        
+        # 모든 차원 결합 (3 + 20 + 9 + 26 = 58차원)
+        observation = np.concatenate([
+            basic_observation,      # 3차원
+            price_indicators,       # 20차원
+            portfolio_state,        # 9차원
+            decision_features       # 26차원
         ], dtype=np.float32)
         
         return observation
@@ -547,20 +618,20 @@ class TradingEnvironment(gym.Env):
         current_price = current_candle['close']
         
         # 1. 가격 대비 지표 위치
-        vwap = signal_data.get('indicator_vwap', current_price)
-        poc = signal_data.get('indicator_poc', current_price)  
-        hvn = signal_data.get('indicator_hvn', current_price)
-        lvn = signal_data.get('indicator_lvn', current_price)
+        vwap = signal_data.get('indicator_vwap')
+        poc = signal_data.get('indicator_poc')  
+        hvn = signal_data.get('indicator_hvn')
+        lvn = signal_data.get('indicator_lvn')
         
         # 2. 변동성 지표들
         atr = signal_data.get('indicator_atr', 0.0)
         vwap_std = signal_data.get('indicator_vwap_std', 0.0)
         
         # 3. 일별 기준점들
-        prev_high = signal_data.get('indicator_prev_day_high', current_price)
-        prev_low = signal_data.get('indicator_prev_day_low', current_price)
-        or_high = signal_data.get('indicator_opening_range_high', current_price)
-        or_low = signal_data.get('indicator_opening_range_low', current_price)
+        prev_high = signal_data.get('indicator_prev_day_high')
+        prev_low = signal_data.get('indicator_prev_day_low')
+        or_high = signal_data.get('indicator_opening_range_high')
+        or_low = signal_data.get('indicator_opening_range_low')
         
         prev_range = prev_high - prev_low
         prev_day_position = (current_price - prev_low) / prev_range if prev_range > 0 else 0.5
@@ -570,7 +641,7 @@ class TradingEnvironment(gym.Env):
         
         # 4. 현재 캔들 정보
         high, low, close, open_price = current_candle['high'], current_candle['low'], current_candle['close'], current_candle['open']
-        quote_volume = current_candle.get('quote_volume', 0)
+        quote_volume = current_candle.get('quote_volume')
         
         return np.array([
             # 가격 대비 지표 위치 (4개)
@@ -604,56 +675,6 @@ class TradingEnvironment(gym.Env):
             abs(close - open_price) / (high - low) if high > low else 0.0
         ], dtype=np.float32)
     
-    def _extract_technical_scores(self, signals: Dict) -> np.ndarray:
-        """각 전략의 raw score들 (25차원) - 새로운 RL 스키마 기반"""
-        # 새로운 RL 스키마에서 사용 가능한 점수들 수집
-        score_fields = []
-        
-        # 각 시간대별 점수들
-        # for timeframe in ['short_term', 'medium_term', 'long_term']:
-        #     score_fields.extend([
-        #         f'{timeframe}_net_score',
-        #         f'{timeframe}_buy_score', 
-        #         f'{timeframe}_sell_score',
-        #         f'{timeframe}_confidence',
-        #         f'{timeframe}_market_context'
-        #     ])
-        
-        # Conflict 관련 점수들 (중복 제거 - Decision Features에서 처리)
-        # score_fields.extend([
-        #     'conflict_conflict_severity',
-        #     'conflict_directional_consensus',
-        #     'conflict_conflict_penalty',
-        #     'conflict_consensus_bonus',
-        #     'conflict_diversity_bonus'
-        # ])
-        
-        # Indicator 관련 점수들
-        indicator_fields = [
-            'indicator_vwap', 'indicator_atr', 'indicator_poc', 
-            'indicator_hvn', 'indicator_lvn', 'indicator_vwap_std'
-        ]
-        
-        # 수집된 점수들 정규화
-        all_scores = []
-        for field in score_fields + indicator_fields:
-            value = signals.get(field)
-            try:
-                score = float(value)
-                # 정규화 (대부분 0~1 범위로 가정)
-                if 'indicator_' in field:
-                    # Indicator는 가격 대비 비율로 정규화
-                    score = min(abs(score) / 1000.0, 1.0)  # 가격 대비 0.1% 단위
-                all_scores.append(score)
-            except:
-                all_scores.append(0.0)
-        
-        # 6차원으로 맞추기 (Indicator만 사용)
-        if len(all_scores) >= 6:
-            return np.array(all_scores[:6], dtype=np.float32)
-        else:
-            return np.array(all_scores + [0.0] * (6 - len(all_scores)), dtype=np.float32)
-    
     def _get_portfolio_state(self) -> np.ndarray:
         """포트폴리오 상태 정보 (9차원)"""
         return np.array([
@@ -674,26 +695,26 @@ class TradingEnvironment(gym.Env):
         timeframe_features = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
             # 새로운 RL 스키마 필드들 사용
-            action_value = float(signals.get(f'{timeframe}_action', 0.0))
-            net_score = float(signals.get(f'{timeframe}_net_score', 0.0))
-            buy_score = float(signals.get(f'{timeframe}_buy_score', 0.0))
-            sell_score = float(signals.get(f'{timeframe}_sell_score', 0.0))
-            confidence_value = float(signals.get(f'{timeframe}_confidence', 0.0))
-            market_context_value = float(signals.get(f'{timeframe}_market_context', 0.0))
+            action_value = float(signals.get(f'{timeframe}_action'))
+            net_score = float(signals.get(f'{timeframe}_net_score'))
+            buy_score = float(signals.get(f'{timeframe}_buy_score'))
+            sell_score = float(signals.get(f'{timeframe}_sell_score'))
+            confidence_value = float(signals.get(f'{timeframe}_confidence'))
+            market_context_value = float(signals.get(f'{timeframe}_market_context'))
             
             timeframe_features.extend([action_value, net_score, buy_score, sell_score, confidence_value, market_context_value])
         
         # 추가 메타 정보 (3개)
         signals_used = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
-            used = signals.get(f'{timeframe}_signals_used', 0)
+            used = signals.get(f'{timeframe}_signals_used')
             
             signals_used.append(min(float(used) / 10.0, 1.0))
         
         # Conflict 정보 (3개)
-        conflict_severity = float(signals.get('conflict_conflict_severity', 0.0))
-        conflict_consensus = float(signals.get('conflict_directional_consensus', 0.0))
-        conflict_penalty = float(signals.get('conflict_conflict_penalty', 0.0))
+        conflict_severity = float(signals.get('conflict_conflict_severity'))
+        conflict_consensus = float(signals.get('conflict_directional_consensus'))
+        conflict_penalty = float(signals.get('conflict_conflict_penalty'))
         
         # Long term 특화 정보 (2개)
         institutional_bias = float(signals.get('long_term_institutional_bias', 0.0))
@@ -708,30 +729,16 @@ class TradingEnvironment(gym.Env):
     
     
     def _process_position_change(self, position_change: float, leverage: float, 
-                               current_price: float, target_holding_minutes: float) -> Tuple[bool, float]:
-        """포지션 변경 처리 (Signal 기반 바이/셀 로직)"""
+                                current_price: float, target_holding_minutes: float) -> Tuple[bool, float]:
+        """포지션 변경 처리 (순수 RL 에이전트 결정)"""
         old_position = self.current_position
         trade_completed = False
         
-        # Signal 데이터 가져오기
-        current_signal = self.signal_data[self.current_step] if self.current_step < len(self.signal_data) else {}
-        
-        # Signal 기반 바이/셀 신호 분석
-        buy_signal, sell_signal = self._analyze_trading_signals(current_signal)
-        
-        # RL 에이전트의 position_change와 Signal을 결합
-        signal_strength = self._calculate_signal_strength(buy_signal, sell_signal)
-        
-        # 최종 포지션 결정 (RL + Signal 결합)
-        if signal_strength > 0.3:  # 강한 매수 신호
-            target_position = min(1.0, signal_strength)
-        elif signal_strength < -0.3:  # 강한 매도 신호
-            target_position = max(-1.0, signal_strength)
-        else:  # 약한 신호는 RL 에이전트 결정 반영
-            target_position = np.clip(self.current_position + position_change * 0.5, -1.0, 1.0)
+        # RL 에이전트의 결정만으로 포지션 변경 (-1~1 범위)
+        target_position = np.clip(self.current_position + position_change, -1.0, 1.0)
         
         # 포지션 변경이 필요한지 확인
-        if abs(target_position - self.current_position) > 0.01:
+        if abs(target_position - self.current_position) > 0.001:
             # 기존 포지션 청산
             if abs(self.current_position) > 0.01:
                 trade_completed = True
@@ -739,7 +746,7 @@ class TradingEnvironment(gym.Env):
                 self._close_position(current_price)
             
             # 새 포지션 진입
-            if abs(target_position) > 0.01:
+            if abs(target_position) > 0.001:
                 self.current_position = target_position
                 self.current_leverage = leverage
                 self.entry_price = current_price
@@ -748,40 +755,7 @@ class TradingEnvironment(gym.Env):
                 
         
         return trade_completed, old_position
-    
-    def _analyze_trading_signals(self, signal_data: Dict) -> Tuple[float, float]:
-        """Signal 데이터에서 바이/셀 신호 분석"""
-        buy_signal = 0.0
-        sell_signal = 0.0
         
-        # 각 시간대별 신호 분석
-        for timeframe in ['short_term', 'medium_term', 'long_term']:
-            # Action value 기반 신호 (-1 ~ 1)
-            action_value = float(signal_data.get(f'{timeframe}_action_value', 0.0))
-            confidence = float(signal_data.get(f'{timeframe}_confidence', 0.0))
-            
-            if action_value > 0.1:  # 매수 신호
-                buy_signal += action_value * confidence
-            elif action_value < -0.1:  # 매도 신호
-                sell_signal += abs(action_value) * confidence
-        
-        # Conflict 정보 고려
-        conflict_penalty = float(signal_data.get('conflict_conflict_penalty', 0.0))
-        if conflict_penalty > 0.5:  # 높은 충돌 시 신호 약화
-            buy_signal *= (1.0 - conflict_penalty)
-            sell_signal *= (1.0 - conflict_penalty)
-        
-        return buy_signal, sell_signal
-    
-    def _calculate_signal_strength(self, buy_signal: float, sell_signal: float) -> float:
-        """바이/셀 신호 강도 계산"""
-        if buy_signal > sell_signal:
-            return min(1.0, buy_signal)  # 매수 신호
-        elif sell_signal > buy_signal:
-            return max(-1.0, -sell_signal)  # 매도 신호
-        else:
-            return 0.0  # 중립
-    
     def _calculate_trade_pnl(self, exit_price: float, entry_price: float, position: float) -> float:
         """거래 손익 계산"""
         if entry_price <= 0:
@@ -796,10 +770,11 @@ class TradingEnvironment(gym.Env):
             return
         
         pnl = self._calculate_trade_pnl(exit_price, self.entry_price, self.current_position)
-        pnl_usd = pnl * self.current_leverage * self.balance
-        
-        # 거래 수수료 차감 (개선된 비용 구조)
+        # 레버리지는 거래량에만 적용, 손익에는 적용하지 않음
         trade_volume = abs(self.current_position) * self.current_leverage * self.balance
+        pnl_usd = pnl * trade_volume  # 올바른 손익 계산
+        
+        # 거래 수수료 차감 (거래량 기준)
         fee = trade_volume * self.trading_cost  # 0.1% 거래 비용
         pnl_usd -= fee
         
@@ -858,8 +833,8 @@ class TradingEnvironment(gym.Env):
 class RLAgent:
     """61차원 RL Decision 기반 강화학습 에이전트"""
     
-    def __init__(self, state_size: int = 3, learning_rate: float = 2e-3, 
-                    gamma: float = 0.99, epsilon: float = 0.8, epsilon_decay: float = 0.9995,
+    def __init__(self, state_size: int = 3, learning_rate: float = 1e-3, 
+                    gamma: float = 0.99, epsilon: float = 0.2, epsilon_decay: float = 0.995,
                     hidden_size: int = 128):
         
         self.state_size = state_size
@@ -868,11 +843,11 @@ class RLAgent:
         self.epsilon_decay = epsilon_decay
         self.hidden_size = hidden_size
         self.learning_rate = learning_rate  # learning_rate 속성 추가
-        self.epsilon_min = 0.1  # 10%로 증가 (더 많은 탐험)
+        self.epsilon_min = 0.05  # 5%로 설정 (수익률 학습에 집중)
         
         # ε 값이 너무 낮으면 초기화
         if self.epsilon < self.epsilon_min:
-            self.epsilon = 0.15  # 15%로 초기화 (적절한 탐험)
+            self.epsilon = 0.3  # 30%로 초기화 (충분한 탐험)
         
         # GPU 사용 가능 여부 확인 및 디바이스 설정
         if torch.cuda.is_available():
@@ -886,24 +861,24 @@ class RLAgent:
             print("   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121")
         print(f"Using device: {self.device} for {state_size}차원 모델")
         
-        # 네트워크 초기화 (TransformerDQN 사용 - Transformer 아키텍처)
-        print("🚀 TransformerDQN 아키텍처 사용 (Transformer + 고급 정규화)")
-        self.q_network = TransformerDQN(state_size, 3, hidden_size).to(self.device)
-        self.target_network = TransformerDQN(state_size, 3, hidden_size).to(self.device)
+        # 네트워크 초기화 (SimpleDQN 사용 - 단순하고 안정적인 구조)
+        print("🚀 SimpleDQN 아키텍처 사용 (단순하고 안정적인 구조)")
+        self.q_network = SimpleDQN(state_size, 3, hidden_size).to(self.device)
+        self.target_network = SimpleDQN(state_size, 3, hidden_size).to(self.device)
         
         self.optimizer = optim.Adam(self.q_network.parameters(), lr=learning_rate)
         
-        # 경험 리플레이
-        self.memory = deque(maxlen=100000)  # 메모리 크기 조정
-        self.batch_size = 256  # 배치 크기 조정
+        # 경험 리플레이 (수익률 학습 최적화)
+        self.memory = deque(maxlen=20000)  # 메모리 크기 증가 (더 많은 경험)
+        self.batch_size = 128  # 배치 크기 증가 (더 안정적인 학습)
         
         # 학습 추적
         self.training_rewards = []
         self.losses = []
         self.win_rates = []
         
-        # 타겟 네트워크 업데이트
-        self.target_update_freq = 100  # 더 자주 업데이트
+        # 타겟 네트워크 업데이트 (수익률 학습 최적화)
+        self.target_update_freq = 100  # 더 자주 업데이트 (빠른 학습)
         self.update_count = 0
         
         # Stochastic Weight Averaging (SWA) 설정
@@ -993,17 +968,17 @@ class RLAgent:
                     else:
                         # 기본 클리핑 (position_change, leverage, holding_time)
                         action = np.clip(base_action + noise, 
-                                       [-2.0, 1.0, 30.0], 
-                                       [2.0, 10.0, 200.0])
+                                       [-1.0, 1.0, 10.0], 
+                                       [1.0, 30.0, 120.0])
         
         return action
     
     def _get_random_action(self) -> np.ndarray:
-        """스마트한 랜덤 액션 (단순화된 범위)"""
+        """보수적인 랜덤 액션"""
         return np.array([
-            np.random.uniform(-2.0, 2.0),
-            np.random.uniform(1.0, 10.0),
-            np.random.uniform(30.0, 200.0)
+            np.random.uniform(-1.0, 1.0),  # 더 정밀한 포지션 범위
+            np.random.uniform(1.0, 30.0), # 레버리지 최대 30
+            np.random.uniform(10.0, 120.0) # 단타 최적화된 홀딩 시간
         ])
     
     def _get_greedy_action(self, state: np.ndarray) -> np.ndarray:
@@ -1018,10 +993,10 @@ class RLAgent:
             leverage_idx = torch.argmax(leverage_q).item()
             holding_idx = torch.argmax(holding_q).item()
             
-            # 인덱스를 실제 값으로 변환 (단순화된 범위)
-            position = -2.0 + (position_idx * 0.2)  # -2.0~2.0 (21개 구간)
-            leverage = 1.0 + leverage_idx  # 1~10 (10개 구간)
-            holding = 30.0 + (holding_idx * 8.5)  # 30~200분 (20개 구간)
+            # 인덱스를 실제 값으로 변환 (-1~1 범위)
+            position = -1.0 + (position_idx * 0.1)   # -1.0~1.0 (21개 구간)
+            leverage = 1.0 + (leverage_idx * 2.9)   # 1.0~30.0 (10개 구간)
+            holding = 10.0 + (holding_idx * 5.5)    # 10~120분 (20개 구간)
             
             return np.array([position, leverage, holding])
     
@@ -1080,19 +1055,21 @@ class RLAgent:
         # 적응적 엡실론 감소 (성능에 따라 조정)
         if self.epsilon > self.epsilon_min:
             # 최근 성능 기반 적응적 감소
-            if len(self.training_rewards) > 50:
-                recent_rewards = self.training_rewards[-50:]
+            if len(self.training_rewards) > 20:  # 더 빠른 반응
+                recent_rewards = self.training_rewards[-20:]
                 avg_recent_reward = np.mean(recent_rewards)
                 
-                # 성능이 좋으면 더 빠르게 감소
-                if avg_recent_reward > 100:  # 리워드가 100 이상이면
-                    self.epsilon *= 0.95  # 더 빠른 감소
-                elif avg_recent_reward > 0:
-                    self.epsilon *= 0.98  # 중간 감소
-                else:
-                    self.epsilon *= 0.99  # 느린 감소
+                # 수익률 기반 감소 (더 공격적)
+                if avg_recent_reward > 500:  # 높은 수익률
+                    self.epsilon *= 0.90  # 빠른 감소
+                elif avg_recent_reward > 100:  # 양의 수익률
+                    self.epsilon *= 0.95  # 중간 감소
+                elif avg_recent_reward > 0:  # 약간의 수익률
+                    self.epsilon *= 0.98  # 느린 감소
+                else:  # 손실
+                    self.epsilon *= 0.99  # 매우 느린 감소
             else:
-                self.epsilon *= 0.99  # 초기에는 느린 감소
+                self.epsilon *= 0.995  # 초기에는 매우 느린 감소
         
         # 타겟 네트워크 업데이트
         self.update_count += 1
@@ -1120,9 +1097,9 @@ class RLAgent:
             target_holding_q = current_holding_q.clone()
             
             for i, (action, reward, done) in enumerate(zip(actions, rewards, dones)):
-                pos_idx = int(np.clip((action[0] + 2.0) / 0.2, 0, 20))
-                lev_idx = int(np.clip(action[1] - 1, 0, 9))
-                hold_idx = int(np.clip((action[2] - 30.0) / 8.5, 0, 19))
+                pos_idx = int(np.clip((action[0] + 1.0) / 0.1, 0, 20))   # -1.0~1.0 범위
+                lev_idx = int(np.clip((action[1] - 1.0) / 2.9, 0, 9))    # 1.0~30.0 범위
+                hold_idx = int(np.clip((action[2] - 10.0) / 5.5, 0, 19)) # 10~120분 범위
                 
                 if not done:
                     # 수익률 기반 타겟 (더 강한 보상 가중치)
@@ -1156,7 +1133,7 @@ class RLAgent:
         entropy_reg = 0.01 * (position_entropy + leverage_entropy + holding_entropy)
         
         # 수익률 중심 가중치 (수익률 예측에 더 높은 가중치)
-        total_loss = (pos_loss + lev_loss + hold_loss) + 0.5 * profit_loss + entropy_reg
+        total_loss = (pos_loss + lev_loss + hold_loss) + 2.0 * profit_loss + entropy_reg
         
         return total_loss
     
@@ -1516,7 +1493,7 @@ class PerformanceAnalyzer:
         print(f"61차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
         
         original_epsilon = agent.epsilon
-        agent.epsilon = 0.0
+        agent.epsilon = 0.01  # 테스트에서도 약간의 탐험 허용
         
         results = []
         all_trades = []
@@ -1695,7 +1672,7 @@ class TrainingManager:
             episode_trades = []
             steps = 0
             
-            while steps < 500:
+            while steps < 1000:
                 action = agent.act(state)
                 next_state, reward, done, truncated, info = train_env.step(action)
                 
@@ -1740,7 +1717,7 @@ class TrainingManager:
             # 테스트 데이터셋으로 성능 평가 (과적합 방지 강화)
             if test_env and episode % 5 == 0 and episode > 0:  # 더 자주 평가
                 print(f"\n📊 Episode {episode}: 테스트 데이터셋 성능 평가 중...")
-                test_results, test_stats = PerformanceAnalyzer.evaluate_agent(agent, test_env, num_episodes=10)  # 더 많은 에피소드로 평가
+                test_results, test_stats = PerformanceAnalyzer.evaluate_agent(agent, test_env, num_episodes=5)  # 더 많은 에피소드로 평가
                 test_return = test_stats['avg_return']
                 test_win_rates.append(test_stats['overall_win_rate'])
                 
@@ -1748,7 +1725,7 @@ class TrainingManager:
                 
                 # 과적합 감지: 훈련 수익률과 테스트 수익률 차이 확인
                 recent_train_return = np.mean(episode_returns[-10:]) if len(episode_returns) >= 10 else 0.0
-                overfitting_gap = recent_train_return - test_return
+                overfitting_gap = recent_train_return - (test_return if test_return > 0 else -test_return)
                 
                 if overfitting_gap > 0.1:  # 훈련 수익률이 테스트 수익률보다 10% 이상 높으면 과적합 의심
                     print(f"⚠️ 과적합 감지: 훈련 수익률({recent_train_return:.3f}) - 테스트 수익률({test_return:.3f}) = {overfitting_gap:.3f}")
@@ -1791,10 +1768,11 @@ class TrainingManager:
                         f"훈련수익률: {avg_return:.3f} ({avg_return*100:+.1f}%){test_info} | "
                         f"리워드: {avg_reward:7.1f} | "
                         f"잔고: ${info['balance']:7.0f} | "
+                        f"거래: {info.get('total_trades', 0):3d}개 | "
                         f"ε: {agent.epsilon:.3f} | "
                         f"LR: {agent.learning_rate:.2e} | "
                         f"단계: {agent.curriculum_stage} | "
-                        f"61D")
+                        f"58D")
             
             # 베스트 모델 저장 (훈련 데이터 기준 - 수익률 중심)
             if episode % save_interval == 0 and episode > 0:
@@ -1870,6 +1848,80 @@ class TrainingManager:
         
         return agent, episode_rewards, episode_win_rates
 
+def synchronize_data_by_timestamp(price_data: pd.DataFrame, signal_data: List[Dict]) -> Tuple[pd.DataFrame, List[Dict]]:
+    """타임스탬프 기준으로 Price와 Signal 데이터 동기화"""
+    print("타임스탬프 기준 데이터 동기화 중...")
+    
+    # Signal 데이터의 시작과 끝 타임스탬프 기준으로 Price 데이터 슬라이싱
+    if not signal_data or 'timestamp' not in signal_data[0]:
+        print("Signal 데이터에 타임스탬프가 없습니다. 길이 기준으로 동기화합니다.")
+        min_length = len(signal_data)
+        price_data = price_data.iloc[-min_length:].reset_index(drop=True)
+        signal_data = signal_data[-min_length:]
+        print(f"길이 기준 동기화 완료: {min_length:,}개")
+        return price_data, signal_data
+    
+    signal_start_time = signal_data[0]['timestamp']
+    signal_end_time = signal_data[-1]['timestamp']
+    
+    # Signal 타임스탬프를 Unix timestamp로 변환
+    if hasattr(signal_start_time, 'timestamp'):
+        signal_start_timestamp = signal_start_time.timestamp()
+    elif isinstance(signal_start_time, str):
+        signal_start_timestamp = pd.to_datetime(signal_start_time).timestamp()
+    else:
+        signal_start_timestamp = float(signal_start_time)
+        
+    if hasattr(signal_end_time, 'timestamp'):
+        signal_end_timestamp = signal_end_time.timestamp()
+    elif isinstance(signal_end_time, str):
+        signal_end_timestamp = pd.to_datetime(signal_end_time).timestamp()
+    else:
+        signal_end_timestamp = float(signal_end_time)
+    
+    # Price 데이터에서 Signal 시작/끝 시간과 정확히 일치하는 인덱스 찾기
+    price_data['timestamp'] = pd.to_datetime(price_data['timestamp'])
+    
+    # 정확한 타임스탬프 매칭
+    start_matches = price_data[price_data['timestamp'] == signal_start_time]
+    end_matches = price_data[price_data['timestamp'] == signal_end_time]
+    
+    if len(start_matches) == 0 or len(end_matches) == 0:
+        print("❌ 정확한 타임스탬프 매칭을 찾을 수 없습니다.")
+        return None, None
+    
+    start_idx = start_matches.index[0]
+    end_idx = end_matches.index[0]
+    
+    # Signal 데이터의 정확한 타임스탬프에 맞춰 Price 데이터 필터링
+    # Signal 데이터에 있는 타임스탬프만 Price 데이터에서 선택
+    signal_timestamps = set(signal['timestamp'] for signal in signal_data)
+    price_data = price_data[price_data['timestamp'].isin(signal_timestamps)].reset_index(drop=True)
+    
+    # 동기화 검증
+    price_start = price_data.iloc[0]['timestamp']
+    price_end = price_data.iloc[-1]['timestamp']
+    signal_start = signal_data[0]['timestamp']
+    signal_end = signal_data[-1]['timestamp']
+    
+    # 타임스탬프 정확한 일치 확인
+    start_time_match = (price_start == signal_start)
+    end_time_match = (price_end == signal_end)
+    length_match = (len(price_data) == len(signal_data))
+    
+    print(f"✅ 시작 시간 동기화: {'성공' if start_time_match else '실패'}")
+    print(f"✅ 끝 시간 동기화: {'성공' if end_time_match else '실패'}")
+    print(f"   Price: {price_start} ~ {price_end}")
+    print(f"   Signal: {signal_start} ~ {signal_end}")
+    print(f"✅ 길이 동기화: {'성공' if length_match else '실패'}")
+    print(f"   Price: {len(price_data):,}개, Signal: {len(signal_data):,}개")
+    
+    if not (start_time_match and end_time_match and length_match):
+        print("❌ 동기화 실패! 데이터를 다시 확인하세요.")
+        return None, None
+    
+    return price_data, signal_data
+
 def split_data(price_data: pd.DataFrame, signal_data: List[Dict], 
                train_ratio: float = 0.8, test_ratio: float = 0.2) -> Tuple[pd.DataFrame, List[Dict], pd.DataFrame, List[Dict]]:
     """데이터를 훈련용과 테스트용으로 분할"""
@@ -1905,28 +1957,22 @@ def main():
         
         signal_data = DataLoader.load_signal_data()
         
-        # 데이터 길이 맞추기 및 대폭 축소
-        min_length = min(len(price_data), len(signal_data))
+        # 타임스탬프 기준으로 데이터 동기화
+        price_data, signal_data = synchronize_data_by_timestamp(price_data, signal_data)
         
-        # 데이터 크기 대폭 축소 (30만개 → 1만개)
-        max_data_size = 10000
-        if min_length > max_data_size:
-            # 고품질 데이터만 선별 (최근 데이터 우선)
-            price_data = price_data.iloc[-max_data_size:].reset_index(drop=True)
-            signal_data = signal_data[-max_data_size:]
-            min_length = max_data_size
-        
-        print(f"최종 3차원용 데이터 준비 완료: {min_length:,}개 (대폭 축소)")
+        if price_data is None or signal_data is None:
+            print("데이터 동기화 실패로 프로그램을 종료합니다.")
+            return
         
         # 2. 데이터 분할 (훈련 80%, 테스트 20%)
         print("\n2️⃣ 데이터 분할...")
         train_price, train_signal, test_price, test_signal = split_data(price_data, signal_data, 0.8, 0.2)
         
         # 3. 환경 및 에이전트 생성
-        print("\n3️⃣ 3차원 환경 및 에이전트 생성...")
+        print("\n3️⃣ 58차원 환경 및 에이전트 생성...")
         train_env = TradingEnvironment(train_price, train_signal)
         test_env = TradingEnvironment(test_price, test_signal)
-        agent = RLAgent(train_env.observation_space.shape[0])  # 3차원
+        agent = RLAgent(train_env.observation_space.shape[0])  # 58차원
         
         print(f"상태 공간: {train_env.observation_space.shape[0]}차원")
         print("Signal의 모든 indicator와 raw score 활용")

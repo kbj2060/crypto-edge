@@ -110,9 +110,15 @@ def save_decisions_to_parquet(
         else:
             combined_df = new_df
         
-        # Parquet 파일로 저장 (압축 적용)
+        # Parquet 파일로 저장 (최적화된 압축 및 설정)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
-        combined_df.to_parquet(filename, compression='snappy', index=False)
+        combined_df.to_parquet(
+            filename, 
+            compression='snappy', 
+            index=False,
+            engine='pyarrow',  # pyarrow 엔진 사용 (더 빠름)
+            use_deprecated_int96_timestamps=False  # 최신 타임스탬프 형식 사용
+        )
         
         print(f"Decision 데이터 저장 완료: {filename} ({len(combined_df)}개 레코드)")
         print(f"파일 크기: {os.path.getsize(filename) / 1024 / 1024:.2f} MB")
@@ -125,14 +131,20 @@ def save_decisions_to_parquet(
         return False
 
 def load_decisions_from_parquet(filename: str = "agent/decisions_data.parquet") -> Optional[pd.DataFrame]:
-    """Parquet 파일에서 Decision 데이터 로드"""
+    """Parquet 파일에서 Decision 데이터 로드 (메모리 최적화)"""
     try:
         if not os.path.exists(filename):
             print(f"파일을 찾을 수 없습니다: {filename}")
             return None
             
-        df = pd.read_parquet(filename)
+        # 메모리 매핑을 사용한 최적화된 로딩
+        df = pd.read_parquet(
+            filename,
+            engine='pyarrow',  # pyarrow 엔진 사용
+            memory_map=True    # 메모리 매핑 활성화
+        )
         print(f"Decision 데이터 로드 완료: {filename} ({len(df)}개 레코드)")
+        print(f"메모리 사용량: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f}MB")
         return df
         
     except Exception as e:
@@ -291,29 +303,47 @@ def clear_progress_state(filename: str = "agent/progress_state.pkl"):
         print(f"진행 상태 파일 삭제 오류: {e}")
 
 def load_ethusdc_data():
-    """ETHUSDC CSV 데이터 로드 - 3분, 15분, 1시간봉"""
+    """ETHUSDC CSV 데이터 로드 - 3분, 15분, 1시간봉 (메모리 최적화)"""
     try:
-        required_columns = [ 'open', 'high', 'low', 'close', 'volume', 'quote_volume']
-        # 3분봉 데이터 로드
-        df_3m = pd.read_csv('data/ETHUSDC_3m_historical_data.csv')
+        required_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
+        
+        # 데이터 타입 최적화를 위한 dtype 설정
+        dtype_optimized = {
+            'open': 'float32',
+            'high': 'float32', 
+            'low': 'float32',
+            'close': 'float32',
+            'volume': 'float32',
+            'quote_volume': 'float32'
+        }
+        
+        # 3분봉 데이터 로드 (메모리 최적화)
+        df_3m = pd.read_csv('data/ETHUSDC_3m_historical_data.csv', dtype=dtype_optimized)
         df_3m['timestamp'] = pd.to_datetime(df_3m['timestamp'])
         df_3m = df_3m.set_index('timestamp')
         df_3m = df_3m[required_columns]
 
-        df_15m = pd.read_csv('data/ETHUSDC_15m_historical_data.csv')
+        # 15분봉 데이터 로드 (메모리 최적화)
+        df_15m = pd.read_csv('data/ETHUSDC_15m_historical_data.csv', dtype=dtype_optimized)
         df_15m['timestamp'] = pd.to_datetime(df_15m['timestamp'])
         df_15m = df_15m.set_index('timestamp')
         df_15m = df_15m[required_columns]
 
-        # 3분봉에서 1시간봉 생성
-        df_1h = pd.read_csv('data/ETHUSDC_1h_historical_data.csv')
+        # 1시간봉 데이터 로드 (메모리 최적화)
+        df_1h = pd.read_csv('data/ETHUSDC_1h_historical_data.csv', dtype=dtype_optimized)
         df_1h['timestamp'] = pd.to_datetime(df_1h['timestamp'])
         df_1h = df_1h.set_index('timestamp')
         df_1h = df_1h[required_columns]
 
-        print(f"ETHUSDC 3분봉 데이터 로드 완료: {len(df_3m)}개 캔들")
-        print(f"ETHUSDC 15분봉 데이터 생성 완료: {len(df_15m)}개 캔들")
-        print(f"ETHUSDC 1시간봉 데이터 생성 완료: {len(df_1h)}개 캔들")
+        print(f"ETHUSDC 3분봉 데이터 로드 완료: {len(df_3m)}개 캔들 (메모리 최적화됨)")
+        print(f"ETHUSDC 15분봉 데이터 생성 완료: {len(df_15m)}개 캔들 (메모리 최적화됨)")
+        print(f"ETHUSDC 1시간봉 데이터 생성 완료: {len(df_1h)}개 캔들 (메모리 최적화됨)")
+        
+        # 메모리 사용량 출력
+        memory_usage_3m = df_3m.memory_usage(deep=True).sum() / 1024 / 1024
+        memory_usage_15m = df_15m.memory_usage(deep=True).sum() / 1024 / 1024
+        memory_usage_1h = df_1h.memory_usage(deep=True).sum() / 1024 / 1024
+        print(f"메모리 사용량 - 3분봉: {memory_usage_3m:.2f}MB, 15분봉: {memory_usage_15m:.2f}MB, 1시간봉: {memory_usage_1h:.2f}MB")
         
         return df_3m, df_15m, df_1h
 
@@ -366,14 +396,14 @@ def generate_signal_data_with_indicators(
         df_1h=price_data_1h[price_data_1h.index < target_time]
     ) 
     
-    global_manager = get_global_indicator_manager(target_time)
+    global_manager = get_global_indicator_manager(target_time-timedelta(minutes=3))
     global_manager.initialize_indicators()
 
     strategy_executor = StrategyExecutor()
     decision_engine = TradeDecisionEngine()
 
     end_idx = len(price_data)
-    batch_size = 1000  # 500개씩 배치로 저장 (Parquet은 더 큰 배치가 효율적)
+    batch_size = 50000  # 50,000개씩 배치로 저장 (Parquet 최적화)
     temp_decision_data = []  # 임시 저장용
     
     try:
@@ -421,12 +451,19 @@ def generate_signal_data_with_indicators(
                 save_decisions_to_parquet(temp_decision_data)
                 temp_decision_data = []  # 임시 데이터 초기화
             
-            # 진행 상태 저장 (100개마다)
-            if (i - start_idx) % 100 == 0:
+            # 진행 상태 저장 및 메모리 모니터링 (5000개마다)
+            if (i - start_idx) % 5000 == 0:
                 save_progress_state(i, end_idx)
                 total_periods = end_idx - start_idx
                 processed = i - start_idx + 1
+                
+                # 메모리 사용량 모니터링
+                import psutil
+                memory_usage = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+                temp_data_size = len(temp_decision_data)
+                
                 print(f"   진행률: {processed}/{total_periods} ({processed / total_periods * 100:.1f}%) - 인덱스 {i} 저장됨")
+                print(f"   메모리 사용량: {memory_usage:.1f}MB, 임시 데이터: {temp_data_size}개")
         
         # 남은 decision 데이터가 있으면 저장
         if temp_decision_data:
