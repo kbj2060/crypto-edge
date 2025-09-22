@@ -389,6 +389,8 @@ def generate_signal_data_with_indicators(
     
     # 초기 데이터 로딩
     target_time = price_data.index[start_idx]
+    
+    # 데이터는 target_time 이전까지 가져오기
     data_manager.load_initial_data(
         symbol='ETHUSDC', 
         df_3m=price_data[price_data.index < target_time], 
@@ -396,7 +398,9 @@ def generate_signal_data_with_indicators(
         df_1h=price_data_1h[price_data_1h.index < target_time]
     ) 
     
-    global_manager = get_global_indicator_manager(target_time-timedelta(minutes=3))
+    # indicator는 실제 데이터의 마지막 시점으로 초기화 (target_time 이전)
+    last_data_time = price_data[price_data.index < target_time].index[-1]
+    global_manager = get_global_indicator_manager(last_data_time)
     global_manager.initialize_indicators()
 
     strategy_executor = StrategyExecutor()
@@ -444,7 +448,8 @@ def generate_signal_data_with_indicators(
             # 거래 결정
             decision = decision_engine.decide_trade_realtime(signals)
             decision.update({'timestamp': current_time, 'indicators': indicators})
-
+            print(decision)
+            raise Exception("test")
             temp_decision_data.append(decision)
             
             # 배치 크기마다 Parquet 파일에 저장
