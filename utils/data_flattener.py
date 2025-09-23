@@ -12,17 +12,25 @@ def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     """복잡한 중첩 구조를 평면화하여 Parquet 저장에 최적화"""
     
     def safe_convert(value):
-        """numpy 타입을 Python 기본 타입으로 안전하게 변환"""
+        """numpy 타입을 Python 기본 타입으로 안전하게 변환 (소수점 4자리 제한)"""
         if isinstance(value, (np.integer, np.floating)):
-            return float(value)
+            return round(float(value), 4)
         elif isinstance(value, np.ndarray):
             return value.tolist()
+        elif isinstance(value, float):
+            return round(value, 4)
         return value
     
     flattened = {}
     
     # 기본 정보
     flattened['timestamp'] = decision_data.get('timestamp')
+    
+    # OHLC 데이터 추가
+    ohlc_fields = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
+    for field in ohlc_fields:
+        if field in decision_data:
+            flattened[field] = safe_convert(decision_data[field])
     
     # indicators 정보
     indicators = decision_data.get('indicators', {})

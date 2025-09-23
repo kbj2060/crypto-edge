@@ -416,7 +416,6 @@ def generate_signal_data_with_indicators(
             # 현재 캔들 데이터
             series_3m = price_data.iloc[i]
             current_time = price_data.index[i]
-            print(series_3m, current_time)
             
             # 데이터 매니저에 캔들 데이터 업데이트
             data_manager.update_with_candle(series_3m)
@@ -448,7 +447,7 @@ def generate_signal_data_with_indicators(
             
             # 거래 결정
             decision = decision_engine.decide_trade_realtime(signals)
-            decision.update({'timestamp': current_time, 'indicators': indicators})
+            decision.update({'timestamp': current_time, 'indicators': indicators, **series_3m.to_dict()})
 
             temp_decision_data.append(decision)
             
