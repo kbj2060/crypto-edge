@@ -1,5 +1,5 @@
 """
-58차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 1
+66차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 1
 - 새로운 RL Decision 스키마 활용 (action_value, confidence_value 등)
 - Conflict 정보 및 시너지 메타데이터 활용
 - 중복 계산 제거 및 정보 활용 극대화
@@ -152,7 +152,7 @@ class DuelingDQN(nn.Module):
 
 
 class TradingEnvironment(gym.Env):
-    """57차원 RL Decision 기반 암호화폐 거래 강화학습 환경 (Gymnasium 호환) - OHLC 포함"""
+    """66차원 RL Decision 기반 암호화폐 거래 강화학습 환경 (Gymnasium 호환) - OHLC 포함"""
     
     def __init__(self, signal_data: List[Dict], initial_balance: float = 10000.0):
         super().__init__()
@@ -170,10 +170,10 @@ class TradingEnvironment(gym.Env):
         self.last_trade_step = -1  # 초기값
         self.trading_cost = 0.0003 
         
-        # 57차원 상태 공간 (기술적 지표 + 포트폴리오 + 의사결정 특성)
+        # 66차원 상태 공간 (기술적 지표 + 포트폴리오 + 의사결정 특성)
         self.observation_space = spaces.Box(
             low=-np.inf, high=np.inf, 
-            shape=(57,),  # 3 + 20 + 8 + 26 = 57차원
+            shape=(66,),  # 3 + 20 + 8 + 35 = 66차원
             dtype=np.float32
         )
         
@@ -260,9 +260,9 @@ class TradingEnvironment(gym.Env):
         return self._get_observation(), reward, done, truncated, info
     
     def _get_observation(self) -> np.ndarray:
-        """57차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성) - OHLC 포함"""
+        """66차원 상태 관찰값 반환 (기술적 지표 + 포트폴리오 + 의사결정 특성) - OHLC 포함"""
         if self.current_step >= len(self.signal_data):
-            return np.zeros(57, dtype=np.float32)
+            return np.zeros(66, dtype=np.float32)
         
         # 현재 신호 데이터에서 OHLC 정보 가져오기
         current_signal = self.signal_data[self.current_step]
@@ -287,14 +287,14 @@ class TradingEnvironment(gym.Env):
         # 각 차원별 특성 추출
         price_indicators = self._extract_price_indicators(current_signal)  # 20차원
         portfolio_state = self._get_portfolio_state()  # 8차원
-        decision_features = self._extract_decision_features(current_signal)  # 26차원
+        decision_features = self._extract_decision_features(current_signal)  # 35차원
         
-        # 모든 차원 결합 (3 + 20 + 8 + 26 = 57차원)
+        # 모든 차원 결합 (3 + 20 + 8 + 35 = 66차원)
         observation = np.concatenate([
             basic_observation,      # 3차원
             price_indicators,       # 20차원
             portfolio_state,        # 8차원
-            decision_features       # 26차원
+            decision_features       # 35차원
         ], dtype=np.float32)
         
         return observation
@@ -378,8 +378,8 @@ class TradingEnvironment(gym.Env):
         ], dtype=np.float32)
     
     def _extract_decision_features(self, signals: Dict) -> np.ndarray:
-        """Decision 특성들 (26차원) - 새로운 RL 스키마 기반"""
-        # 각 시간대별 특성 (3 × 6 = 18개)
+        """Decision 특성들 (35차원) - 새로운 RL 스키마 기반"""
+        # 각 시간대별 특성 (3 × 8 = 24개)
         timeframe_features = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
             # 새로운 RL 스키마 필드들 사용
@@ -389,29 +389,32 @@ class TradingEnvironment(gym.Env):
             sell_score = float(signals.get(f'{timeframe}_sell_score', 0.0))
             confidence_value = float(signals.get(f'{timeframe}_confidence', 0.0))
             market_context_value = float(signals.get(f'{timeframe}_market_context', 0.0))
+            leverage = float(signals.get(f'{timeframe}_leverage', 0.0))
+            max_holding_minutes = float(signals.get(f'{timeframe}_max_holding_minutes', 0.0))
             
-            timeframe_features.extend([action_value, net_score, buy_score, sell_score, confidence_value, market_context_value])
+            timeframe_features.extend([action_value, net_score, buy_score, sell_score, confidence_value, market_context_value, leverage, max_holding_minutes])
         
         # 추가 메타 정보 (3개)
         signals_used = []
         for timeframe in ['short_term', 'medium_term', 'long_term']:
             used = signals.get(f'{timeframe}_signals_used', 0)
-            
             signals_used.append(min(float(used) / 10.0, 1.0))
         
-        # Conflict 정보 (3개)
+        # Conflict 정보 (8개)
         conflict_severity = float(signals.get('conflict_conflict_severity', 0.0))
         conflict_consensus = float(signals.get('conflict_directional_consensus', 0.0))
         conflict_penalty = float(signals.get('conflict_conflict_penalty', 0.0))
-        
-        # Long term 특화 정보 (2개)
-        institutional_bias = float(signals.get('long_term_institutional_bias', 0.0))
-        macro_trend_strength = float(signals.get('long_term_macro_trend_strength', 0.0))
+        conflict_ratio = float(signals.get('conflict_conflict_ratio', 0.0))
+        conflict_active_categories = float(signals.get('conflict_active_categories', 0.0))
+        conflict_hold_ratio = float(signals.get('conflict_hold_ratio', 0.0))
+        conflict_max_leverage_used = float(signals.get('conflict_max_leverage_used', 0.0))
+        conflict_total_exposure = float(signals.get('conflict_total_exposure', 0.0))
         
         return np.array(
             timeframe_features + 
             signals_used + 
-            [conflict_severity, conflict_consensus, conflict_penalty, institutional_bias, macro_trend_strength],
+            [conflict_severity, conflict_consensus, conflict_penalty, conflict_ratio, 
+             conflict_active_categories, conflict_hold_ratio, conflict_max_leverage_used, conflict_total_exposure],
             dtype=np.float32
         )
     
@@ -529,13 +532,13 @@ class TradingEnvironment(gym.Env):
         }
 
 """
-58차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 2
+66차원 RL Decision 기반 강화학습 트레이딩 AI 훈련 시스템 - Part 2
 - RLAgent 클래스 및 훈련/평가 시스템
 - 새로운 Decision 스키마 데이터 로더 및 유틸리티 함수들
 """
 
 class RLAgent:
-    """58차원 RL Decision 기반 강화학습 에이전트"""
+    """66차원 RL Decision 기반 강화학습 에이전트"""
     
     def __init__(self, state_size: int = 3, learning_rate: float = 1e-2,  # 더 높은 학습률
                     gamma: float = 0.99, epsilon: float = 0.9, epsilon_decay: float = 0.995,  # 더 높은 초기 엡실론
@@ -878,7 +881,7 @@ class RLAgent:
             }
             
             torch.save(save_dict, filepath)
-            print(f"58차원 모델 저장 완료: {filepath}")
+            print(f"66차원 모델 저장 완료: {filepath}")
             return True
             
         except Exception as e:
@@ -912,7 +915,7 @@ class RLAgent:
             self.return_rates = checkpoint.get('return_rates', [])
             self.update_count = checkpoint.get('update_count', 0)
             
-            print(f"✅ 58차원 모델 로드 성공! 엡실론: {self.epsilon:.3f}")
+            print(f"✅ 66차원 모델 로드 성공! 엡실론: {self.epsilon:.3f}")
             return True
             
         except Exception as e:
@@ -1001,7 +1004,7 @@ class RLAgent:
             self.return_rates = checkpoint.get('return_rates', [])
             self.update_count = checkpoint.get('update_count', 0)
             
-            print(f"✅ {model_state_size}차원 → 58차원 호환성 모델 로드 성공!")
+            print(f"✅ {model_state_size}차원 → 66차원 호환성 모델 로드 성공!")
             print(f"   - 로드된 레이어: {loaded_count}개")
             print(f"   - 새로 초기화된 레이어: {initialized_count}개")
             
@@ -1096,12 +1099,12 @@ class RLAgent:
             return {'error': str(e)}
 
 class DataLoader:
-    """58차원 RL Decision 기반 데이터 로딩 클래스"""
+    """66차원 RL Decision 기반 데이터 로딩 클래스"""
     
     
     @staticmethod
     def load_signal_data(agent_folder: str = "agent") -> Optional[List[Dict]]:
-        """58차원용 RL Decision 데이터 로드"""
+        """66차원용 RL Decision 데이터 로드"""
         parquet_files = []
         
         if Path(agent_folder).exists():
@@ -1151,10 +1154,10 @@ class DataLoader:
     
     @staticmethod
     def _convert_parquet_to_signal_dicts(signal_df: pd.DataFrame) -> List[Dict]:
-        """Parquet을 Signal Dict 리스트로 변환 (58차원용) - 새로운 RL 스키마"""
+        """Parquet을 Signal Dict 리스트로 변환 (66차원용) - 새로운 RL 스키마"""
         signal_data = []
         
-        print("58차원용 RL 스키마 Signal 데이터 변환 중...")
+        print("66차원용 RL 스키마 Signal 데이터 변환 중...")
         
         for idx, row in signal_df.iterrows():
             # 각 행을 딕셔너리로 변환 (새로운 RL 스키마 형태 유지)
@@ -1184,17 +1187,17 @@ class DataLoader:
             if (idx + 1) % 5000 == 0:
                 print(f"   변환 진행: {idx + 1:,}/{len(signal_df):,}")
         
-        print(f"58차원용 RL 스키마 Signal 데이터 변환 완료: {len(signal_data):,}개")
+        print(f"66차원용 RL 스키마 Signal 데이터 변환 완료: {len(signal_data):,}개")
         return signal_data
     
 
 class PerformanceAnalyzer:
-    """58차원 RL Decision 기반 성능 분석 클래스"""
+    """66차원 RL Decision 기반 성능 분석 클래스"""
     
     @staticmethod
     def evaluate_agent(agent: RLAgent, env: TradingEnvironment, num_episodes: int = 10) -> Tuple[List[Dict], Dict]:
-        """58차원 에이전트 성능 평가"""
-        print(f"58차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
+        """66차원 에이전트 성능 평가"""
+        print(f"66차원 에이전트 성능 평가 중 ({num_episodes} 에피소드)...")
         
         original_epsilon = agent.epsilon
         agent.epsilon = 0.1  # 테스트에서도 적절한 탐험 허용 (훈련과 유사)
@@ -1265,9 +1268,9 @@ class PerformanceAnalyzer:
     
     @staticmethod
     def print_performance_report(results: List[Dict], stats: Dict):
-        """58차원 성능 리포트 출력"""
+        """66차원 성능 리포트 출력"""
         print("\n" + "="*60)
-        print(f"58차원 RL Decision 기반 성능 평가 결과")
+        print(f"66차원 RL Decision 기반 성능 평가 결과")
         print("="*60)
         print(f"모델 차원: {stats['model_dimension']}차원")
         print(f"전체 승률: {stats['overall_win_rate']:.3f}")
@@ -1324,7 +1327,7 @@ class PerformanceAnalyzer:
             recommendations.append("수익률이 5% 미만입니다. 수익률 중심 보상 함수를 더 강화하세요.")
         
         if stats['avg_return'] < 0.10:
-            recommendations.append("수익률이 10% 미만입니다. 58차원 상태 공간의 수익률 최적화를 더 활용하세요.")
+            recommendations.append("수익률이 10% 미만입니다. 66차원 상태 공간의 수익률 최적화를 더 활용하세요.")
         
         if stats['avg_return'] < 0.15:
             recommendations.append("수익률이 15% 미만입니다. Signal 기반 수익률 예측을 개선하세요.")
@@ -1346,19 +1349,19 @@ class PerformanceAnalyzer:
             recommendations.append("승률이 매우 낮습니다. 수익률과 승률의 균형을 고려하세요.")
         
         if not recommendations:
-            recommendations.append("58차원 RL Decision 기반 수익률 중심 시스템이 잘 작동하고 있습니다!")
+            recommendations.append("66차원 RL Decision 기반 수익률 중심 시스템이 잘 작동하고 있습니다!")
         
         return recommendations
 
 class TrainingManager:
-    """58차원 RL Decision 기반 훈련 관리 클래스"""
+    """66차원 RL Decision 기반 훈련 관리 클래스"""
     
     @staticmethod
     def train_agent(agent: RLAgent, train_env: TradingEnvironment, 
                    episodes: int = 1000, save_interval: int = 100, 
                    test_env: TradingEnvironment = None) -> Tuple[RLAgent, List[float], List[float]]:
-        """58차원 RL Decision 기반 에이전트 훈련 (테스트 환경 모니터링 포함)"""
-        print(f"58차원 RL Decision 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
+        """66차원 RL Decision 기반 에이전트 훈련 (테스트 환경 모니터링 포함)"""
+        print(f"66차원 RL Decision 기반 강화학습 훈련 시작 ({episodes} 에피소드)")
         print(f"상태 공간: {train_env.observation_space.shape[0]}차원")
         if test_env:
             print(f"테스트 환경 모니터링: 활성화")
@@ -1502,7 +1505,7 @@ class TrainingManager:
                         f"거래: {info.get('total_trades', 0):3d}개 | "
                         f"ε: {agent.epsilon:.3f} | "
                         f"LR: {agent.learning_rate:.2e} | "
-                        f"58D")
+                        f"66D")
             
             # 베스트 모델 저장 (훈련 데이터 기준 - 수익률 중심)
             if episode % save_interval == 0 and episode > 0:
@@ -1539,19 +1542,19 @@ class TrainingManager:
                         break
                 
                 if recent_test_return >= 0.20:  # 수익률 20% 이상 달성
-                    print(f"🏆 58차원 목표 달성! 테스트 데이터셋 수익률 {recent_test_return:.3f} ({recent_test_return*100:.1f}%) 도달")
-                    agent.save_model('agent/final_optimized_model_58d.pth')
+                    print(f"🏆 66차원 목표 달성! 테스트 데이터셋 수익률 {recent_test_return:.3f} ({recent_test_return*100:.1f}%) 도달")
+                    agent.save_model('agent/final_optimized_model_66d.pth')
                     break
         
         
-        print(f"\n58차원 RL Decision 기반 훈련 완료!")
+        print(f"\n66차원 RL Decision 기반 훈련 완료!")
         print(f"   총 에피소드: {episode + 1}")
         print(f"   훈련 데이터 최고 수익률: {best_return_rate:.3f}")
         print(f"   훈련 데이터 최종 수익률: {np.mean(episode_returns[-50:]) if episode_returns else 0:.3f}")
         if test_return_rates:
             print(f"   테스트 데이터 최고 수익률: {best_test_return_rate:.3f}")
             print(f"   테스트 데이터 최종 수익률: {test_return_rates[-1]:.3f}")
-        print(f"   상태 차원: 58차원 (RL Decision 기반)")
+        print(f"   상태 차원: 66차원 (RL Decision 기반)")
         print(f"   아키텍처: DuelingDQN (Value + Advantage 분리)")
         print(f"   정규화 기법: 엔트로피 정규화, Spectral Normalization, 적응적 드롭아웃")
         
@@ -1583,14 +1586,14 @@ def split_signal_data(signal_data: List[Dict],
     return train_signal, test_signal
 
 def main():
-    """58차원 RL Decision 기반 메인 실행 함수"""
-    print("58차원 RL Decision 기반 강화학습 트레이딩 시스템")
+    """66차원 RL Decision 기반 메인 실행 함수"""
+    print("66차원 RL Decision 기반 강화학습 트레이딩 시스템")
     print("=" * 80)
     
     try:
         # 1. 데이터 로딩 (OHLC 포함된 신호 데이터만 사용)
-        print("\n1️⃣ 57차원용 데이터 로딩 (OHLC 포함, 50,000개 제한)...")
-        signal_data = DataLoader.load_signal_data_for_test()  # 테스트용 50,000개 제한
+        print("\n1️⃣ 66차원용 데이터 로딩 (OHLC 포함)...")
+        signal_data = DataLoader.load_signal_data()  # 테스트용 50,000개 제한
         if signal_data is None:
             print("신호 데이터 로드 실패")
             return
@@ -1602,10 +1605,10 @@ def main():
         train_signal, test_signal = split_signal_data(signal_data, 0.8, 0.2)
         
         # 3. 환경 및 에이전트 생성
-        print("\n3️⃣ 57차원 환경 및 에이전트 생성...")
+        print("\n3️⃣ 66차원 환경 및 에이전트 생성...")
         train_env = TradingEnvironment(train_signal)
         test_env = TradingEnvironment(test_signal)
-        agent = RLAgent(train_env.observation_space.shape[0])  # 57차원
+        agent = RLAgent(train_env.observation_space.shape[0])  # 66차원
         
         # 환경 설정 비교 디버깅
         print(f"\n🔍 환경 설정 비교:")
@@ -1653,7 +1656,7 @@ def main():
         
         # 2. 호환성 모드로 기존 모델 로드 시도
         if not model_loaded:
-            for model_file in ['agent/final_optimized_model_58d.pth', 'agent/best_model_58d.pth']:
+            for model_file in ['agent/final_optimized_model_66d.pth', 'agent/best_model_66d.pth']:
                 if os.path.exists(model_file):
                     print(f"🔄 호환성 모드로 {model_file} 로드 시도...")
                     
@@ -1669,7 +1672,7 @@ def main():
         
         # 3. 모델 변환 시도 (기존 모델을 AdvancedProfitDQN 아키텍처로)
         if not model_loaded:
-            for model_file in ['agent/final_optimized_model_58d.pth', 'agent/best_model_58d.pth']:
+            for model_file in ['agent/final_optimized_model_66d.pth', 'agent/best_model_66d.pth']:
                 if os.path.exists(model_file):
                     print(f"🔄 모델 변환 시도: {model_file}")
                     if agent.create_compatible_model(model_file):
@@ -1678,7 +1681,7 @@ def main():
                         break
         
         if not model_loaded:
-            print("새로운 58차원 모델로 시작합니다.")
+            print("새로운 66차원 모델로 시작합니다.")
         
         # 4. 훈련 전 테스트 데이터셋 성능 평가 (베이스라인)
         print("\n4️⃣ 훈련 전 테스트 데이터셋 성능 평가...")
@@ -1687,7 +1690,7 @@ def main():
         PerformanceAnalyzer.print_performance_report(baseline_results, baseline_stats)
         
         # 5. 훈련 데이터셋으로 훈련
-        print(f"\n5️⃣ 훈련 데이터셋으로 58차원 RL Decision 기반 훈련 시작...")
+        print(f"\n5️⃣ 훈련 데이터셋으로 66차원 RL Decision 기반 훈련 시작...")
         print(f"   훈련 데이터: {len(train_signal):,}개")
         print(f"   테스트 데이터: {len(test_signal):,}개")
         print(f"   목표 수익률: 5%+ (수익률 중심)")
@@ -1704,20 +1707,20 @@ def main():
         
         # 7. 성능 개선도 분석
         improvement = final_stats['avg_return'] - baseline_stats['avg_return']
-        print(f"\n🚀 58차원 RL Decision 기반 성능 개선도 (테스트 데이터셋 기준):")
+        print(f"\n🚀 66차원 RL Decision 기반 성능 개선도 (테스트 데이터셋 기준):")
         print(f"   수익률: {baseline_stats['avg_return']:.3f} → {final_stats['avg_return']:.3f} ({improvement:+.3f})")
         print(f"   승률: {baseline_stats['overall_win_rate']:.3f} → {final_stats['overall_win_rate']:.3f}")
         print(f"   Signal 활용도: 최대화됨")
         
         # 8. 최종 모델 저장
-        trained_agent.save_model('agent/final_optimized_model_58d.pth')
-        print(f"\n✅ 최종 모델이 저장되었습니다: agent/final_optimized_model_58d.pth")
+        trained_agent.save_model('agent/final_optimized_model_66d.pth')
+        print(f"\n✅ 최종 모델이 저장되었습니다: agent/final_optimized_model_66d.pth")
         
         # 9. 추가 훈련 여부 확인 (수익률 기준)
         if final_stats['avg_return'] < 0.30:  # 수익률 30% 미만
             user_input = input("\n수익률이 목표(30%)에 미달합니다. 추가 훈련을 원하시나요? (y/n): ")
             if user_input.lower() == 'y':
-                print("58차원 수익률 중심 추가 훈련 시작...")
+                print("66차원 수익률 중심 추가 훈련 시작...")
                 TrainingManager.train_agent(trained_agent, train_env, episodes=2000, test_env=test_env)
                 
                 # 추가 훈련 후 재평가
