@@ -489,8 +489,8 @@ def generate_signal_data_with_indicators(
             save_decisions_to_parquet(temp_decision_data)
             print("중단 전까지의 데이터를 저장했습니다.")
         
-        # 진행 상태 저장
-        save_progress_state(i, end_idx)
+        # 진행 상태 저장 (실제 처리 완료된 마지막 인덱스)
+        save_progress_state(i-1, end_idx)
         print("다음에 '--resume' 옵션으로 재시작할 수 있습니다.")
         return False
         
@@ -500,9 +500,9 @@ def generate_signal_data_with_indicators(
         if temp_decision_data:
             save_decisions_to_parquet(temp_decision_data)
         
-        # 진행 상태 저장
+        # 진행 상태 저장 (실제 처리 완료된 마지막 인덱스)
         if 'i' in locals():
-            save_progress_state(i, end_idx)
+            save_progress_state(i-1, end_idx)
         
         import traceback
         traceback.print_exc()
