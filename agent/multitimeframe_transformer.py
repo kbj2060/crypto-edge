@@ -909,7 +909,7 @@ def main():
     # 2. 가격 데이터 로드 (라벨 생성용)
     print("\n2️⃣ 가격 데이터 로드...")
     try:
-        price_data = pd.read_csv('data/ETHUSDC_3m_historical_data.csv')
+        price_data = pd.read_csv('data/ETHUSDT_3m_historical_data.csv')
         price_data['timestamp'] = pd.to_datetime(price_data['timestamp'])
         price_data = price_data.set_index('timestamp')
         price_data = price_data[['open', 'high', 'low', 'close', 'volume', 'quote_volume']].reset_index()

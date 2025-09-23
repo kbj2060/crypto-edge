@@ -37,59 +37,20 @@ def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
     for key, value in indicators.items():
         flattened[f'indicator_{key}'] = safe_convert(value)
     
-    # decisions 정보를 각 카테고리별로 평면화
-    decisions = decision_data.get('decisions', {})
+    # 전략별 decision 정보를 평면화 (최상위 키들 중에서 전략 정보 찾기)
+    strategy_keys = [k for k in decision_data.keys() if k not in ['timestamp', 'indicators', 'open', 'high', 'low', 'close', 'volume', 'quote_volume', 'decisions']]
     
-    for category_name, category_data in decisions.items():
-        prefix = f"{category_name.lower()}_"
-        
-        # RL 변환된 데이터에서 기본 정보 추출
-        flattened[f'{prefix}action'] = safe_convert(category_data.get('action_value'))
-        flattened[f'{prefix}net_score'] = safe_convert(category_data.get('net_score'))
-        flattened[f'{prefix}leverage'] = safe_convert(category_data.get('leverage'))
-        flattened[f'{prefix}max_holding_minutes'] = safe_convert(category_data.get('max_holding_minutes'))
-        
-        # 신뢰도 및 시장 상황
-        flattened[f'{prefix}confidence'] = safe_convert(category_data.get('confidence_value'))
-        flattened[f'{prefix}market_context'] = safe_convert(category_data.get('market_context_value'))
-        
-        # 점수 정보
-        flattened[f'{prefix}buy_score'] = safe_convert(category_data.get('buy_score'))
-        flattened[f'{prefix}sell_score'] = safe_convert(category_data.get('sell_score'))
-        flattened[f'{prefix}signals_used'] = safe_convert(category_data.get('signals_used'))
-        
-        # 충돌 및 보너스 정보
-        flattened[f'{prefix}conflicts_detected_count'] = safe_convert(category_data.get('conflicts_detected_count'))
-        flattened[f'{prefix}bonuses_applied_count'] = safe_convert(category_data.get('bonuses_applied_count'))
-        
-        # 포지션 크기 정보
-        flattened[f'{prefix}risk_multiplier'] = safe_convert(category_data.get('risk_multiplier'))
-        flattened[f'{prefix}risk_usd'] = safe_convert(category_data.get('risk_usd'))
-        
-        # 전략 사용 정보
-        flattened[f'{prefix}strategies_count'] = safe_convert(category_data.get('strategies_count'))
-        
-        # 카테고리별 특화 정보
-        if category_name == 'short_term':
-            flattened[f'{prefix}momentum_strength'] = safe_convert(category_data.get('momentum_strength'))
-            flattened[f'{prefix}reversion_potential'] = safe_convert(category_data.get('reversion_potential'))
-        elif category_name == 'medium_term':
-            flattened[f'{prefix}trend_strength'] = safe_convert(category_data.get('trend_strength'))
-            flattened[f'{prefix}consolidation_level'] = safe_convert(category_data.get('consolidation_level'))
-        elif category_name == 'long_term':
-            flattened[f'{prefix}institutional_bias'] = safe_convert(category_data.get('institutional_bias'))
-            flattened[f'{prefix}macro_trend_strength'] = safe_convert(category_data.get('macro_trend_strength'))
-    
-    # conflicts 정보 (딕셔너리 형태로 처리)
-    conflicts = decision_data.get('conflicts', {})
-    if conflicts and isinstance(conflicts, dict):
-        # conflicts의 각 키-값 쌍을 개별 컬럼으로 저장
-        for key, value in conflicts.items():
-            flattened[f'conflict_{key}'] = safe_convert(value)
-    elif conflicts and isinstance(conflicts, list):
-        # 리스트 형태인 경우
-        flattened['conflicts_count'] = len(conflicts)
-        flattened['conflicts_details'] = str(conflicts)
+    for strategy_name in strategy_keys:
+        strategy_data = decision_data.get(strategy_name, {})
+        if isinstance(strategy_data, dict):
+            prefix = f"{strategy_name.lower()}_"
+            
+            # 기본 전략 정보
+            flattened[f'{prefix}action'] = safe_convert(strategy_data.get('action'))
+            flattened[f'{prefix}score'] = safe_convert(strategy_data.get('score'))
+            flattened[f'{prefix}confidence'] = safe_convert(strategy_data.get('confidence'))
+            flattened[f'{prefix}entry'] = safe_convert(strategy_data.get('entry'))
+            flattened[f'{prefix}stop'] = safe_convert(strategy_data.get('stop'))
     
     return flattened
 

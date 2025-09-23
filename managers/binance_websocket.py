@@ -27,7 +27,7 @@ from managers.binance_dataloader import BinanceDataLoader
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
     
-    def __init__(self, symbol: str = "ETHUSDC", strategy_executor: Optional[StrategyExecutor] = None):
+    def __init__(self, symbol: str = "ETHUSDT", strategy_executor: Optional[StrategyExecutor] = None):
         """웹소켓 초기화"""
         self.symbol = symbol.lower()
         self.ws_url = "wss://fstream.binance.com/ws"
@@ -190,9 +190,9 @@ class BinanceWebSocket:
         decision = self.decision_engine.decide_trade_realtime(signals)
 
         indicators = get_all_indicators()
-        decision.update({'timestamp': price_data['timestamp'], 'indicators': indicators})
+        signals.update({'timestamp': price_data['timestamp'], 'indicators': indicators})
         
-        agent_decision = self.agent.make_trading_decision(decision, price_data)
+        agent_decision = self.agent.make_trading_decision(signals, price_data)
 
         # Decision 로그에 저장
         # self.decision_logger.log_decision(decision)

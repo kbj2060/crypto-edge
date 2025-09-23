@@ -6,7 +6,7 @@ class IntegratedConfig:
     
     def __init__(self):
         # 기본 설정
-        self.symbol: str = "ETHUSDC"
+        self.symbol: str = "ETHUSDT"
         
         # 세션 기반 전략 설정
         self.enable_session_strategy = True
@@ -14,7 +14,7 @@ class IntegratedConfig:
         
         # 고급 청산 전략 설정
         self.enable_advanced_liquidation = True
-        self.adv_liq_symbol = "ETHUSDC"
+        self.adv_liq_symbol = "ETHUSDT"
         
         # 외부 서버 설정
         self.external_server_url = "http://158.180.82.65"  # 외부 서버 URL

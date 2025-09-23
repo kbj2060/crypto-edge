@@ -17,7 +17,7 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class FundingRateCfg:
-    symbol: str = "ETHUSDC"
+    symbol: str = "ETHUSDT"
     # 🔥 단타용으로 대폭 완화 (기존의 1/10 수준)
     extreme_funding_threshold: float = 0.00005   # 0.005% (기존 0.0003에서 대폭 완화)
     moderate_funding_threshold: float = 0.00002  # 0.002% (기존 0.0001에서 대폭 완화)

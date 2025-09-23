@@ -468,14 +468,22 @@ class LiveTradingAgent:
             'in_position': self.in_position
         }
     
-    def _convert_action_to_decision(self, ai_action: np.ndarray, 
+    def _convert_action_to_decision(self, ai_action: int, 
                                   current_candle: Dict, signal_quality: Dict,
                                   flattened_signal_data: Dict) -> Dict[str, Any]:
-        """AI 액션을 실제 거래 결정으로 변환"""
+        """AI 액션을 실제 거래 결정으로 변환 (단순화된 액션)"""
         
-        position_change = ai_action[0]
-        leverage = ai_action[1] 
-        holding_minutes = ai_action[2]
+        # 단순한 액션 처리: 0=Hold, 1=Buy, 2=Sell
+        if ai_action == 0:  # Hold
+            position_change = 0.0
+        elif ai_action == 1:  # Buy
+            position_change = 1.0  # 고정된 매수 크기
+        else:  # ai_action == 2, Sell
+            position_change = -1.0  # 고정된 매도 크기
+        
+        # 단타용 고정값
+        leverage = 5.0  # 고정 레버리지
+        holding_minutes = 30.0  # 30분 홀딩 (단타)
         
         current_price = current_candle['close']
         
@@ -502,26 +510,24 @@ class LiveTradingAgent:
             'take_profit': None
         }
         
-        # 액션 해석 (보수적 임계값)
-        min_threshold = 0.2
+        # 액션 해석 (단순화된 액션)
         min_quality = 0.3
         min_confidence = 0.4
         
         combined_confidence = (ai_confidence + signal_confidence) / 2
         
-        if (abs(position_change) > min_threshold and 
-            signal_quality['overall_score'] > min_quality and
+        if (signal_quality['overall_score'] > min_quality and
             combined_confidence > min_confidence):
             
-            if position_change > min_threshold:
+            if ai_action == 1:  # Buy
                 decision['action'] = 'BUY'
-                decision['reason'] = (f"AI+Signal 추천: Long {position_change:.2f} "
+                decision['reason'] = (f"AI+Signal 추천: Long "
                                     f"(신호품질: {signal_quality['overall_score']:.2f}, "
                                     f"AI신뢰도: {ai_confidence:.2f}, "
                                     f"Signal신뢰도: {signal_confidence:.2f})")
-            elif position_change < -min_threshold:
+            elif ai_action == 2:  # Sell
                 decision['action'] = 'SELL'
-                decision['reason'] = (f"AI+Signal 추천: Short {abs(position_change):.2f} "
+                decision['reason'] = (f"AI+Signal 추천: Short "
                                     f"(신호품질: {signal_quality['overall_score']:.2f}, "
                                     f"AI신뢰도: {ai_confidence:.2f}, "
                                     f"Signal신뢰도: {signal_confidence:.2f})")
@@ -538,16 +544,22 @@ class LiveTradingAgent:
                 current_price, decision['action'], holding_minutes, signal_quality, flattened_signal_data
             )
         else:
-            decision['reason'] = (f"임계값 미달 (변경량: {position_change:.2f}, "
+            action_name = 'Hold' if ai_action == 0 else ('Buy' if ai_action == 1 else 'Sell')
+            decision['reason'] = (f"임계값 미달 (액션: {action_name}, "
                                 f"신호품질: {signal_quality['overall_score']:.2f}, "
                                 f"종합신뢰도: {combined_confidence:.2f})")
         
         return decision
     
-    def _calculate_ai_confidence(self, ai_action: np.ndarray, signal_quality: Dict) -> float:
-        """AI와 신호 품질을 결합한 신뢰도 계산"""
+    def _calculate_ai_confidence(self, ai_action: int, signal_quality: Dict) -> float:
+        """AI와 신호 품질을 결합한 신뢰도 계산 (단순화된 액션)"""
         
-        ai_confidence = min(abs(ai_action[0]) / 2.0, 1.0)
+        # 단순한 액션에서는 액션 자체로 신뢰도 계산
+        if ai_action == 0:  # Hold
+            ai_confidence = 0.5  # 중간 신뢰도
+        else:  # Buy 또는 Sell
+            ai_confidence = 0.8  # 높은 신뢰도 (실제 거래 결정)
+        
         signal_confidence = signal_quality['overall_score']
         
         combined_confidence = (ai_confidence * 0.6) + (signal_confidence * 0.4)

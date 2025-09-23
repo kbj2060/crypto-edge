@@ -17,7 +17,7 @@ def _clamp(x, a=0.0, b=1.0):
 
 @dataclass
 class OIDeltaCfg:
-    symbol: str = "ETHUSDC"
+    symbol: str = "ETHUSDT"
     lookback_hours: int = 12              # 24 -> 12 (단축)
     oi_change_threshold: float = 0.005    # 2% -> 0.5% (대폭 완화)
     price_oi_correlation_period: int = 6  # 12 -> 6 (단축)

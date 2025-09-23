@@ -6,7 +6,7 @@ from utils.time_manager import get_time_manager
 class CandleCreator:
     """3분봉 데이터 처리를 담당하는 클래스 (웹소켓에서 직접 3분봉 수신)"""
     
-    def __init__(self, symbol: str = "ETHUSDC"):
+    def __init__(self, symbol: str = "ETHUSDT"):
         self.symbol = symbol
         self.time_manager = get_time_manager()
 

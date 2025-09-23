@@ -237,11 +237,11 @@ class TradingEnvironment(gym.Env):
         if trade_completed:
             # 거래 완료 시: 실제 수익률 기반 보상
             reward = self.reward_calculator.calculate_reward(
-                current_price=current_close_price,  # 현재 close 가격 사용
+                    current_price=current_close_price,  # 현재 close 가격 사용
                 entry_price=self.entry_price,
-                position=old_position,  # 거래 전 포지션 사용
+                    position=old_position,  # 거래 전 포지션 사용
                 holding_time=self.holding_time,
-                trade_pnl=self.last_trade_pnl
+                    trade_pnl=self.last_trade_pnl
             )
         else:
             # 거래 완료가 아닌 경우: 리워드 0 (Hold 액션)
@@ -250,7 +250,7 @@ class TradingEnvironment(gym.Env):
         # 다음 스텝으로 이동
         self.current_step += 1
         self.holding_time += 3
-                
+        
         done = (self.current_step >= len(self.signal_data) - 1 or 
                 self.balance <= self.initial_balance * 0.1)
         
@@ -449,7 +449,7 @@ class TradingEnvironment(gym.Env):
                 
         
         return trade_completed, old_position
-        
+    
     def _calculate_trade_pnl(self, exit_price: float, entry_price: float, position: float) -> float:
         """거래 손익 계산"""
         if entry_price <= 0:
@@ -587,7 +587,7 @@ class RLAgent:
         # 타겟 네트워크 업데이트 (수익률 학습 최적화)
         self.target_update_freq = 50  # 더 자주 업데이트 (빠른 학습)
         self.update_count = 0
-        
+    
         
         # 액션 공간 설정 (환경에서 가져옴)
         self.action_space = None  # 환경에서 설정됨
@@ -1117,7 +1117,7 @@ class DataLoader:
                 print(f"Signal 데이터 로드: {len(signal_df):,}개 레코드")
                 
                 return DataLoader._convert_parquet_to_signal_dicts(signal_df)
-                
+            
             except Exception as e:
                 print(f"Parquet 로드 실패: {e}")
         
@@ -1313,7 +1313,7 @@ class PerformanceAnalyzer:
         if win_rate >= 0.6: score += 1
         
         grades = {8: "A+ (우수)", 7: "A (좋음)", 6: "B+ (양호)", 5: "B (보통)", 
-                    4: "C+ (미흡)", 3: "C (개선필요)", 2: "D (나쁨)", 1: "F (매우나쁨)", 0: "F (실패)"}
+                 4: "C+ (미흡)", 3: "C (개선필요)", 2: "D (나쁨)", 1: "F (매우나쁨)", 0: "F (실패)"}
         
         return grades.get(score, "F (실패)")
     
@@ -1539,8 +1539,8 @@ class TrainingManager:
                     if overfitting_gap > 0.15:  # 과적합이 심하면 조기 종료
                         print(f"🛑 과적합으로 인한 조기 종료: 훈련 수익률({recent_train_return:.3f}) - 테스트 수익률({recent_test_return:.3f}) = {overfitting_gap:.3f}")
                         agent.save_model('agent/early_stop_model.pth')
-                        break
-                
+                    break
+        
                 if recent_test_return >= 0.20:  # 수익률 20% 이상 달성
                     print(f"🏆 66차원 목표 달성! 테스트 데이터셋 수익률 {recent_test_return:.3f} ({recent_test_return*100:.1f}%) 도달")
                     agent.save_model('agent/final_optimized_model_66d.pth')

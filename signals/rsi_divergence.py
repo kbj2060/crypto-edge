@@ -31,7 +31,7 @@ from dataclasses import dataclass
 
 @dataclass
 class HTFRSIDivCfg:
-    symbol: str = "ETHUSDC"
+    symbol: str = "ETHUSDT"
     interval: str = "3m"
     rsi_period: int = 7          # 5 -> 7 (더 안정적)
     stoch_period: int = 10       # 14 -> 10 (더 민감)

@@ -24,7 +24,7 @@ class SessionVPVR:
         target_time: Optional[dt.datetime] = None,
         bins: int = 50,
         lookback: int = 150,
-        volume_field: str = "quote_volume",
+        volume_field: str = "volume",  # quote_volume에서 volume으로 변경
         hvn_sigma_factor: float = 0.5,
         lvn_sigma_factor: float = 0.5,
         top_n: int = 3,
@@ -219,11 +219,8 @@ class SessionVPVR:
             if close_price <= 0:
                 return
             
-            # 볼륨 데이터
-            volume = float(candle.get(self.volume_field, 0))
-            if volume <= 0:
-                volume = float(candle.get('volume', 0)) * close_price
-            
+            # 볼륨 데이터 - volume 필드만 사용
+            volume = float(candle.get('volume'))
             if volume <= 0:
                 return
             
@@ -283,44 +280,25 @@ class SessionVPVR:
                 # 현재 가격 추정 (가장 최근 캔들의 종가)
                 poc_price = float(self.candles[-1].get('close'))
             
-            # HVN/LVN 계산
-            volume_ratios = {k: (v / total_volume) for k, v in active_bins.items()}
-            ratios_arr = np.array(list(volume_ratios.values()))
-            
-            if len(ratios_arr) > 1:
-                mean_ratio = float(np.mean(ratios_arr))
-                std_ratio = float(np.std(ratios_arr))
+            # HVN/LVN 계산 - 간단하고 정확한 방법
+            if len(active_bins) > 1:
+                # POC를 제외한 bin들 중에서 선택
+                other_bins = {k: v for k, v in active_bins.items() if k != poc_bin}
                 
-                hvn_threshold = mean_ratio + (self.hvn_sigma_factor * std_ratio)
-                lvn_threshold = mean_ratio - (self.lvn_sigma_factor * std_ratio)
-                
-                # HVN 후보 (POC 제외)
-                hvn_candidates = [k for k, r in volume_ratios.items() 
-                                if (r > hvn_threshold and k != poc_bin)]
-                
-                # LVN 후보 (POC 제외)
-                lvn_candidates = [k for k, r in volume_ratios.items() 
-                                if (r < lvn_threshold and k != poc_bin)]
-                
-                # fallback: sigma 기반으로 찾지 못하면 상위/하위 N개 사용
-                if not hvn_candidates:
-                    sorted_desc = sorted(((k, v) for k, v in active_bins.items() if k != poc_bin), 
-                                        key=lambda x: x[1], reverse=True)
-                    hvn_candidates = [k for k, _ in sorted_desc[:self.top_n]]
-                
-                if not lvn_candidates:
-                    sorted_asc = sorted(((k, v) for k, v in active_bins.items() if k != poc_bin), 
-                                        key=lambda x: x[1])
-                    lvn_candidates = [k for k, _ in sorted_asc[:self.bottom_n]]
-                
-                # 최종 HVN/LVN 선택
-                hvn_bin = hvn_candidates[0] if hvn_candidates else poc_bin
-                hvn_price = self.price_bins.get(hvn_bin, poc_price)
-                
-                lvn_bin = (min(lvn_candidates, key=lambda k: active_bins.get(k, float('inf'))) 
-                            if lvn_candidates else poc_bin)
-                lvn_price = self.price_bins.get(lvn_bin, poc_price)
-                
+                if other_bins:
+                    # HVN: POC 제외 최고 거래량 bin
+                    hvn_bin = max(other_bins, key=other_bins.get)
+                    hvn_price = self.price_bins.get(hvn_bin, poc_price)
+                    
+                    # LVN: POC 제외 최저 거래량 bin
+                    lvn_bin = min(other_bins, key=other_bins.get)
+                    lvn_price = self.price_bins.get(lvn_bin, poc_price)
+                else:
+                    # POC만 있는 경우
+                    hvn_price = poc_price
+                    lvn_price = poc_price
+                    hvn_bin = poc_bin
+                    lvn_bin = poc_bin
             else:
                 # 단일 bin인 경우
                 hvn_price = poc_price

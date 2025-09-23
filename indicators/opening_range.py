@@ -11,8 +11,8 @@ Opening Range (OR) 지표 모듈
 import pandas as pd
 from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
-from utils.session_manager import get_session_manager
 from managers.data_manager import get_data_manager
+from utils.session_manager import get_session_manager
 from utils.time_manager import get_time_manager
 
 # 기본 설정값
@@ -27,7 +27,7 @@ class OpeningRange:
     공용 데이터를 사용하여 효율적으로 OR을 계산합니다.
     """
     
-    def __init__(self, or_minutes: int = DEFAULT_OR_MINUTES, symbol: str = "ETHUSDC", target_time: Optional[datetime] = None):
+    def __init__(self, or_minutes: int = DEFAULT_OR_MINUTES, symbol: str = "ETHUSDT", target_time: Optional[datetime] = None):
         """
         OpeningRange 초기화
         
@@ -36,8 +36,8 @@ class OpeningRange:
         """
         self.symbol = symbol
         self.or_minutes = or_minutes
-        self.session_manager = get_session_manager()
-        self.time_manager = get_time_manager()
+        self.session_manager = get_session_manager(target_time=target_time)
+        self.time_manager = get_time_manager(target_time=target_time)
         self.data_manager = get_data_manager()
         self._current_session_start = None
         self._or = {}
@@ -110,10 +110,9 @@ class OpeningRange:
             # UTC 시간으로 변환
             start_utc = self.time_manager.ensure_utc(start_time)
             end_utc = self.time_manager.ensure_utc(end_time)
-            
             # DataManager에서 지정된 기간 데이터 가져오기
             or_data = data_manager.get_data_range(start_utc, end_utc)
-            return or_data if or_data is not None else pd.DataFrame()
+            return or_data 
         except Exception as e:
             print(f"❌ OR 데이터 가져오기 오류: {e}")
             return pd.DataFrame()  # 빈 DataFrame 반환

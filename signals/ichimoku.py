@@ -94,7 +94,7 @@ def _cloud_state(price: float, sa: float, sb: float) -> str:
 # --------- 설정 ---------
 @dataclass
 class IchimokuHTFCfg:
-    symbol: str = "ETHUSDC"
+    symbol: str = "ETHUSDT"
     main_interval: str = "4h"    # 주 신호: 4h (장기 전략에 적합)
     confirm_interval: Optional[str] = "1d"  # 1일봉 보조 필터 (장기 확인)
     # 표준 일목 파라미터 (4시간봉에 맞게 조정)

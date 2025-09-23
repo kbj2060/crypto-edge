@@ -41,7 +41,7 @@ class DataManager:
         self._initialized = True
 
     
-    def load_initial_data(self, symbol: str = 'ETHUSDC', df_3m: Optional[pd.DataFrame] = None, df_15m: Optional[pd.DataFrame] = None, df_1h: Optional[pd.DataFrame] = None) -> bool:
+    def load_initial_data(self, symbol: str = 'ETHUSDT', df_3m: Optional[pd.DataFrame] = None, df_15m: Optional[pd.DataFrame] = None, df_1h: Optional[pd.DataFrame] = None) -> bool:
         """초기 데이터 로딩 (전날 00시부터 현재까지)"""
         try:
             # 전날 00시부터 현재까지 데이터 가져오기
@@ -68,11 +68,6 @@ class DataManager:
                     symbol=symbol,
                     limit=300
                 )
-                
-                if df_3m is not None and not df_3m.empty:
-                    self.data = df_3m.copy()
-                    self.data_15m = df_15m.copy()
-                    self.data_1h = df_1h.copy()
                 
                 self._data_loaded = True
                 return True
@@ -113,15 +108,12 @@ class DataManager:
             self.data = pd.concat([self.data, new_row], ignore_index=False)
             self.data = self.data[~self.data.index.duplicated(keep='last')]
             
-            # 최대 1000개 캔들 유지
-            if len(self.data) > 1000:
-                self.data = self.data.tail(1000)
 
             #print(f"✅ 3분봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
         except Exception:
             pass
 
-    def update_with_candle_15m(self, symbol: str = 'ETHUSDC', data: pd.DataFrame = None) -> None:
+    def update_with_candle_15m(self, symbol: str = 'ETHUSDT', data: pd.DataFrame = None) -> None:
         # 웹소켓으로 받은 데이터가 아닌 api 로 1개만 받아 추가
         if data is None:
             new = self.dataloader.fetch_data(interval="15m", symbol=symbol, limit=1)
@@ -137,7 +129,7 @@ class DataManager:
 
         #print(f"✅ 15분봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
 
-    def update_with_candle_1h(self, symbol: str = 'ETHUSDC', data: pd.DataFrame = None) -> None:
+    def update_with_candle_1h(self, symbol: str = 'ETHUSDT', data: pd.DataFrame = None) -> None:
         if data is None:
             new = self.dataloader.fetch_data(interval="1h", symbol=symbol, limit=1)
         else:

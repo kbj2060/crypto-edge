@@ -8,7 +8,7 @@ from utils.time_manager import get_time_manager
 @dataclass
 class BucketConfig:
     external_server_url: str = "http://158.180.82.65"       # μ/σ 추정 4h
-    symbol: str = "ETHUSDC"             # 최근 비어있지 않은 버킷 신선도
+    symbol: str = "ETHUSDT"             # 최근 비어있지 않은 버킷 신선도
     external_api_key: str = "1234567890"                 # 주문 틱
 
 @dataclass

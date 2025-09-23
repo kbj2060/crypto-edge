@@ -17,7 +17,7 @@ from utils.session_manager import get_session_manager
 class SessionVWAP:
     """세션 기반 VWAP 관리 클래스"""
     
-    def __init__(self, symbol: str = "ETHUSDC", target_time: Optional[datetime] = None):
+    def __init__(self, symbol: str = "ETHUSDT", target_time: Optional[datetime] = None):
         """VWAP 초기화"""
         self.symbol = symbol
         self.time_manager = get_time_manager()

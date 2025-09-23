@@ -50,7 +50,7 @@ class IntegratedSmartTrader:
             
             # 초기 데이터 로딩 (전날 00시부터 현재까지)
             print("📊 DataManager 초기 데이터 로딩 시작...")
-            data_loaded = data_manager.load_initial_data('ETHUSDC')
+            data_loaded = data_manager.load_initial_data('ETHUSDT')
 
             if data_loaded:
                 print(f"🎯 중앙 데이터 저장소 준비 완료!")

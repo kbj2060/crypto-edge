@@ -17,15 +17,15 @@ logger = logging.getLogger(__name__)
 
 class BinanceDataCollector:
     def __init__(self):
-        self.base_url = "https://api.binance.com/api/v3"
+        self.base_url = "https://fapi.binance.com/fapi/v1/klines"  # 선물 API 엔드포인트
         self.session = requests.Session()
         
     def get_klines(self, symbol: str, interval: str, start_time: int = None, end_time: int = None, limit: int = 1000) -> List[List]:
         """
-        바이낸스 API에서 Kline 데이터를 가져옵니다.
+        바이낸스 선물 API에서 Kline 데이터를 가져옵니다.
         
         Args:
-            symbol: 거래쌍 (예: 'BTCUSDT')
+            symbol: 거래쌍 (예: 'ETHUSDT')
             interval: 시간 간격 ('3m', '5m' 등)
             start_time: 시작 시간 (밀리초)
             end_time: 종료 시간 (밀리초)
@@ -43,7 +43,7 @@ class BinanceDataCollector:
             params['endTime'] = end_time
             
         try:
-            response = self.session.get(f"{self.base_url}/klines", params=params)
+            response = self.session.get(self.base_url, params=params)
             response.raise_for_status()
             return response.json()
         except requests.exceptions.RequestException as e:
@@ -144,11 +144,11 @@ def main():
     """메인 실행 함수"""
     collector = BinanceDataCollector()
     
-    # 수집할 거래쌍과 시간 간격
-    symbols = ['ETHUSDC']
-    intervals = [ '1h', '3m', '15m']
+    # 수집할 거래쌍과 시간 간격 (선물 데이터)
+    symbols = ['ETHUSDT']
+    intervals = ['1h', '3m', '15m']
     
-    logger.info("바이낸스 데이터 수집 시작")
+    logger.info("바이낸스 선물 데이터 수집 시작")
     logger.info(f"거래쌍: {symbols}")
     logger.info(f"시간 간격: {intervals}")
     logger.info(f"수집 기간: 2023년 9월 13일 00시 00분 ~ 2024년 9월 13일 00시 00분")
@@ -161,8 +161,8 @@ def main():
                 logger.info(f"{'='*50}")
                 
                 # UTC 시간으로 정확히 설정 (한국 시간 - 9시간)
-                start_time = datetime(2023, 9, 13, 0, 0, 0, tzinfo=timezone.utc)  # 2023년 9월 13일 00시 00분 UTC
-                end_time = datetime(2024, 9, 13, 0, 0, 0, tzinfo=timezone.utc)    # 2024년 9월 13일 00시 00분 UTC
+                start_time = datetime(2024, 9, 13, 0, 0, 0, tzinfo=timezone.utc)  # 2023년 9월 13일 00시 00분 UTC
+                end_time = datetime(2025, 9, 13, 0, 0, 0, tzinfo=timezone.utc)    # 2024년 9월 13일 00시 00분 UTC
                 # 데이터 수집
                 df = collector.get_historical_data(symbol, interval, start_time, end_time)
                 

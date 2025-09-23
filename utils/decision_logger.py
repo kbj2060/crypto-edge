@@ -14,7 +14,7 @@ from utils.session_manager import get_session_manager
 class DecisionLogger:
     """Decision 로그를 매일 Parquet 파일로 저장하는 클래스"""
     
-    def __init__(self, symbol: str = "ETHUSDC", logs_dir: str = "logs"):
+    def __init__(self, symbol: str = "ETHUSDT", logs_dir: str = "logs"):
         """
         DecisionLogger 초기화
         
@@ -204,7 +204,7 @@ class DecisionLogger:
 # 전역 DecisionLogger 인스턴스
 _global_decision_logger: Optional[DecisionLogger] = None
 
-def get_decision_logger(symbol: str = "ETHUSDC") -> DecisionLogger:
+def get_decision_logger(symbol: str = "ETHUSDT") -> DecisionLogger:
     """전역 DecisionLogger 인스턴스 반환 (싱글톤 패턴)"""
     global _global_decision_logger
     

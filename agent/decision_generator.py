@@ -5,7 +5,6 @@ import os
 import sys
 import pickle
 from typing import Dict, Any, List, Optional
-import psutil
 
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -303,8 +302,8 @@ def clear_progress_state(filename: str = "agent/progress_state.pkl"):
     except Exception as e:
         print(f"진행 상태 파일 삭제 오류: {e}")
 
-def load_ethusdc_data():
-    """ETHUSDC CSV 데이터 로드 - 3분, 15분, 1시간봉 (메모리 최적화)"""
+def load_ethusdt_data():
+    """ETHUSDT CSV 데이터 로드 - 3분, 15분, 1시간봉 (메모리 최적화)"""
     try:
         required_columns = ['open', 'high', 'low', 'close', 'volume', 'quote_volume']
         
@@ -319,26 +318,26 @@ def load_ethusdc_data():
         }
         
         # 3분봉 데이터 로드 (메모리 최적화)
-        df_3m = pd.read_csv('data/ETHUSDC_3m_historical_data.csv', dtype=dtype_optimized)
+        df_3m = pd.read_csv('data/ETHUSDT_3m_20240913_20250913.csv', dtype=dtype_optimized)
         df_3m['timestamp'] = pd.to_datetime(df_3m['timestamp'])
         df_3m = df_3m.set_index('timestamp')
         df_3m = df_3m[required_columns]
 
         # 15분봉 데이터 로드 (메모리 최적화)
-        df_15m = pd.read_csv('data/ETHUSDC_15m_historical_data.csv', dtype=dtype_optimized)
+        df_15m = pd.read_csv('data/ETHUSDT_15m_20240913_20250913.csv', dtype=dtype_optimized)
         df_15m['timestamp'] = pd.to_datetime(df_15m['timestamp'])
         df_15m = df_15m.set_index('timestamp')
         df_15m = df_15m[required_columns]
 
         # 1시간봉 데이터 로드 (메모리 최적화)
-        df_1h = pd.read_csv('data/ETHUSDC_1h_historical_data.csv', dtype=dtype_optimized)
+        df_1h = pd.read_csv('data/ETHUSDT_1h_20240913_20250913.csv', dtype=dtype_optimized)
         df_1h['timestamp'] = pd.to_datetime(df_1h['timestamp'])
         df_1h = df_1h.set_index('timestamp')
         df_1h = df_1h[required_columns]
 
-        print(f"ETHUSDC 3분봉 데이터 로드 완료: {len(df_3m)}개 캔들 (메모리 최적화됨)")
-        print(f"ETHUSDC 15분봉 데이터 생성 완료: {len(df_15m)}개 캔들 (메모리 최적화됨)")
-        print(f"ETHUSDC 1시간봉 데이터 생성 완료: {len(df_1h)}개 캔들 (메모리 최적화됨)")
+        print(f"ETHUSDT 3분봉 데이터 로드 완료: {len(df_3m)}개 캔들 (메모리 최적화됨)")
+        print(f"ETHUSDT 15분봉 데이터 생성 완료: {len(df_15m)}개 캔들 (메모리 최적화됨)")
+        print(f"ETHUSDT 1시간봉 데이터 생성 완료: {len(df_1h)}개 캔들 (메모리 최적화됨)")
         
         # 메모리 사용량 출력
         memory_usage_3m = df_3m.memory_usage(deep=True).sum() / 1024 / 1024
@@ -393,14 +392,14 @@ def generate_signal_data_with_indicators(
     
     # 데이터는 target_time 이전까지 가져오기
     data_manager.load_initial_data(
-        symbol='ETHUSDC', 
-        df_3m=price_data[price_data.index < target_time], 
-        df_15m=price_data_15m[price_data_15m.index < target_time], 
-        df_1h=price_data_1h[price_data_1h.index < target_time]
+        symbol='ETHUSDT', 
+        df_3m=price_data, 
+        df_15m=price_data_15m, 
+        df_1h=price_data_1h
     ) 
-    
+
     # indicator는 실제 데이터의 마지막 시점으로 초기화 (target_time 이전)
-    last_data_time = price_data[price_data.index < target_time].index[-1]
+    last_data_time = price_data[price_data.index <= target_time].index[-1]
     global_manager = get_global_indicator_manager(last_data_time)
     global_manager.initialize_indicators()
 
@@ -408,11 +407,11 @@ def generate_signal_data_with_indicators(
     decision_engine = TradeDecisionEngine()
 
     end_idx = len(price_data)
-    batch_size = 50000  # 50,000개씩 배치로 저장 (Parquet 최적화)
+    batch_size = 100  # 50,000개씩 배치로 저장 (Parquet 최적화)
     temp_decision_data = []  # 임시 저장용
     
     try:
-        for i in range(start_idx, end_idx):
+        for i in range(start_idx+1, end_idx):
             # 현재 캔들 데이터
             series_3m = price_data.iloc[i]
             current_time = price_data.index[i]
@@ -443,13 +442,16 @@ def generate_signal_data_with_indicators(
             strategy_executor.execute_all_strategies()
             
             # 신호 수집
-            signals = strategy_executor.get_signals()
+            decisions = strategy_executor.get_signals()
             
             # 거래 결정
-            decision = decision_engine.decide_trade_realtime(signals)
-            decision.update({'timestamp': current_time, 'indicators': indicators, **series_3m.to_dict()})
+            # decision = decision_engine.decide_trade_realtime(decisions)
+            decisions.update({'timestamp': current_time, 'indicators': indicators, **series_3m.to_dict()})
 
-            temp_decision_data.append(decision)
+            if len(decisions.keys()) == 58:
+                raise Exception("decisions 키 수가 58개가 아님.")
+
+            temp_decision_data.append(decisions)
             
             # 배치 크기마다 Parquet 파일에 저장
             if len(temp_decision_data) >= batch_size:
@@ -463,12 +465,12 @@ def generate_signal_data_with_indicators(
                 processed = i - start_idx + 1
                 
                 # 메모리 사용량 모니터링
-                import psutil
-                memory_usage = psutil.Process().memory_info().rss / 1024 / 1024  # MB
-                temp_data_size = len(temp_decision_data)
+                # import psutil
+                # memory_usage = psutil.Process().memory_info().rss / 1024 / 1024  # MB
+                # temp_data_size = len(temp_decision_data)
                 
                 print(f"   진행률: {processed}/{total_periods} ({processed / total_periods * 100:.1f}%) - 인덱스 {i} 저장됨")
-                print(f"   메모리 사용량: {memory_usage:.1f}MB, 임시 데이터: {temp_data_size}개")
+                # print(f"   메모리 사용량: {memory_usage:.1f}MB, 임시 데이터: {temp_data_size}개")
         
         # 남은 decision 데이터가 있으면 저장
         if temp_decision_data:
@@ -623,8 +625,8 @@ def main_example():
                 analyze_decision_data(df)
             return
     
-    # 2. 실제 ETHUSDC 데이터 로드 (3분, 15분, 1시간봉)
-    price_data, price_data_15m, price_data_1h = load_ethusdc_data()
+    # 2. 실제 ETHUSDT 데이터 로드 (3분, 15분, 1시간봉)
+    price_data, price_data_15m, price_data_1h = load_ethusdt_data()
     
     if price_data is None:
         print("데이터 로드 실패. 프로그램을 종료합니다.")
