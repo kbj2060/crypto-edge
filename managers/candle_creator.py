@@ -1,6 +1,6 @@
 from typing import Dict
 import pandas as pd
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 
 class CandleCreator:

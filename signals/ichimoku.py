@@ -22,7 +22,7 @@ import numpy as np
 
 # 프로젝트 내 기존 유틸 사용 (당신의 다른 전략 파일들과 동일한 방식)
 from managers.binance_dataloader import BinanceDataLoader
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 
 # --------- 계산 유틸 ---------

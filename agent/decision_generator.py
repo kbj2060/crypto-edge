@@ -5,10 +5,13 @@ import os
 import sys
 import pickle
 from typing import Dict, Any, List, Optional
+from datetime import datetime, timezone
+
 
 # 프로젝트 루트를 Python 경로에 추가
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+from managers.time_manager import get_time_manager
 from managers.strategy_executor import StrategyExecutor
 from managers.data_manager import get_data_manager
 from engines.trade_decision_engine import TradeDecisionEngine
@@ -63,11 +66,7 @@ def save_decisions_to_parquet(
         
         # 데이터 평면화
         flattened_data = [flatten_decision_data(decision) for decision in decision_data_list]
-        new_df = pd.DataFrame(flattened_data)
-        
-        # timestamp를 datetime 타입으로 변환
-        if 'timestamp' in new_df.columns:
-            new_df['timestamp'] = pd.to_datetime(new_df['timestamp'])
+        new_df = pd.DataFrame(flattened_data)        
         
         # 기존 파일이 있고 append 모드인 경우
         if append and os.path.exists(filename):
@@ -82,7 +81,6 @@ def save_decisions_to_parquet(
                 
                 if not new_df.empty:
                     # 컬럼 순서 맞추기
-                    common_columns = list(set(existing_df.columns) & set(new_df.columns))
                     new_columns = [col for col in new_df.columns if col not in existing_df.columns]
                     
                     # 기존 DataFrame에 새 컬럼 추가 (NaN으로 채워짐)
@@ -110,14 +108,20 @@ def save_decisions_to_parquet(
         else:
             combined_df = new_df
         
+        # timestamp를 UTC timezone-aware datetime으로 변환
+        if 'timestamp' in combined_df.columns:
+            # 먼저 datetime으로 변환
+            combined_df['timestamp'] = pd.to_datetime(combined_df['timestamp'], utc=True)
+            # 문자열로 변환하여 저장 (Parquet에서 datetime 문제 해결)
+            combined_df['timestamp'] = combined_df['timestamp'].dt.strftime('%Y-%m-%d %H:%M:%S UTC')
+            
         # Parquet 파일로 저장 (최적화된 압축 및 설정)
         os.makedirs(os.path.dirname(filename), exist_ok=True)
         combined_df.to_parquet(
             filename, 
             compression='snappy', 
             index=False,
-            engine='pyarrow',  # pyarrow 엔진 사용 (더 빠름)
-            use_deprecated_int96_timestamps=False  # 최신 타임스탬프 형식 사용
+            engine='pyarrow'  # pyarrow 엔진 사용 (더 빠름)
         )
         
         print(f"Decision 데이터 저장 완료: {filename} ({len(combined_df)}개 레코드)")
@@ -143,6 +147,14 @@ def load_decisions_from_parquet(filename: str = "agent/decisions_data.parquet") 
             engine='pyarrow',  # pyarrow 엔진 사용
             memory_map=True    # 메모리 매핑 활성화
         )
+        
+        # timestamp를 datetime으로 변환 (문자열로 저장된 경우)
+        if 'timestamp' in df.columns:
+            if df['timestamp'].dtype == 'object':  # 문자열인 경우
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+            else:  # 이미 datetime인 경우
+                df['timestamp'] = pd.to_datetime(df['timestamp'], utc=True)
+        
         print(f"Decision 데이터 로드 완료: {filename} ({len(df)}개 레코드)")
         print(f"메모리 사용량: {df.memory_usage(deep=True).sum() / 1024 / 1024:.2f}MB")
         return df
@@ -370,7 +382,8 @@ def generate_signal_data_with_indicators(
     
     # 컴포넌트 초기화
     data_manager = get_data_manager()
-    
+    time_manager = get_time_manager()
+
     print("CSV 데이터로 지표 업데이트 및 전략 실행 중...")
     print(f"   - 3분봉: {len(price_data)}개 캔들")
     print(f"   - 15분봉: {len(price_data_15m)}개 캔들")
@@ -379,7 +392,7 @@ def generate_signal_data_with_indicators(
     # 시작 위치 결정
     if progress_state:
         # 저장된 인덱스는 이미 처리된 마지막 인덱스이므로 +1부터 시작
-        start_idx = progress_state['current_index'] + 1
+        start_idx = progress_state['current_index']
         print(f"이전 진행 상태에서 재시작: {start_idx}번째 캔들부터 (저장된 위치: {progress_state['current_index']})")
     else:
         # 최근 데이터부터 처리 (최대 max_periods개)
@@ -404,10 +417,10 @@ def generate_signal_data_with_indicators(
     global_manager.initialize_indicators()
 
     strategy_executor = StrategyExecutor()
-    decision_engine = TradeDecisionEngine()
+    # decision_engine = TradeDecisionEngine()
 
     end_idx = len(price_data)
-    batch_size = 100  # 50,000개씩 배치로 저장 (Parquet 최적화)
+    batch_size = 10000  # 50,000개씩 배치로 저장 (Parquet 최적화)
     temp_decision_data = []  # 임시 저장용
     
     try:
@@ -445,10 +458,10 @@ def generate_signal_data_with_indicators(
             decisions = strategy_executor.get_signals()
             
             # 거래 결정
-            # decision = decision_engine.decide_trade_realtime(decisions)
+            current_time = time_manager.get_timestamp_datetime(current_time)
             decisions.update({'timestamp': current_time, 'indicators': indicators, **series_3m.to_dict()})
 
-            if len(decisions.keys()) == 58:
+            if len(decisions.keys()) != 24:
                 raise Exception("decisions 키 수가 58개가 아님.")
 
             temp_decision_data.append(decisions)
@@ -464,13 +477,7 @@ def generate_signal_data_with_indicators(
                 total_periods = end_idx - start_idx
                 processed = i - start_idx + 1
                 
-                # 메모리 사용량 모니터링
-                # import psutil
-                # memory_usage = psutil.Process().memory_info().rss / 1024 / 1024  # MB
-                # temp_data_size = len(temp_decision_data)
-                
                 print(f"   진행률: {processed}/{total_periods} ({processed / total_periods * 100:.1f}%) - 인덱스 {i} 저장됨")
-                # print(f"   메모리 사용량: {memory_usage:.1f}MB, 임시 데이터: {temp_data_size}개")
         
         # 남은 decision 데이터가 있으면 저장
         if temp_decision_data:

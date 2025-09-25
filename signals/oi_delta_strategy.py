@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any, List
 import pandas as pd
 import requests
 
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from indicators.global_indicators import get_atr
 from managers.data_manager import get_data_manager
 

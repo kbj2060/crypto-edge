@@ -11,7 +11,7 @@ from typing import Dict, Any, Optional
 from datetime import datetime, timedelta
 
 from managers.data_manager import get_data_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from utils.session_manager import get_session_manager
 
 class SessionVWAP:

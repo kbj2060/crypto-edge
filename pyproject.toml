@@ -26,6 +26,8 @@ dependencies = [
   "flask-socketio>=5.5.1",
   "gym>=0.26.2",
   "certifi>=2025.8.3",
+  "psutil>=7.1.0",
+  "gymnasium>=1.2.0",
 ]
 
 [project.scripts]

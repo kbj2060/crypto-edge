@@ -2,7 +2,7 @@ import datetime
 import requests
 from typing import Optional
 from dataclasses import dataclass
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 
 @dataclass

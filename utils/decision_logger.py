@@ -7,7 +7,7 @@ import pandas as pd
 from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from utils.session_manager import get_session_manager
 
 

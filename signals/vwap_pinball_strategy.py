@@ -14,7 +14,7 @@ from typing import Optional, Dict, Any, Tuple
 import pandas as pd
 import numpy as np
 from indicators.global_indicators import get_vwap, get_atr
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 @dataclass
 class VWAPPinballCfg:

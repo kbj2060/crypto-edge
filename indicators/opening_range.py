@@ -13,7 +13,7 @@ from datetime import datetime, timedelta
 from typing import Dict, Any, Optional
 from managers.data_manager import get_data_manager
 from utils.session_manager import get_session_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 # 기본 설정값
 DEFAULT_OR_MINUTES = 30

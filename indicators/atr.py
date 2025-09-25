@@ -13,7 +13,7 @@ from typing import Dict, Optional
 import pandas as pd
 from datetime import datetime, timedelta
 from managers.data_manager import get_data_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 class ATR3M:
     """3분봉 실시간 ATR 관리 클래스 - 연속 롤링 방식"""

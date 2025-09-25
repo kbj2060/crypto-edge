@@ -10,7 +10,7 @@ from typing import Any, Dict, Optional
 import pandas as pd
 
 from managers.data_manager import get_data_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 
 class DailyLevels:

@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from indicators.global_indicators import get_vpvr
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 class LVNGoldenPocket:  # ← 기존 클래스명 유지
     """

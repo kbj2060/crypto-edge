@@ -19,7 +19,7 @@ from managers.data_manager import get_data_manager
 from indicators.global_indicators import get_all_indicators, get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
 from utils.display_utils import print_decision_interpretation, print_ai_final_decision
 from utils.telegram import send_telegram_message, send_telegram_agent_decision
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from utils.session_manager import get_session_manager
 from utils.decision_logger import get_decision_logger
 from managers.binance_dataloader import BinanceDataLoader

@@ -9,7 +9,7 @@ import pandas as pd
 from typing import Dict, Optional, Any, List
 import datetime as dt
 from managers.data_manager import get_data_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 class SessionVPVR:
     """

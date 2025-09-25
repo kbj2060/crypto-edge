@@ -7,7 +7,7 @@ import pandas as pd
 
 from managers.data_manager import get_data_manager
 from utils.session_manager import get_session_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from indicators.global_indicators import get_opening_range
 from signals.session_or_analyzer import SessionORAnalyzer
 from signals.session_or_signal_generator import SessionORSignalGenerator

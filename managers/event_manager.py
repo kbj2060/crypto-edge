@@ -1,6 +1,6 @@
 from typing import List
 from datetime import datetime, timedelta, timezone
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from utils.investing_crawler import fetch_us_high_events_today
 
 

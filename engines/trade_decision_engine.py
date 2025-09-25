@@ -1,7 +1,7 @@
 from typing import Dict, Any, Optional
 from datetime import datetime
 import math
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from indicators.global_indicators import get_atr
 from engines.short_term_synergy_engine import ShortTermSynergyEngine, SynergyConfig
 from engines.medium_term_synergy_engine import MediumTermSynergyEngine, MediumTermConfig

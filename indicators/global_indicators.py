@@ -23,7 +23,7 @@ from indicators.daily_levels import DailyLevels
 from indicators.vwap import SessionVWAP
 from managers.data_manager import get_data_manager
 from utils.session_manager import get_session_manager
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 
 class GlobalIndicatorManager:

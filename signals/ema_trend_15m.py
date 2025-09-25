@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 import pandas as pd
 
 from managers.binance_dataloader import BinanceDataLoader
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 def _clamp(x, a=0.0, b=1.0):
     try:

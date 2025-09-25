@@ -9,7 +9,7 @@ from signals.macd_histogram_strategy import MACDHistogramStrategy
 from signals.support_resistance_15m import SupportResistance
 from signals.vpvr_micro import VPVRConfig
 from signals.vwap_pinball_strategy import VWAPPinballCfg
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 
 # 전략 imports
 from signals.session_or_lite import SessionORLite

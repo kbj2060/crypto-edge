@@ -11,7 +11,7 @@ import threading
 from typing import Optional
 from datetime import datetime, timedelta
 from config.integrated_config import IntegratedConfig
-from utils.time_manager import get_time_manager
+from managers.time_manager import get_time_manager
 from managers.binance_dataloader import BinanceDataLoader
 
 
