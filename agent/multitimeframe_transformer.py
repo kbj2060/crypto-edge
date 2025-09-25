@@ -6,6 +6,60 @@ Multi-Timeframe Transformer 딥러닝 모델
 - 수익률 최적화 중심 설계
 """
 
+# =============================================================================
+# 하이퍼파라미터 환경변수 설정
+# =============================================================================
+
+# 모델 아키텍처 파라미터
+MODEL_INPUT_SIZE = 58
+MODEL_D_MODEL = 256
+MODEL_NHEAD = 8
+MODEL_NUM_LAYERS = 6
+MODEL_DROPOUT = 0.1
+MODEL_MAX_SEQ_LEN = 100
+
+# 훈련 파라미터
+TRAINING_BATCH_SIZE = 64
+TRAINING_EPOCHS = 100
+SEQUENCE_LENGTH = 30
+TRAINING_VALIDATION_SPLIT = 0.2
+TRAINING_LEARNING_RATE = 5e-3
+TRAINING_WEIGHT_DECAY = 1e-5
+TRAINING_PATIENCE = 20
+LABEL_PROFIT_THRESHOLD = 0.01
+
+# 데이터 처리 파라미터
+DATA_TEST_LIMIT = 10000
+DATA_NORMALIZATION_ENABLED = True
+
+# 손실 함수 가중치
+LOSS_PROFIT_WEIGHT = 3.0
+LOSS_ACTION_WEIGHT = 2.0
+LOSS_OTHER_WEIGHT = 1.0
+
+# 그래디언트 클리핑
+GRADIENT_CLIP_NORM = 1.0
+
+# 모델 저장 경로
+MODEL_SAVE_PATH = 'agent/best_multitimeframe_model.pth'
+MODEL_SEQUENCE_SAVE_PATH = 'agent/best_multitimeframe_sequence_model.pth'
+MODEL_FINAL_SAVE_PATH = 'agent/multitimeframe_transformer_trained.pth'
+
+# 데이터 파일 경로
+DATA_FILE_PATH = 'agent/decisions_data.parquet'
+
+# 테스트 파라미터
+TEST_SAMPLES_COUNT = 10
+
+# 고급 라벨링 파라미터
+LABEL_PROFIT_THRESHOLD = 0.02  # 2% 기본 임계값
+LABEL_VOLATILITY_FACTOR = 1.5  # 변동성 조정 계수
+LABEL_TREND_FACTOR = 1.2       # 트렌드 강도 계수
+LABEL_VOLUME_FACTOR = 1.1      # 거래량 계수
+LABEL_MIN_CONFIDENCE = 0.3     # 최소 신뢰도
+LABEL_MAX_CONFIDENCE = 0.95    # 최대 신뢰도
+LABEL_LOOKAHEAD_STEPS = 5      # 미래 데이터 참조 스텝
+
 import numpy as np
 import pandas as pd
 import torch
@@ -191,12 +245,12 @@ class MultiTimeframeTransformer(nn.Module):
     """Multi-Timeframe Transformer 모델"""
     
     def __init__(self, 
-                 input_size: int = 58,
-                 d_model: int = 256,
-                 nhead: int = 8,
-                 num_layers: int = 6,
-                 dropout: float = 0.1,
-                 max_seq_len: int = 100):
+                 input_size: int = MODEL_INPUT_SIZE,
+                 d_model: int = MODEL_D_MODEL,
+                 nhead: int = MODEL_NHEAD,
+                 num_layers: int = MODEL_NUM_LAYERS,
+                 dropout: float = MODEL_DROPOUT,
+                 max_seq_len: int = MODEL_MAX_SEQ_LEN):
         super().__init__()
         
         self.input_size = input_size
@@ -361,11 +415,11 @@ class MultiTimeframeDecisionEngine:
     """Multi-Timeframe 의사결정 엔진"""
     
     def __init__(self, 
-                 model_path: str = 'agent/best_multitimeframe_model.pth',
-                 input_size: int = 58,
-                 d_model: int = 256,
-                 nhead: int = 8,
-                 num_layers: int = 6,
+                 model_path: str = MODEL_SAVE_PATH,
+                 input_size: int = MODEL_INPUT_SIZE,
+                 d_model: int = MODEL_D_MODEL,
+                 nhead: int = MODEL_NHEAD,
+                 num_layers: int = MODEL_NUM_LAYERS,
                  device: str = 'auto'):
         
         # 디바이스 설정
@@ -387,8 +441,8 @@ class MultiTimeframeDecisionEngine:
         # 옵티마이저
         self.optimizer = optim.AdamW(
             self.model.parameters(),
-            lr=5e-4,  # 더 높은 학습률
-            weight_decay=1e-5
+            lr=TRAINING_LEARNING_RATE,
+            weight_decay=TRAINING_WEIGHT_DECAY
         )
         
         # 스케줄러
@@ -480,16 +534,16 @@ class MultiTimeframeDecisionEngine:
         
         # 7. OHLC 데이터 (6개)
         features.extend([
-            float(decision_data.get('open', 0.0)),
-            float(decision_data.get('high', 0.0)),
-            float(decision_data.get('low', 0.0)),
-            float(decision_data.get('close', 0.0)),
-            float(decision_data.get('volume', 0.0)),
-            float(decision_data.get('quote_volume', 0.0))
+            float(decision_data.get('open')),
+            float(decision_data.get('high')),
+            float(decision_data.get('low')),
+            float(decision_data.get('close')),
+            float(decision_data.get('volume')),
+            float(decision_data.get('quote_volume'))
         ])
         
         # 8. Timestamp (1개)
-        timestamp = decision_data.get('timestamp', 0.0)
+        timestamp = decision_data.get('timestamp')
         if isinstance(timestamp, str):
             try:
                 timestamp = pd.to_datetime(timestamp).timestamp()
@@ -510,7 +564,7 @@ class MultiTimeframeDecisionEngine:
         features = self._extract_features(decision_data)
         return torch.FloatTensor(features).unsqueeze(0).to(self.device)
     
-    def preprocess_sequence_data(self, decision_data: List[Dict], seq_len: int = 20) -> torch.Tensor:
+    def preprocess_sequence_data(self, decision_data: List[Dict], seq_len: int = SEQUENCE_LENGTH) -> torch.Tensor:
         """시퀀스 형태로 데이터 전처리"""
         sequences = []
         
@@ -554,7 +608,7 @@ class MultiTimeframeDecisionEngine:
             
             return result
     
-    def make_sequence_decision(self, decision_sequence: List[Dict], seq_len: int = 20) -> Dict:
+    def make_sequence_decision(self, decision_sequence: List[Dict], seq_len: int = SEQUENCE_LENGTH) -> Dict:
         """시퀀스 기반 의사결정 수행 (Transformer의 진정한 장점 활용)"""
         self.model.eval()
         
@@ -602,7 +656,7 @@ class MultiTimeframeDecisionEngine:
         
         # 디버깅: 액션 분포 출력
         probs = probabilities.cpu().numpy()
-        print(f"    액션 확률: HOLD={probs[0]:.3f}, BUY={probs[1]:.3f}, SELL={probs[2]:.3f}")
+        print(f"    액션 확률: HOLD={probs[0].item():.3f}, BUY={probs[1].item():.3f}, SELL={probs[2].item():.3f}")
         
         return actions[action_idx]
     
@@ -637,9 +691,9 @@ class MultiTimeframeDecisionEngine:
         total_loss = 0.0
         
         # 가중치 설정
-        profit_loss_weight = 3.0  # 수익률 예측에 가장 높은 가중치
-        action_loss_weight = 2.0  # 액션 분류에 높은 가중치
-        other_loss_weight = 1.0   # 기타 회귀에 기본 가중치
+        profit_loss_weight = LOSS_PROFIT_WEIGHT
+        action_loss_weight = LOSS_ACTION_WEIGHT
+        other_loss_weight = LOSS_OTHER_WEIGHT
         
         # 액션 분류 손실
         action_targets = torch.cat([t['action'] for t in targets])
@@ -663,13 +717,13 @@ class MultiTimeframeDecisionEngine:
         total_loss.backward()
         
         # 그래디언트 클리핑
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), GRADIENT_CLIP_NORM)
         
         self.optimizer.step()
         
         return float(total_loss.item())
     
-    def train_on_sequence_batch(self, batch_sequences: List[List[Dict]], batch_labels: List[Dict], seq_len: int = 20) -> float:
+    def train_on_sequence_batch(self, batch_sequences: List[List[Dict]], batch_labels: List[Dict], seq_len: int = SEQUENCE_LENGTH) -> float:
         """시퀀스 배치 학습 (Transformer의 진정한 장점 활용)"""
         self.model.train()
         
@@ -714,9 +768,9 @@ class MultiTimeframeDecisionEngine:
         total_loss = 0.0
         
         # 가중치 설정
-        profit_loss_weight = 3.0  # 수익률 예측에 가장 높은 가중치
-        action_loss_weight = 2.0  # 액션 분류에 높은 가중치
-        other_loss_weight = 1.0   # 기타 회귀에 기본 가중치
+        profit_loss_weight = LOSS_PROFIT_WEIGHT
+        action_loss_weight = LOSS_ACTION_WEIGHT
+        other_loss_weight = LOSS_OTHER_WEIGHT
         
         # 액션 분류 손실
         action_targets = torch.cat([t['action'] for t in targets])
@@ -740,7 +794,7 @@ class MultiTimeframeDecisionEngine:
         total_loss.backward()
         
         # 그래디언트 클리핑
-        torch.nn.utils.clip_grad_norm_(self.model.parameters(), 1.0)
+        torch.nn.utils.clip_grad_norm_(self.model.parameters(), GRADIENT_CLIP_NORM)
         
         self.optimizer.step()
         
@@ -905,19 +959,40 @@ class DecisionDataLoader:
             df = pd.read_parquet(file_path)
             print(f"Decision 데이터 로드 완료: {len(df):,}개 레코드")
             
-            # DataFrame을 Dict 리스트로 변환
+            # DataFrame을 Dict 리스트로 변환 (메모리 최적화)
             decision_data = []
             for idx, row in df.iterrows():
                 decision_dict = {}
                 for col, value in row.items():
                     if pd.notna(value):
-                        decision_dict[col] = value
+                        # 데이터 타입 최적화
+                        if 'action' in col:
+                            # 액션은 문자열이므로 그대로 유지
+                            decision_dict[col] = str(value) if value else 'HOLD'
+                        elif 'score' in col or 'value' in col:
+                            decision_dict[col] = float(value) if value else 0.0
+                        elif 'confidence' in col:
+                            # confidence는 문자열이므로 그대로 유지
+                            decision_dict[col] = str(value) if value else 'LOW'
+                        elif 'count' in col or 'used' in col:
+                            decision_dict[col] = int(value) if value else 0
+                        elif 'timestamp' in col:
+                            # timestamp는 문자열이므로 그대로 유지
+                            decision_dict[col] = str(value) if value else ''
+                        else:
+                            decision_dict[col] = float(value) if value else 0.0
                     else:
-                        # 기본값 설정
-                        if 'score' in col or 'confidence' in col or 'value' in col:
+                        # 기본값 설정 (최적화된 타입)
+                        if 'action' in col:
+                            decision_dict[col] = 'HOLD'
+                        elif 'score' in col or 'value' in col:
                             decision_dict[col] = 0.0
+                        elif 'confidence' in col:
+                            decision_dict[col] = 'LOW'
                         elif 'count' in col or 'used' in col:
                             decision_dict[col] = 0
+                        elif 'timestamp' in col:
+                            decision_dict[col] = ''
                         else:
                             decision_dict[col] = 0.0
                 
@@ -934,95 +1009,51 @@ class DecisionDataLoader:
             return None
     
     @staticmethod
-    def create_training_labels(decision_data: List[Dict], lookforward_steps: int = 5):
-        """미래 N개 스텝의 평균 수익률로 라벨 생성 (기존 - Look-ahead Bias 있음)"""
+    def create_realistic_training_labels(decision_data: List[Dict], lookback_steps: int = SEQUENCE_LENGTH):
+        """고급 라벨링 로직 - 시장 상황을 종합적으로 고려한 라벨 생성"""
         labels = []
         
-        for i, data in enumerate(decision_data):
+        for i in range(lookback_steps, len(decision_data) - LABEL_LOOKAHEAD_STEPS):
             label = {
-                'action': 0,
-                'confidence': 0.5,
-                'profit': 0.0
+                'action': 0,        # int (0, 1, 2)
+                'confidence': 0.5,  # float (0.0-1.0)
+                'profit': 0.0       # float (수익률)
             }
             
-            # 미래 여러 스텝의 평균 수익률 계산
-            if i < len(decision_data) - lookforward_steps:
-                current_price = data.get('close', 0.0)
-                future_prices = [
-                    decision_data[i + j].get('close', 0.0) 
-                    for j in range(1, lookforward_steps + 1)
-                ]
-                
-                if current_price > 0 and all(p > 0 for p in future_prices):
-                    # 평균 수익률
-                    avg_price_change = np.mean([
-                        (p - current_price) / current_price 
-                        for p in future_prices
-                    ])
-                    
-                    # 더 보수적인 임계값 (1% 이상/이하)
-                    if avg_price_change > 0.01:
-                        label['action'] = 1  # BUY
-                        label['profit'] = avg_price_change
-                        label['confidence'] = min(0.9, 0.5 + abs(avg_price_change) * 10)
-                        
-                    elif avg_price_change < -0.01:
-                        label['action'] = 2  # SELL
-                        label['profit'] = -avg_price_change
-                        label['confidence'] = min(0.9, 0.5 + abs(avg_price_change) * 10)
+            # 현재 데이터 추출
+            current_data = decision_data[i]
+            current_price = current_data.get('close', 0)
             
-            labels.append(label)
-            
-        return labels
-    
-    @staticmethod
-    def create_realistic_training_labels(decision_data: List[Dict], lookback_steps: int = 20):
-        """미래 데이터를 사용한 고품질 라벨 생성 (백테스트용)"""
-        labels = []
-        
-        for i in range(lookback_steps, len(decision_data) - 5):  # 미래 5개 스텝 확보
-            label = {
-                'action': 0,
-                'confidence': 0.5,
-                'profit': 0.0
-            }
-            
-            # 🔥 미래 데이터를 사용한 고품질 라벨 생성
-            current_price = decision_data[i].get('close', 0.0)
-            future_prices = [
-                decision_data[i + j].get('close', 0.0) 
-                for j in range(1, 6)  # 다음 5개 스텝
-            ]
+            # 미래 데이터 추출
+            future_prices = []
+            future_volumes = []
+            for j in range(1, LABEL_LOOKAHEAD_STEPS + 1):
+                future_data = decision_data[i + j]
+                future_prices.append(future_data.get('close', 0))
+                future_volumes.append(future_data.get('volume', 0))
             
             if current_price > 0 and all(p > 0 for p in future_prices):
-                # 🔥 미래 데이터를 사용한 정확한 라벨 생성
-                # 미래 5개 스텝의 최고가, 최저가, 평균 수익률 계산
+                # 1. 기본 수익률 계산
                 future_returns = [(p - current_price) / current_price for p in future_prices]
                 max_return = max(future_returns)
                 min_return = min(future_returns)
                 avg_return = np.mean(future_returns)
                 
-                # 거래량 분석 (현재 + 미래)
-                current_volume = decision_data[i].get('volume')
-                future_volumes = [decision_data[i + j].get('volume') for j in range(1, 6)]
-                avg_volume = np.mean([current_volume] + future_volumes)
+                # 2. 시장 상황 분석
+                market_context = DecisionDataLoader._analyze_market_context(
+                    decision_data, i, lookback_steps
+                )
                 
-                # 🔥 미래 수익률 기반 라벨 생성 (훨씬 정확함)
-                if max_return > 0.005:  # 0.5% 이상 상승 가능
-                    label['action'] = 1  # BUY
-                    label['profit'] = max_return  # 실제 미래 수익률
-                    label['confidence'] = min(0.95, 0.6 + max_return * 20)  # 높은 신뢰도
-                    
-                elif min_return < -0.005:  # 0.5% 이상 하락 가능
-                    label['action'] = 2  # SELL
-                    label['profit'] = -min_return  # 실제 미래 수익률 (절댓값)
-                    label['confidence'] = min(0.95, 0.6 + abs(min_return) * 20)  # 높은 신뢰도
-                    
-                else:
-                    # Hold - 큰 움직임 없음
-                    label['action'] = 0
-                    label['profit'] = 0.0
-                    label['confidence'] = 0.3
+                # 3. 동적 임계값 계산
+                dynamic_threshold = DecisionDataLoader._calculate_dynamic_threshold(
+                    market_context, current_data
+                )
+                
+                # 4. 고급 라벨 생성
+                label = DecisionDataLoader._generate_advanced_label(
+                    max_return, min_return, avg_return, 
+                    market_context, dynamic_threshold, future_volumes
+                )
             
             labels.append(label)
         
@@ -1038,6 +1069,166 @@ class DecisionDataLoader:
         print(f"    SELL: {action_counts['SELL']:,}개 ({action_counts['SELL']/total_labels*100:.1f}%)")
         
         return labels
+    
+    @staticmethod
+    def _analyze_market_context(decision_data: List[Dict], current_idx: int, lookback_steps: int) -> Dict:
+        """시장 상황 종합 분석"""
+        context = {
+            'volatility': 0.0,
+            'trend_strength': 0.0,
+            'volume_trend': 0.0,
+            'price_momentum': 0.0,
+            'market_regime': 'normal'  # normal, trending, volatile, consolidation
+        }
+        
+        # 과거 데이터 추출
+        start_idx = max(0, current_idx - lookback_steps)
+        historical_data = decision_data[start_idx:current_idx]
+        
+        if len(historical_data) < 5:
+            return context
+        
+        # 가격 데이터 추출
+        prices = [d.get('close', 0) for d in historical_data if d.get('close', 0) > 0]
+        volumes = [d.get('volume', 0) for d in historical_data if d.get('volume', 0) > 0]
+        
+        if len(prices) < 5:
+            return context
+        
+        # 1. 변동성 계산 (ATR 기반)
+        price_changes = [abs(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
+        context['volatility'] = np.mean(price_changes) if price_changes else 0.0
+        
+        # 2. 트렌드 강도 계산 (선형 회귀 기울기)
+        x = np.arange(len(prices))
+        y = np.array(prices)
+        if len(x) > 1:
+            slope = np.polyfit(x, y, 1)[0]
+            context['trend_strength'] = abs(slope) / prices[-1] if prices[-1] > 0 else 0.0
+        
+        # 3. 거래량 트렌드
+        if len(volumes) > 1:
+            volume_changes = [volumes[i] - volumes[i-1] for i in range(1, len(volumes))]
+            context['volume_trend'] = np.mean(volume_changes) / volumes[-1] if volumes[-1] > 0 else 0.0
+        
+        # 4. 가격 모멘텀 (최근 vs 과거)
+        if len(prices) >= 10:
+            recent_avg = np.mean(prices[-5:])
+            past_avg = np.mean(prices[:5])
+            context['price_momentum'] = (recent_avg - past_avg) / past_avg if past_avg > 0 else 0.0
+        
+        # 5. 시장 레짐 분류
+        if context['volatility'] > 0.02:  # 2% 이상 변동성
+            context['market_regime'] = 'volatile'
+        elif abs(context['trend_strength']) > 0.001:  # 강한 트렌드
+            context['market_regime'] = 'trending'
+        elif context['volatility'] < 0.005:  # 낮은 변동성
+            context['market_regime'] = 'consolidation'
+        
+        return context
+    
+    @staticmethod
+    def _calculate_dynamic_threshold(market_context: Dict, current_data: Dict) -> float:
+        """시장 상황에 따른 동적 임계값 계산"""
+        base_threshold = LABEL_PROFIT_THRESHOLD
+        
+        # 변동성 조정
+        volatility_factor = 1.0 + (market_context['volatility'] * LABEL_VOLATILITY_FACTOR)
+        
+        # 트렌드 조정
+        trend_factor = 1.0 + (abs(market_context['trend_strength']) * LABEL_TREND_FACTOR)
+        
+        # 거래량 조정
+        volume_factor = 1.0 + (abs(market_context['volume_trend']) * LABEL_VOLUME_FACTOR)
+        
+        # 시장 레짐별 조정
+        regime_multiplier = {
+            'volatile': 1.5,      # 변동성 시장: 임계값 높임
+            'trending': 0.8,      # 트렌드 시장: 임계값 낮춤
+            'consolidation': 1.2, # 횡보 시장: 임계값 약간 높임
+            'normal': 1.0         # 정상 시장: 기본값
+        }
+        
+        regime_factor = regime_multiplier.get(market_context['market_regime'], 1.0)
+        
+        # 최종 동적 임계값
+        dynamic_threshold = base_threshold * volatility_factor * trend_factor * volume_factor * regime_factor
+        
+        # 최소/최대 제한
+        return max(LABEL_PROFIT_THRESHOLD, min(0.05, dynamic_threshold))  # 0.5% ~ 5% 범위
+    
+    @staticmethod
+    def _generate_advanced_label(max_return: float, min_return: float, avg_return: float,
+                                market_context: Dict, dynamic_threshold: float, 
+                                future_volumes: List[float]) -> Dict:
+        """고급 라벨 생성 로직"""
+        label = {
+            'action': 0,                        # int (0, 1, 2)
+            'confidence': LABEL_MIN_CONFIDENCE,  # float (0.0-1.0)
+            'profit': 0.0                       # float (수익률)
+        }
+        
+        # 거래량 가중치 계산
+        volume_weight = 1.0
+        if future_volumes:
+            avg_volume = np.mean(future_volumes)
+            if avg_volume > 0:
+                # 거래량이 평균보다 높으면 신뢰도 증가
+                volume_weight = min(1.5, avg_volume / (avg_volume * 0.8))
+        
+        # 1. BUY 조건 (상승 가능성)
+        if max_return > dynamic_threshold:
+            label['action'] = 1  # BUY
+            
+            # 수익률 기반 신뢰도
+            return_confidence = min(0.8, 0.4 + max_return * 15)
+            
+            # 시장 상황 기반 신뢰도 조정
+            market_confidence = 1.0
+            if market_context['trend_strength'] > 0:  # 상승 트렌드
+                market_confidence += 0.1
+            if market_context['price_momentum'] > 0:  # 상승 모멘텀
+                market_confidence += 0.1
+            if market_context['market_regime'] == 'trending':  # 트렌드 시장
+                market_confidence += 0.1
+            
+            # 최종 신뢰도
+            label['confidence'] = min(LABEL_MAX_CONFIDENCE, 
+                                    return_confidence * market_confidence * volume_weight)
+            label['profit'] = max_return
+            
+        # 2. SELL 조건 (하락 가능성)
+        elif min_return < -dynamic_threshold:
+            label['action'] = 2  # SELL
+            
+            # 수익률 기반 신뢰도
+            return_confidence = min(0.8, 0.4 + abs(min_return) * 15)
+            
+            # 시장 상황 기반 신뢰도 조정
+            market_confidence = 1.0
+            if market_context['trend_strength'] < 0:  # 하락 트렌드
+                market_confidence += 0.1
+            if market_context['price_momentum'] < 0:  # 하락 모멘텀
+                market_confidence += 0.1
+            if market_context['market_regime'] == 'trending':  # 트렌드 시장
+                market_confidence += 0.1
+            
+            # 최종 신뢰도
+            label['confidence'] = min(LABEL_MAX_CONFIDENCE, 
+                                    return_confidence * market_confidence * volume_weight)
+            label['profit'] = abs(min_return)
+            
+        # 3. HOLD 조건 (큰 움직임 없음)
+        else:
+            label['action'] = 0  # HOLD
+            label['profit'] = 0.0
+            
+            # HOLD 신뢰도는 시장 안정성에 따라 결정
+            stability_score = 1.0 - market_context['volatility'] * 10  # 변동성이 낮을수록 높은 신뢰도
+            label['confidence'] = max(LABEL_MIN_CONFIDENCE, 
+                                    min(0.7, stability_score * volume_weight))
+        
+        return label
 
 class MultiTimeframeTrainer:
     """Multi-Timeframe Transformer 훈련 클래스"""
@@ -1048,10 +1239,10 @@ class MultiTimeframeTrainer:
     
     def train_on_sequence_data(self, 
                                 decision_data: List[Dict], 
-                                seq_len: int = 20,  # labels 파라미터 제거
-                                batch_size: int = 32,
-                                epochs: int = 10,
-                                validation_split: float = 0.2) -> Dict:
+                                seq_len: int = SEQUENCE_LENGTH,
+                                batch_size: int = TRAINING_BATCH_SIZE,
+                                epochs: int = TRAINING_EPOCHS,
+                                validation_split: float = TRAINING_VALIDATION_SPLIT) -> Dict:
         """시퀀스 데이터로 훈련 (Transformer의 진정한 장점 활용)"""
         print(f"Multi-Timeframe Transformer 시퀀스 훈련 시작")
         print(f"  데이터 크기: {len(decision_data):,}개")
@@ -1107,7 +1298,7 @@ class MultiTimeframeTrainer:
         
         # 훈련 루프
         best_val_loss = float('inf')
-        patience = 20
+        patience = TRAINING_PATIENCE
         patience_counter = 0
         
         for epoch in range(epochs):
@@ -1140,7 +1331,7 @@ class MultiTimeframeTrainer:
                 best_val_loss = val_loss
                 patience_counter = 0
                 # 최고 모델 저장
-                self.engine.save_model('agent/best_multitimeframe_sequence_model.pth')
+                self.engine.save_model(MODEL_SEQUENCE_SAVE_PATH)
             else:
                 patience_counter += 1
                 if patience_counter >= patience:
@@ -1228,9 +1419,6 @@ class MultiTimeframeTrainer:
             target = {
                 'action': torch.tensor([labels.get('action', 0)], dtype=torch.long).to(self.engine.device),
                 'confidence': torch.tensor([labels.get('confidence', 0.5)], dtype=torch.float).to(self.engine.device),
-                'position_size': torch.tensor([labels.get('position_size', 0.5)], dtype=torch.float).to(self.engine.device),
-                'leverage': torch.tensor([labels.get('leverage', 0.5)], dtype=torch.float).to(self.engine.device),
-                'holding_time': torch.tensor([labels.get('holding_time', 0.5)], dtype=torch.float).to(self.engine.device),
                 'profit': torch.tensor([labels.get('profit', 0.0)], dtype=torch.float).to(self.engine.device)
             }
             targets.append(target)
@@ -1263,87 +1451,87 @@ class MultiTimeframeTrainer:
         
         return float(total_loss.item())
     
-    def train_on_decision_data(self, 
-                              decision_data: List[Dict], 
-                              labels: List[Dict],
-                              batch_size: int = 32,
-                              epochs: int = 10,
-                              validation_split: float = 0.2) -> Dict:
-        """Decision 데이터로 훈련"""
-        print(f"Multi-Timeframe Transformer 훈련 시작")
-        print(f"  데이터 크기: {len(decision_data):,}개")
-        print(f"  배치 크기: {batch_size}")
-        print(f"  에포크: {epochs}")
-        print(f"  검증 비율: {validation_split:.1%}")
+    # def train_on_decision_data(self, 
+    #                           decision_data: List[Dict], 
+    #                           labels: List[Dict],
+    #                           batch_size: int = TRAINING_BATCH_SIZE,
+    #                           epochs: int = TRAINING_EPOCHS,
+    #                           validation_split: float = TRAINING_VALIDATION_SPLIT) -> Dict:
+    #     """Decision 데이터로 훈련"""
+    #     print(f"Multi-Timeframe Transformer 훈련 시작")
+    #     print(f"  데이터 크기: {len(decision_data):,}개")
+    #     print(f"  배치 크기: {batch_size}")
+    #     print(f"  에포크: {epochs}")
+    #     print(f"  검증 비율: {validation_split:.1%}")
         
-        # 🔥 데이터 분할 먼저 (정규화 전에!)
-        split_idx = int(len(decision_data) * (1 - validation_split))
-        train_data = decision_data[:split_idx]
-        train_labels = labels[:split_idx]
-        val_data = decision_data[split_idx:]
-        val_labels = labels[split_idx:]
+    #     # 🔥 데이터 분할 먼저 (정규화 전에!)
+    #     split_idx = int(len(decision_data) * (1 - validation_split))
+    #     train_data = decision_data[:split_idx]
+    #     train_labels = labels[:split_idx]
+    #     val_data = decision_data[split_idx:]
+    #     val_labels = labels[split_idx:]
         
-        print(f"  훈련 데이터: {len(train_data):,}개")
-        print(f"  검증 데이터: {len(val_data):,}개")
+    #     print(f"  훈련 데이터: {len(train_data):,}개")
+    #     print(f"  검증 데이터: {len(val_data):,}개")
         
-        # 🔥 훈련셋으로만 정규화 fit
-        print("  훈련셋으로 정규화 fit 중...")
-        normalizer = DataNormalizer()
-        train_data = normalizer.fit_transform(train_data)
+    #     # 🔥 훈련셋으로만 정규화 fit
+    #     print("  훈련셋으로 정규화 fit 중...")
+    #     normalizer = DataNormalizer()
+    #     train_data = normalizer.fit_transform(train_data)
         
-        # 🔥 검증셋은 transform만 (fit 없이!)
-        print("  검증셋에 정규화 transform 적용 중...")
-        val_data = normalizer.transform(val_data)
+    #     # 🔥 검증셋은 transform만 (fit 없이!)
+    #     print("  검증셋에 정규화 transform 적용 중...")
+    #     val_data = normalizer.transform(val_data)
         
-        # 훈련 루프
-        best_val_loss = float('inf')
-        patience = 20  # 더 관대한 조기 종료
-        patience_counter = 0
+    #     # 훈련 루프
+    #     best_val_loss = float('inf')
+    #     patience = TRAINING_PATIENCE
+    #     patience_counter = 0
         
-        for epoch in range(epochs):
-            # 훈련
-            train_loss = self._train_epoch(train_data, train_labels, batch_size)
+    #     for epoch in range(epochs):
+    #         # 훈련
+    #         train_loss = self._train_epoch(train_data, train_labels, batch_size)
             
-            # 검증
-            val_loss = self._validate_epoch(val_data, val_labels, batch_size)
+    #         # 검증
+    #         val_loss = self._validate_epoch(val_data, val_labels, batch_size)
             
-            # 스케줄러 업데이트
-            self.engine.scheduler.step(val_loss)
+    #         # 스케줄러 업데이트
+    #         self.engine.scheduler.step(val_loss)
             
-            # 히스토리 저장
-            epoch_stats = {
-                'epoch': epoch + 1,
-                'train_loss': train_loss,
-                'val_loss': val_loss,
-                'lr': self.engine.optimizer.param_groups[0]['lr']
-            }
-            self.training_history.append(epoch_stats)
+    #         # 히스토리 저장
+    #         epoch_stats = {
+    #             'epoch': epoch + 1,
+    #             'train_loss': train_loss,
+    #             'val_loss': val_loss,
+    #             'lr': self.engine.optimizer.param_groups[0]['lr']
+    #         }
+    #         self.training_history.append(epoch_stats)
             
-            # 진행 상황 출력
-            print(f"Epoch {epoch+1:3d}/{epochs} | "
-                  f"Train Loss: {train_loss:.4f} | "
-                  f"Val Loss: {val_loss:.4f} | "
-                  f"LR: {self.engine.optimizer.param_groups[0]['lr']:.2e}")
+    #         # 진행 상황 출력
+    #         print(f"Epoch {epoch+1:3d}/{epochs} | "
+    #               f"Train Loss: {train_loss:.4f} | "
+    #               f"Val Loss: {val_loss:.4f} | "
+    #               f"LR: {self.engine.optimizer.param_groups[0]['lr']:.2e}")
             
-            # 조기 종료
-            if val_loss < best_val_loss:
-                best_val_loss = val_loss
-                patience_counter = 0
-                # 최고 모델 저장
-                self.engine.save_model('agent/best_multitimeframe_model.pth')
-            else:
-                patience_counter += 1
-                if patience_counter >= patience:
-                    print(f"조기 종료: {patience} 에포크 동안 개선 없음")
-                    break
+    #         # 조기 종료
+    #         if val_loss < best_val_loss:
+    #             best_val_loss = val_loss
+    #             patience_counter = 0
+    #             # 최고 모델 저장
+    #             self.engine.save_model(MODEL_SAVE_PATH)
+    #         else:
+    #             patience_counter += 1
+    #             if patience_counter >= patience:
+    #                 print(f"조기 종료: {patience} 에포크 동안 개선 없음")
+    #                 break
         
-        print(f"훈련 완료! 최고 검증 손실: {best_val_loss:.4f}")
+    #     print(f"훈련 완료! 최고 검증 손실: {best_val_loss:.4f}")
         
-        return {
-            'best_val_loss': best_val_loss,
-            'total_epochs': len(self.training_history),
-            'training_history': self.training_history
-        }
+    #     return {
+    #         'best_val_loss': best_val_loss,
+    #         'total_epochs': len(self.training_history),
+    #         'training_history': self.training_history
+    #     }
     
     def _train_epoch(self, data: List[Dict], labels: List[Dict], batch_size: int) -> float:
         """한 에포크 훈련"""
@@ -1399,9 +1587,6 @@ class MultiTimeframeTrainer:
             target = {
                 'action': torch.tensor([labels.get('action', 0)], dtype=torch.long).to(self.engine.device),
                 'confidence': torch.tensor([labels.get('confidence', 0.5)], dtype=torch.float).to(self.engine.device),
-                'position_size': torch.tensor([labels.get('position_size', 0.5)], dtype=torch.float).to(self.engine.device),
-                'leverage': torch.tensor([labels.get('leverage', 0.5)], dtype=torch.float).to(self.engine.device),
-                'holding_time': torch.tensor([labels.get('holding_time', 0.5)], dtype=torch.float).to(self.engine.device),
                 'profit': torch.tensor([labels.get('profit', 0.0)], dtype=torch.float).to(self.engine.device)
             }
             targets.append(target)
@@ -1441,20 +1626,20 @@ def main():
     
     # 모델 초기화
     engine = MultiTimeframeDecisionEngine(
-        input_size=58,
-        d_model=256,
-        nhead=8,
-        num_layers=6
+        input_size=MODEL_INPUT_SIZE,
+        d_model=MODEL_D_MODEL,
+        nhead=MODEL_NHEAD,
+        num_layers=MODEL_NUM_LAYERS
     )
     
     # 1. Decision 데이터 로드 (테스트용으로 제한)
     print("\n1️⃣ Decision 데이터 로드...")
-    decision_data = DecisionDataLoader.load_decision_data('agent/decisions_data.parquet')
+    decision_data = DecisionDataLoader.load_decision_data(DATA_FILE_PATH)
     
-    # # 테스트용으로 데이터 제한 (처음 10,000개만 사용)
-    # if len(decision_data) > 100000:
-    #     decision_data = decision_data[:100000]
-    #     print(f"   🧪 테스트용으로 데이터를 10,000개로 제한했습니다.")
+    # 테스트용으로 데이터 제한
+    if len(decision_data) > DATA_TEST_LIMIT:
+        decision_data = decision_data[:DATA_TEST_LIMIT]
+        print(f"   🧪 테스트용으로 데이터를 {DATA_TEST_LIMIT:,}개로 제한했습니다.")
     
     # 2. 데이터 정규화는 훈련 함수 내부에서 수행 (Look-ahead Bias 방지)
     print("\n2️⃣ 데이터 정규화는 훈련 함수 내부에서 수행됩니다.")
@@ -1488,10 +1673,10 @@ def main():
     trainer = MultiTimeframeTrainer(engine)
     training_results = trainer.train_on_sequence_data(
         decision_data=decision_data,
-        seq_len=30,  # 20 스텝 시퀀스
-        batch_size=64,  # 시퀀스 데이터는 메모리 사용량이 크므로 배치 크기 조정
-        epochs=100,
-        validation_split=0.2
+        seq_len=SEQUENCE_LENGTH,
+        batch_size=TRAINING_BATCH_SIZE,
+        epochs=TRAINING_EPOCHS,
+        validation_split=TRAINING_VALIDATION_SPLIT
     )
     
     # 6. 훈련 결과 출력
@@ -1511,15 +1696,15 @@ def main():
     print(f"  수익률 예측: {decision['profit']:.3f}")
     
     # 시퀀스 데이터 테스트 (새로운 기능)
-    if len(decision_data) >= 20:
-        print("\n시퀀스 데이터 테스트 (10개 샘플):")
+    if len(decision_data) >= SEQUENCE_LENGTH:
+        print(f"\n시퀀스 데이터 테스트 ({TEST_SAMPLES_COUNT}개 샘플):")
         
         # 여러 샘플 테스트하여 액션 분포 확인
         test_action_counts = {'HOLD': 0, 'BUY': 0, 'SELL': 0}
         
-        for i in range(min(10, len(decision_data) - 20)):
-            test_sequence = decision_data[i:i+20]  # 20개씩 슬라이딩 윈도우
-            sequence_decision = engine.make_sequence_decision(test_sequence, seq_len=20)
+        for i in range(min(TEST_SAMPLES_COUNT, len(decision_data) - SEQUENCE_LENGTH)):
+            test_sequence = decision_data[i:i+SEQUENCE_LENGTH]
+            sequence_decision = engine.make_sequence_decision(test_sequence, seq_len=SEQUENCE_LENGTH)
             
             action = sequence_decision['action']
             test_action_counts[action] += 1
@@ -1538,8 +1723,8 @@ def main():
         print(f"    SELL: {test_action_counts['SELL']}개 ({test_action_counts['SELL']/total_tests*100:.1f}%)")
     
     # 8. 최종 모델 저장
-    engine.save_model('agent/multitimeframe_transformer_trained.pth')
-    print(f"\n✅ 훈련된 모델이 저장되었습니다: agent/multitimeframe_transformer_trained.pth")
+    engine.save_model(MODEL_FINAL_SAVE_PATH)
+    print(f"\n✅ 훈련된 모델이 저장되었습니다: {MODEL_FINAL_SAVE_PATH}")
 
 if __name__ == "__main__":
     main()
