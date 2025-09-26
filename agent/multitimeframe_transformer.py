@@ -14,23 +14,23 @@ Multi-Timeframe Transformer 딥러닝 모델
 MODEL_INPUT_SIZE = 58
 MODEL_D_MODEL = 128
 MODEL_NHEAD = 8
-MODEL_NUM_LAYERS = 6
+MODEL_NUM_LAYERS = 3
 MODEL_DROPOUT = 0.1
-MODEL_MAX_SEQ_LEN = 30
+MODEL_MAX_SEQ_LEN = 60
 
 # 훈련 파라미터
 TRAINING_BATCH_SIZE = 64
 TRAINING_EPOCHS = 100
 SEQUENCE_LENGTH = 30
 TRAINING_VALIDATION_SPLIT = 0.2
-TRAINING_LEARNING_RATE = 1e-3
-TRAINING_WEIGHT_DECAY = 1e-5
+TRAINING_LEARNING_RATE = 5e-4
+TRAINING_WEIGHT_DECAY = 3e-5
 TRAINING_PATIENCE = 10
 
 # 데이터 처리 파라미터
 DATA_TEST_LIMIT = 10000
 DATA_NORMALIZATION_ENABLED = True
-
+NUM_BATCHES_PER_PRINT = 20
 # 손실 함수 가중치
 LOSS_PROFIT_WEIGHT = 3.0
 LOSS_ACTION_WEIGHT = 2.0
@@ -43,18 +43,19 @@ GRADIENT_CLIP_NORM = 1.0
 MODEL_SAVE_PATH = 'agent/best_multitimeframe_model.pth'
 MODEL_SEQUENCE_SAVE_PATH = 'agent/best_multitimeframe_sequence_model.pth'
 MODEL_FINAL_SAVE_PATH = 'agent/multitimeframe_transformer_trained.pth'
+CHECKPOINT_SAVE_PATH = 'agent/training_checkpoint.pth'
 
 # 데이터 파일 경로
-DATA_FILE_PATH = 'agent/decisions_data.parquet'
+DATA_FILE_PATH = 'agent/decisions_data_optimized.parquet'  # 최적화된 데이터 사용
 
 # 테스트 파라미터
 TEST_SAMPLES_COUNT = 10
 
 # 고급 라벨링 파라미터
-LABEL_PROFIT_THRESHOLD = 0.005  # 0.5% 기본 임계값
+LABEL_PROFIT_THRESHOLD = 0.008  # 0.5% 기본 임계값
 LABEL_VOLATILITY_FACTOR = 1.3  # 변동성 조정 계수
 LABEL_TREND_FACTOR = 1.2       # 트렌드 강도 계수
-LABEL_VOLUME_FACTOR = 1.1      # 거래량 계수
+LABEL_VOLUME_FACTOR = 1.2      # 거래량 계수
 LABEL_MIN_CONFIDENCE = 0.3     # 최소 신뢰도
 LABEL_MAX_CONFIDENCE = 0.8    # 최대 신뢰도
 LABEL_LOOKAHEAD_STEPS = 5      # 미래 데이터 참조 스텝
@@ -448,7 +449,7 @@ class MultiTimeframeDecisionEngine:
             self.optimizer,
             mode='max',
             factor=0.5,
-            patience=10,
+            patience=TRAINING_PATIENCE,
         )
         
         # 모델 로드
@@ -617,8 +618,6 @@ class MultiTimeframeDecisionEngine:
         actions = ['HOLD', 'BUY', 'SELL']
         
         # 디버깅: 액션 분포 출력
-        probs = probabilities.cpu().numpy()
-        print(f"    액션 확률: HOLD={probs[0].item():.3f}, BUY={probs[1].item():.3f}, SELL={probs[2].item():.3f}")
         
         return actions[action_idx]
     
@@ -729,6 +728,44 @@ class MultiTimeframeDecisionEngine:
             print(f"모델 저장 실패: {e}")
             return False
     
+    def save_checkpoint(self, filepath: str, epoch: int, train_loss: float, val_loss: float, 
+                       training_history: List[Dict], best_val_loss: float) -> bool:
+        """학습 체크포인트 저장 (학습 이어하기용)"""
+        try:
+            os.makedirs(os.path.dirname(filepath) if os.path.dirname(filepath) else '.', exist_ok=True)
+            
+            checkpoint_dict = {
+                'model_state_dict': self.model.state_dict(),
+                'optimizer_state_dict': self.optimizer.state_dict(),
+                'scheduler_state_dict': self.scheduler.state_dict(),
+                'total_decisions': self.total_decisions,
+                'correct_decisions': self.correct_decisions,
+                'total_profit': self.total_profit,
+                'decision_history': self.decision_history[-1000:],
+                'model_config': {
+                    'input_size': self.model.input_size,
+                    'd_model': self.model.d_model,
+                    'nhead': self.model.nhead,
+                    'num_layers': self.model.num_layers
+                },
+                # 학습 상태 추가
+                'epoch': epoch,
+                'train_loss': train_loss,
+                'val_loss': val_loss,
+                'training_history': training_history,
+                'best_val_loss': best_val_loss,
+                'timestamp': datetime.now().isoformat()
+            }
+            
+            torch.save(checkpoint_dict, filepath)
+            print(f"학습 체크포인트 저장 완료: {filepath}")
+            print(f"  에포크: {epoch}, 검증 손실: {val_loss:.4f}")
+            return True
+            
+        except Exception as e:
+            print(f"체크포인트 저장 실패: {e}")
+            return False
+    
     def load_model(self, filepath: str) -> bool:
         """모델 로드"""
         if not os.path.exists(filepath):
@@ -759,6 +796,49 @@ class MultiTimeframeDecisionEngine:
         except Exception as e:
             print(f"모델 로드 실패: {e}")
             return False
+    
+    def load_checkpoint(self, filepath: str) -> Optional[Dict]:
+        """학습 체크포인트 로드 (학습 이어하기용)"""
+        if not os.path.exists(filepath):
+            print(f"체크포인트 파일이 없습니다: {filepath}")
+            return None
+        
+        try:
+            checkpoint = torch.load(filepath, map_location=self.device)
+            
+            # 모델 상태 로드
+            self.model.load_state_dict(checkpoint['model_state_dict'])
+            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+            self.scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+            
+            # 통계 로드
+            self.total_decisions = checkpoint.get('total_decisions', 0)
+            self.correct_decisions = checkpoint.get('correct_decisions', 0)
+            self.total_profit = checkpoint.get('total_profit', 0.0)
+            self.decision_history = checkpoint.get('decision_history', [])
+            
+            # 학습 상태 로드
+            training_state = {
+                'epoch': checkpoint.get('epoch', 0),
+                'train_loss': checkpoint.get('train_loss', 0.0),
+                'val_loss': checkpoint.get('val_loss', 0.0),
+                'training_history': checkpoint.get('training_history', []),
+                'best_val_loss': checkpoint.get('best_val_loss', float('inf')),
+                'timestamp': checkpoint.get('timestamp', '')
+            }
+            
+            print(f"학습 체크포인트 로드 성공: {filepath}")
+            print(f"   에포크: {training_state['epoch']}")
+            print(f"   훈련 손실: {training_state['train_loss']:.4f}")
+            print(f"   검증 손실: {training_state['val_loss']:.4f}")
+            print(f"   최고 검증 손실: {training_state['best_val_loss']:.4f}")
+            print(f"   저장 시간: {training_state['timestamp']}")
+            
+            return training_state
+            
+        except Exception as e:
+            print(f"체크포인트 로드 실패: {e}")
+            return None
 
 class DecisionDataLoader:
     """Decision 데이터 로더"""
@@ -1058,7 +1138,8 @@ class MultiTimeframeTrainer:
                                 seq_len: int = SEQUENCE_LENGTH,
                                 batch_size: int = TRAINING_BATCH_SIZE,
                                 epochs: int = TRAINING_EPOCHS,
-                                validation_split: float = TRAINING_VALIDATION_SPLIT) -> Dict:
+                                validation_split: float = TRAINING_VALIDATION_SPLIT,
+                                resume_from_checkpoint: bool = False) -> Dict:
         """시퀀스 데이터로 훈련 (Transformer의 진정한 장점 활용)"""
         print(f"Multi-Timeframe Transformer 시퀀스 훈련 시작")
         print(f"  데이터 크기: {len(decision_data):,}개")
@@ -1066,6 +1147,24 @@ class MultiTimeframeTrainer:
         print(f"  배치 크기: {batch_size}")
         print(f"  에포크: {epochs}")
         print(f"  검증 비율: {validation_split:.1%}")
+        print(f"  체크포인트에서 이어하기: {resume_from_checkpoint}")
+        
+        # 체크포인트에서 이어하기
+        start_epoch = 0
+        best_val_loss = float('inf')
+        training_history = []
+        
+        if resume_from_checkpoint and os.path.exists(CHECKPOINT_SAVE_PATH):
+            print(f"\n🔄 체크포인트에서 학습 이어하기...")
+            training_state = self.engine.load_checkpoint(CHECKPOINT_SAVE_PATH)
+            if training_state:
+                start_epoch = training_state['epoch'] + 1
+                best_val_loss = training_state['best_val_loss']
+                training_history = training_state['training_history']
+                print(f"  이어할 에포크: {start_epoch}")
+                print(f"  이전 최고 검증 손실: {best_val_loss:.4f}")
+            else:
+                print(f"  체크포인트 로드 실패, 처음부터 시작합니다.")
         
         # 데이터 분할
         split_idx = int(len(decision_data) * (1 - validation_split))
@@ -1113,11 +1212,10 @@ class MultiTimeframeTrainer:
         print(f"  검증 시퀀스: {len(val_sequences):,}개")
         
         # 훈련 루프
-        best_val_loss = float('inf')
         patience = TRAINING_PATIENCE
         patience_counter = 0
         
-        for epoch in range(epochs):
+        for epoch in range(start_epoch, epochs):
             # 훈련
             train_loss = self._train_sequence_epoch(train_sequences, train_sequence_labels, seq_len, batch_size)
             
@@ -1134,10 +1232,11 @@ class MultiTimeframeTrainer:
                 'val_loss': val_loss,
                 'lr': self.engine.optimizer.param_groups[0]['lr']
             }
-            self.training_history.append(epoch_stats)
+            training_history.append(epoch_stats)
             
             # 진행 상황 출력
-            print(f"Epoch {epoch+1:3d}/{epochs} | "
+            progress = (epoch - start_epoch + 1) / (epochs - start_epoch) * 100
+            print(f"Epoch {epoch+1:3d}/{epochs} ({progress:5.1f}%) | "
                   f"Train Loss: {train_loss:.4f} | "
                   f"Val Loss: {val_loss:.4f} | "
                   f"LR: {self.engine.optimizer.param_groups[0]['lr']:.2e}")
@@ -1153,14 +1252,26 @@ class MultiTimeframeTrainer:
                 if patience_counter >= patience:
                     print(f"조기 종료: {patience} 에포크 동안 개선 없음")
                     break
+            
+            # 체크포인트 저장 (매 에포크마다)
+            self.engine.save_checkpoint(
+                CHECKPOINT_SAVE_PATH, 
+                epoch, 
+                train_loss, 
+                val_loss, 
+                training_history, 
+                best_val_loss
+            )
         
         print(f"시퀀스 훈련 완료! 최고 검증 손실: {best_val_loss:.4f}")
         
         return {
             'best_val_loss': best_val_loss,
-            'total_epochs': len(self.training_history),
-            'training_history': self.training_history,
-            'sequence_length': seq_len
+            'total_epochs': len(training_history),
+            'training_history': training_history,
+            'sequence_length': seq_len,
+            'start_epoch': start_epoch,
+            'completed_epochs': epochs - start_epoch
         }
     
     def _train_sequence_epoch(self, sequences: List[List[Dict]], labels: List[Dict], seq_len: int, batch_size: int) -> float:
@@ -1180,7 +1291,7 @@ class MultiTimeframeTrainer:
             batch_sequences = [sequences[idx] for idx in batch_indices]
             batch_labels = [labels[idx] for idx in batch_indices]
             
-            if num_batches % 100 == 0:
+            if num_batches % NUM_BATCHES_PER_PRINT == 0:
                 print(f"    배치 {num_batches}/{total_batches} 처리 중... ({num_batches/total_batches*100:.1f}%)")
             
             loss = self.engine.train_on_sequence_batch(batch_sequences, batch_labels, seq_len)
@@ -1266,7 +1377,79 @@ class MultiTimeframeTrainer:
         total_loss += profit_loss
         
         return float(total_loss.item())
+
+def resume_training(checkpoint_path: str = CHECKPOINT_SAVE_PATH, 
+                   additional_epochs: int = 50,
+                   data_limit: int = DATA_TEST_LIMIT) -> Dict:
+    """학습 이어하기 메인 함수"""
+    print("🔄 Multi-Timeframe Transformer 학습 이어하기")
+    print("=" * 60)
     
+    # 체크포인트 파일 확인
+    if not os.path.exists(checkpoint_path):
+        print(f"❌ 체크포인트 파일이 없습니다: {checkpoint_path}")
+        print("   처음부터 학습을 시작하려면 main() 함수를 사용하세요.")
+        return {}
+    
+    # 모델 초기화
+    engine = MultiTimeframeDecisionEngine(
+        input_size=MODEL_INPUT_SIZE,
+        d_model=MODEL_D_MODEL,
+        nhead=MODEL_NHEAD,
+        num_layers=MODEL_NUM_LAYERS
+    )
+    
+    # 체크포인트 로드
+    print(f"\n1️⃣ 체크포인트 로드 중: {checkpoint_path}")
+    training_state = engine.load_checkpoint(checkpoint_path)
+    
+    if not training_state:
+        print("❌ 체크포인트 로드 실패")
+        return {}
+    
+    # 데이터 로드
+    print(f"\n2️⃣ Decision 데이터 로드 중...")
+    decision_data = DecisionDataLoader.load_decision_data(DATA_FILE_PATH)
+    
+    if not decision_data:
+        print("❌ 데이터 로드 실패")
+        return {}
+    
+    # 데이터 제한
+    if len(decision_data) > data_limit:
+        decision_data = decision_data[:data_limit]
+        print(f"   🧪 테스트용으로 데이터를 {data_limit:,}개로 제한했습니다.")
+    
+    print(f"   데이터 크기: {len(decision_data):,}개")
+    
+    # 학습 이어하기
+    print(f"\n3️⃣ 학습 이어하기 시작...")
+    print(f"   이전 에포크: {training_state['epoch']}")
+    print(f"   추가 에포크: {additional_epochs}")
+    print(f"   총 목표 에포크: {training_state['epoch'] + additional_epochs}")
+    
+    trainer = MultiTimeframeTrainer(engine)
+    training_results = trainer.train_on_sequence_data(
+        decision_data=decision_data,
+        seq_len=SEQUENCE_LENGTH,
+        batch_size=TRAINING_BATCH_SIZE,
+        epochs=training_state['epoch'] + additional_epochs,
+        validation_split=TRAINING_VALIDATION_SPLIT,
+        resume_from_checkpoint=True
+    )
+    
+    # 결과 출력
+    print(f"\n4️⃣ 학습 이어하기 완료!")
+    print(f"   시작 에포크: {training_results['start_epoch']}")
+    print(f"   완료된 에포크: {training_results['completed_epochs']}")
+    print(f"   최고 검증 손실: {training_results['best_val_loss']:.4f}")
+    
+    # 최종 모델 저장
+    engine.save_model(MODEL_FINAL_SAVE_PATH)
+    print(f"\n✅ 최종 모델 저장 완료: {MODEL_FINAL_SAVE_PATH}")
+    
+    return training_results
+
 def main():
     """메인 실행 함수"""
     print("Multi-Timeframe Transformer 딥러닝 모델")
@@ -1284,10 +1467,10 @@ def main():
     print("\n1️⃣ Decision 데이터 로드...")
     decision_data = DecisionDataLoader.load_decision_data(DATA_FILE_PATH)
     
-    # 테스트용으로 데이터 제한
-    # if len(decision_data) > DATA_TEST_LIMIT:
-    #     decision_data = decision_data[:DATA_TEST_LIMIT]
-    #     print(f"   🧪 테스트용으로 데이터를 {DATA_TEST_LIMIT:,}개로 제한했습니다.")
+    # 용으로 데이터 제한
+    if len(decision_data) > DATA_TEST_LIMIT:
+        decision_data = decision_data[:DATA_TEST_LIMIT]
+        print(f"   🧪 테스트용으로 데이터를 {DATA_TEST_LIMIT:,}개로 제한했습니다.")
     
     # 2. 데이터 정규화는 훈련 함수 내부에서 수행 (Look-ahead Bias 방지)
     print("\n2️⃣ 데이터 정규화는 훈련 함수 내부에서 수행됩니다.")
@@ -1367,4 +1550,20 @@ def main():
     print(f"\n✅ 훈련된 모델이 저장되었습니다: {MODEL_FINAL_SAVE_PATH}")
 
 if __name__ == "__main__":
-    main()
+    import sys
+    
+    # 명령행 인수 확인
+    if len(sys.argv) > 1 and sys.argv[1] == "resume":
+        # 학습 이어하기
+        additional_epochs = 50
+        if len(sys.argv) > 2:
+            try:
+                additional_epochs = int(sys.argv[2])
+            except ValueError:
+                print("❌ 추가 에포크 수는 정수여야 합니다.")
+                sys.exit(1)
+        
+        resume_training(additional_epochs=additional_epochs)
+    else:
+        # 처음부터 학습
+        main()
