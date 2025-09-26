@@ -242,7 +242,7 @@ class PositionalEncoding(nn.Module):
         return self.dropout(x)
 
 class TemporalAttention(nn.Module):
-    """시간적 패턴에 집중하는 어텐션 메커니즘"""
+    """개선된 시간적 패턴 어텐션 (Residual + Skip Connections)"""
     def __init__(self, d_model: int, nhead: int = 8, dropout: float = 0.1):
         super().__init__()
         self.d_model = d_model
@@ -253,11 +253,12 @@ class TemporalAttention(nn.Module):
             d_model, nhead, dropout=dropout, batch_first=True
         )
         
-        # Layer normalization
+        # Pre-norm architecture (더 안정적인 학습)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
+        self.norm3 = nn.LayerNorm(d_model)
         
-        # Feed forward network
+        # Enhanced Feed Forward Network with residual
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_model * 4),
             nn.GELU(),
@@ -265,6 +266,9 @@ class TemporalAttention(nn.Module):
             nn.Linear(d_model * 4, d_model),
             nn.Dropout(dropout)
         )
+        
+        # Skip connection projection (차원이 다를 때)
+        self.skip_projection = nn.Linear(d_model, d_model) if d_model != d_model else nn.Identity()
         
         # Attention weights storage for visualization
         self.attention_weights = None
@@ -275,42 +279,152 @@ class TemporalAttention(nn.Module):
             x: [batch_size, seq_len, d_model]
             mask: [batch_size, seq_len] (optional)
         """
-        # Self-attention for temporal patterns
-        attn_out, attn_weights = self.temporal_attention(x, x, x, attn_mask=mask)
+        # Pre-norm + Self-attention
+        norm_x = self.norm1(x)
+        attn_out, attn_weights = self.temporal_attention(norm_x, norm_x, norm_x, attn_mask=mask)
         
         # Store attention weights for visualization
         self.attention_weights = attn_weights.detach().cpu()
         
-        # Residual connection + layer norm
-        x = self.norm1(x + attn_out)
+        # Residual connection
+        x = x + attn_out
         
-        # Feed forward network
-        ffn_out = self.ffn(x)
+        # Pre-norm + Feed Forward
+        norm_x = self.norm2(x)
+        ffn_out = self.ffn(norm_x)
         
-        # Residual connection + layer norm
-        x = self.norm2(x + ffn_out)
+        # Skip connection + Final residual
+        skip_out = self.skip_projection(x)
+        x = self.norm3(skip_out + ffn_out)
         
         return x
 
+class MultiScaleFeatureExtractor(nn.Module):
+    """간단한 다중 스케일 특성 추출기"""
+    def __init__(self, d_model: int, scales: List[int] = [1, 2, 4], dropout: float = 0.1):
+        super().__init__()
+        self.scales = scales
+        self.d_model = d_model
+        
+        # 단일 컨볼루션 (다중 스케일 대신)
+        self.conv = nn.Sequential(
+            nn.Conv1d(d_model, d_model, kernel_size=3, padding=1),
+            nn.GELU(),
+            nn.Dropout(dropout)
+        )
+        
+        # 특성 융합
+        self.fusion = nn.Sequential(
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout)
+        )
+        
+    def forward(self, x):
+        """
+        Args:
+            x: [batch_size, seq_len, d_model]
+        """
+        # [batch_size, seq_len, d_model] -> [batch_size, d_model, seq_len]
+        x_conv = x.transpose(1, 2)
+        
+        # 컨볼루션 적용
+        conv_feat = self.conv(x_conv)  # [batch_size, d_model, seq_len]
+        
+        # [batch_size, d_model, seq_len] -> [batch_size, seq_len, d_model]
+        conv_feat = conv_feat.transpose(1, 2)
+        
+        # 융합
+        fused_features = self.fusion(conv_feat)
+        
+        return fused_features
+
 class CrossTimeframeAttention(nn.Module):
+    """개선된 Cross-Timeframe Attention (Multi-Scale + Residual)"""
     def __init__(self, feature_dim: int, nhead: int = 4, dropout: float = 0.1):
         super().__init__()
         self.feature_dim = feature_dim  # d_model//2
         
+        # Multi-head attention
         self.cross_attention = nn.MultiheadAttention(
             feature_dim, nhead, dropout=dropout, batch_first=True
         )
-        self.norm = nn.LayerNorm(feature_dim)
+        
+        # Pre-norm architecture
+        self.norm1 = nn.LayerNorm(feature_dim)
+        self.norm2 = nn.LayerNorm(feature_dim)
+        
+        # Feed Forward Network
+        self.ffn = nn.Sequential(
+            nn.Linear(feature_dim, feature_dim * 2),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(feature_dim * 2, feature_dim),
+            nn.Dropout(dropout)
+        )
+        
+        # Skip connection
+        self.skip_projection = nn.Identity()
     
     def forward(self, short_term, medium_term, long_term):
         # 모든 입력이 [batch_size, feature_dim]
         timeframes = torch.stack([short_term, medium_term, long_term], dim=1)
         # [batch_size, 3, feature_dim]
         
-        attn_out, _ = self.cross_attention(timeframes, timeframes, timeframes)
-        attn_out = self.norm(attn_out)
+        # Pre-norm + Cross-attention
+        norm_timeframes = self.norm1(timeframes)
+        attn_out, _ = self.cross_attention(norm_timeframes, norm_timeframes, norm_timeframes)
         
-        return attn_out[:, 0, :], attn_out[:, 1, :], attn_out[:, 2, :]
+        # Residual connection
+        timeframes = timeframes + attn_out
+        
+        # Pre-norm + Feed Forward
+        norm_timeframes = self.norm2(timeframes)
+        ffn_out = self.ffn(norm_timeframes)
+        
+        # Final residual
+        timeframes = timeframes + ffn_out
+        
+        return timeframes[:, 0, :], timeframes[:, 1, :], timeframes[:, 2, :]
+
+class AdaptivePooling(nn.Module):
+    """적응형 풀링 레이어"""
+    def __init__(self, d_model: int, output_size: int = 1):
+        super().__init__()
+        self.d_model = d_model
+        self.output_size = output_size
+        
+        # Attention-based pooling
+        self.attention_pool = nn.Sequential(
+            nn.Linear(d_model, d_model // 2),
+            nn.Tanh(),
+            nn.Linear(d_model // 2, 1),
+            nn.Softmax(dim=1)
+        )
+        
+        # Adaptive pooling
+        self.adaptive_pool = nn.AdaptiveAvgPool1d(output_size)
+        
+    def forward(self, x):
+        """
+        Args:
+            x: [batch_size, seq_len, d_model]
+        """
+        # Attention weights 계산
+        attention_weights = self.attention_pool(x)  # [batch_size, seq_len, 1]
+        
+        # Attention-weighted pooling
+        attention_pooled = torch.sum(x * attention_weights, dim=1)  # [batch_size, d_model]
+        
+        # Adaptive pooling
+        x_transposed = x.transpose(1, 2)  # [batch_size, d_model, seq_len]
+        adaptive_pooled = self.adaptive_pool(x_transposed).squeeze(-1)  # [batch_size, d_model]
+        
+        # 결합
+        combined = attention_pooled + adaptive_pooled
+        
+        return combined
 
 class FinancialPositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
@@ -390,20 +504,29 @@ class MultiTimeframeTransformer(nn.Module):
         # 금융 특화 위치 인코딩
         self.pos_encoding = FinancialPositionalEncoding(d_model, max_seq_len)
         
+        # Multi-Scale Feature Extractor
+        if use_enhanced_attention:
+            self.multi_scale_extractor = MultiScaleFeatureExtractor(d_model, scales=[1, 2, 4], dropout=dropout)
+        
         # Temporal Attention (시간적 패턴 집중)
         if use_enhanced_attention:
             self.temporal_attention = TemporalAttention(d_model, nhead, dropout)
         
-        # Transformer 인코더
+        # Transformer 인코더 (개선된 설정)
         encoder_layer = nn.TransformerEncoderLayer(
             d_model=d_model,
             nhead=nhead,
             dim_feedforward=d_model * 4,
             dropout=dropout,
-            activation='gelu',  # ReLU 대신 GELU 사용
-            batch_first=True
+            activation='gelu',
+            batch_first=True,
+            norm_first=True  # Pre-norm architecture
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
+        
+        # Adaptive Pooling
+        if use_enhanced_attention:
+            self.adaptive_pooling = AdaptivePooling(d_model, output_size=1)
         
         # Cross-Timeframe Attention (시간프레임 간 정보 교환)
         if use_enhanced_attention:
@@ -433,27 +556,19 @@ class MultiTimeframeTransformer(nn.Module):
         self.apply(self._init_weights)
     
     def _build_enhanced_timeframe_extractor(self, d_model: int, timeframe: str):
-        """개선된 시간프레임별 특성 추출기"""
+        """압축된 시간프레임별 특성 추출기 (효율성 개선)"""
         if timeframe == 'short':
-            # 단기: 빠른 반응, 높은 민감도
+            # 단기: 압축된 구조로 빠른 처리
             return nn.Sequential(
-                nn.Linear(d_model, d_model),
-                nn.GELU(),
-                nn.LayerNorm(d_model),
-                nn.Dropout(0.05),  # 낮은 드롭아웃
-                nn.Linear(d_model, d_model // 2),
+                nn.Linear(d_model, d_model // 2),  # 차원 축소
                 nn.GELU(),
                 nn.LayerNorm(d_model // 2),
                 nn.Dropout(0.05),
                 nn.Linear(d_model // 2, d_model // 2)
             )
         elif timeframe == 'medium':
-            # 중기: 균형잡힌 분석
+            # 중기: 균형잡힌 압축 구조
             return nn.Sequential(
-                nn.Linear(d_model, d_model),
-                nn.GELU(),
-                nn.LayerNorm(d_model),
-                nn.Dropout(0.1),
                 nn.Linear(d_model, d_model // 2),
                 nn.GELU(),
                 nn.LayerNorm(d_model // 2),
@@ -461,12 +576,8 @@ class MultiTimeframeTransformer(nn.Module):
                 nn.Linear(d_model // 2, d_model // 2)
             )
         else:  # long
-            # 장기: 안정적, 낮은 민감도
+            # 장기: 안정적인 압축 구조
             return nn.Sequential(
-                nn.Linear(d_model, d_model),
-                nn.GELU(),
-                nn.LayerNorm(d_model),
-                nn.Dropout(0.15),  # 높은 드롭아웃
                 nn.Linear(d_model, d_model // 2),
                 nn.GELU(),
                 nn.LayerNorm(d_model // 2),
@@ -555,6 +666,10 @@ class MultiTimeframeTransformer(nn.Module):
         # 금융 특화 위치 인코딩
         x = self.pos_encoding(x)  # [batch_size, seq_len, d_model]
         
+        # Multi-Scale Feature Extraction
+        if self.use_enhanced_attention:
+            x = self.multi_scale_extractor(x)  # [batch_size, seq_len, d_model]
+        
         # Temporal Attention (시간적 패턴 집중)
         if self.use_enhanced_attention:
             x = self.temporal_attention(x, mask)
@@ -569,8 +684,12 @@ class MultiTimeframeTransformer(nn.Module):
         else:
             x = self.transformer(x)
         
-        # 최종 특성 (마지막 시퀀스 요소 사용)
-        final_features = x[:, -1, :]  # [batch_size, d_model]
+        # Adaptive Pooling으로 최종 특성 추출
+        if self.use_enhanced_attention:
+            final_features = self.adaptive_pooling(x)  # [batch_size, d_model]
+        else:
+            # 기존 방식 (마지막 시퀀스 요소 사용)
+            final_features = x[:, -1, :]  # [batch_size, d_model]
         
         # 시간프레임별 특성 추출
         timeframe_features = {}
