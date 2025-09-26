@@ -23,9 +23,10 @@ TRAINING_BATCH_SIZE = 64
 TRAINING_EPOCHS = 100
 SEQUENCE_LENGTH = 30
 TRAINING_VALIDATION_SPLIT = 0.2
-TRAINING_LEARNING_RATE = 5e-4
+TRAINING_LEARNING_RATE = 5e-5
 TRAINING_WEIGHT_DECAY = 3e-5
 TRAINING_PATIENCE = 10
+EARLY_STOPPING_PATIENCE = 20
 
 # 데이터 처리 파라미터
 DATA_TEST_LIMIT = 10000
@@ -1212,7 +1213,7 @@ class MultiTimeframeTrainer:
         print(f"  검증 시퀀스: {len(val_sequences):,}개")
         
         # 훈련 루프
-        patience = TRAINING_PATIENCE
+        patience = EARLY_STOPPING_PATIENCE
         patience_counter = 0
         
         for epoch in range(start_epoch, epochs):
