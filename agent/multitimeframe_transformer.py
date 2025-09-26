@@ -12,7 +12,7 @@ Multi-Timeframe Transformer 딥러닝 모델
 
 # 모델 아키텍처 파라미터
 MODEL_INPUT_SIZE = 58
-MODEL_D_MODEL = 128
+MODEL_D_MODEL = 256
 MODEL_NHEAD = 8
 MODEL_NUM_LAYERS = 3
 MODEL_DROPOUT = 0.1
@@ -21,15 +21,15 @@ MODEL_MAX_SEQ_LEN = 60
 # 훈련 파라미터
 TRAINING_BATCH_SIZE = 64
 TRAINING_EPOCHS = 100
-SEQUENCE_LENGTH = 30
+SEQUENCE_LENGTH = 50
 TRAINING_VALIDATION_SPLIT = 0.2
 TRAINING_LEARNING_RATE = 5e-5
 TRAINING_WEIGHT_DECAY = 3e-5
-TRAINING_PATIENCE = 10
+TRAINING_PATIENCE = 5
 EARLY_STOPPING_PATIENCE = 20
 
 # 데이터 처리 파라미터
-DATA_TEST_LIMIT = 10000
+DATA_TEST_LIMIT = 30000
 DATA_NORMALIZATION_ENABLED = True
 NUM_BATCHES_PER_PRINT = 20
 # 손실 함수 가중치
@@ -47,7 +47,7 @@ MODEL_FINAL_SAVE_PATH = 'agent/multitimeframe_transformer_trained.pth'
 CHECKPOINT_SAVE_PATH = 'agent/training_checkpoint.pth'
 
 # 데이터 파일 경로
-DATA_FILE_PATH = 'agent/decisions_data_optimized.parquet'  # 최적화된 데이터 사용
+DATA_FILE_PATH = 'agent/decisions_data.parquet'  # 최적화된 데이터 사용
 
 # 테스트 파라미터
 TEST_SAMPLES_COUNT = 10
@@ -241,8 +241,160 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0), :]
         return self.dropout(x)
 
+class TemporalAttention(nn.Module):
+    """시간적 패턴에 집중하는 어텐션 메커니즘"""
+    def __init__(self, d_model: int, nhead: int = 8, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        
+        # Multi-head attention for temporal patterns
+        self.temporal_attention = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
+        )
+        
+        # Layer normalization
+        self.norm1 = nn.LayerNorm(d_model)
+        self.norm2 = nn.LayerNorm(d_model)
+        
+        # Feed forward network
+        self.ffn = nn.Sequential(
+            nn.Linear(d_model, d_model * 4),
+            nn.GELU(),
+            nn.Dropout(dropout),
+            nn.Linear(d_model * 4, d_model),
+            nn.Dropout(dropout)
+        )
+        
+        # Attention weights storage for visualization
+        self.attention_weights = None
+        
+    def forward(self, x, mask=None):
+        """
+        Args:
+            x: [batch_size, seq_len, d_model]
+            mask: [batch_size, seq_len] (optional)
+        """
+        # Self-attention for temporal patterns
+        attn_out, attn_weights = self.temporal_attention(x, x, x, attn_mask=mask)
+        
+        # Store attention weights for visualization
+        self.attention_weights = attn_weights.detach().cpu()
+        
+        # Residual connection + layer norm
+        x = self.norm1(x + attn_out)
+        
+        # Feed forward network
+        ffn_out = self.ffn(x)
+        
+        # Residual connection + layer norm
+        x = self.norm2(x + ffn_out)
+        
+        return x
+
+class CrossTimeframeAttention(nn.Module):
+    """서로 다른 시간프레임 간 정보 교환을 위한 어텐션"""
+    def __init__(self, d_model: int, nhead: int = 4, dropout: float = 0.1):
+        super().__init__()
+        self.d_model = d_model
+        self.nhead = nhead
+        
+        # Cross-attention between timeframes
+        self.cross_attention = nn.MultiheadAttention(
+            d_model, nhead, dropout=dropout, batch_first=True
+        )
+        
+        # Layer normalization
+        self.norm = nn.LayerNorm(d_model)
+        
+        # Attention weights storage
+        self.attention_weights = None
+        
+    def forward(self, short_term, medium_term, long_term):
+        """
+        Args:
+            short_term: [batch_size, d_model]
+            medium_term: [batch_size, d_model] 
+            long_term: [batch_size, d_model]
+        """
+        # Stack timeframes: [batch_size, 3, d_model]
+        timeframes = torch.stack([short_term, medium_term, long_term], dim=1)
+        
+        # Cross-attention between timeframes
+        attn_out, attn_weights = self.cross_attention(
+            timeframes, timeframes, timeframes
+        )
+        
+        # Store attention weights for visualization
+        self.attention_weights = attn_weights.detach().cpu()
+        
+        # Layer normalization
+        attn_out = self.norm(attn_out)
+        
+        # Return enhanced timeframes
+        enhanced_short = attn_out[:, 0, :]  # [batch_size, d_model]
+        enhanced_medium = attn_out[:, 1, :]  # [batch_size, d_model]
+        enhanced_long = attn_out[:, 2, :]  # [batch_size, d_model]
+        
+        return enhanced_short, enhanced_medium, enhanced_long
+
+class FinancialPositionalEncoding(nn.Module):
+    """금융 시계열에 특화된 위치 인코딩"""
+    def __init__(self, d_model: int, max_len: int = 5000):
+        super().__init__()
+        self.d_model = d_model
+        self.dropout = nn.Dropout(p=0.1)
+        
+        # 1. 기본 위치 인코딩
+        self.basic_pe = self._create_sinusoidal_pe(max_len, d_model)
+        
+        # 2. 시간적 주기성 인코딩 (일, 주, 월)
+        self.daily_pe = self._create_cyclical_pe(max_len, d_model, period=24)  # 일일 주기
+        self.weekly_pe = self._create_cyclical_pe(max_len, d_model, period=168)  # 주간 주기
+        
+        # 3. 학습 가능한 위치 임베딩
+        self.learnable_pe = nn.Parameter(torch.randn(max_len, d_model) * 0.1)
+        
+    def _create_sinusoidal_pe(self, max_len, d_model):
+        pe = torch.zeros(max_len, d_model)
+        position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
+        pe[:, 0::2] = torch.sin(position * div_term)
+        pe[:, 1::2] = torch.cos(position * div_term)
+        return pe.unsqueeze(0).transpose(0, 1)
+    
+    def _create_cyclical_pe(self, max_len, d_model, period):
+        pe = torch.zeros(max_len, d_model)
+        for pos in range(max_len):
+            for i in range(0, d_model, 2):
+                pe[pos, i] = torch.sin(torch.tensor(2 * np.pi * pos / period, dtype=torch.float))
+                if i + 1 < d_model:
+                    pe[pos, i + 1] = torch.cos(torch.tensor(2 * np.pi * pos / period, dtype=torch.float))
+        return pe.unsqueeze(0).transpose(0, 1)  # [1, max_len, d_model]
+    
+    def forward(self, x):
+        seq_len = x.size(1)
+        batch_size = x.size(0)
+        
+        # Combine different positional encodings
+        # basic_pe, daily_pe, weekly_pe are [1, max_len, d_model]
+        # learnable_pe is [max_len, d_model]
+        basic_pe = self.basic_pe[0, :seq_len, :]  # [seq_len, d_model]
+        daily_pe = self.daily_pe[0, :seq_len, :]  # [seq_len, d_model]
+        weekly_pe = self.weekly_pe[0, :seq_len, :]  # [seq_len, d_model]
+        learnable_pe = self.learnable_pe[:seq_len, :]  # [seq_len, d_model]
+        
+        # Weighted combination
+        combined_pe = (basic_pe + 0.3 * daily_pe + 0.2 * weekly_pe + 0.1 * learnable_pe)
+        
+        # Expand to match batch dimension: [seq_len, d_model] -> [batch_size, seq_len, d_model]
+        combined_pe = combined_pe.unsqueeze(0).expand(batch_size, -1, -1)
+        
+        x = x + combined_pe
+        return self.dropout(x)
+
 class MultiTimeframeTransformer(nn.Module):
-    """Multi-Timeframe Transformer 모델"""
+    """Enhanced Multi-Timeframe Transformer 모델 with Advanced Attention Mechanisms"""
     
     def __init__(self, 
                     input_size: int = MODEL_INPUT_SIZE,
@@ -250,7 +402,8 @@ class MultiTimeframeTransformer(nn.Module):
                     nhead: int = MODEL_NHEAD,
                     num_layers: int = MODEL_NUM_LAYERS,
                     dropout: float = MODEL_DROPOUT,
-                    max_seq_len: int = MODEL_MAX_SEQ_LEN):
+                    max_seq_len: int = MODEL_MAX_SEQ_LEN,
+                    use_enhanced_attention: bool = True):
         super().__init__()
         
         self.input_size = input_size
@@ -258,17 +411,22 @@ class MultiTimeframeTransformer(nn.Module):
         self.nhead = nhead
         self.num_layers = num_layers
         self.max_seq_len = max_seq_len
+        self.use_enhanced_attention = use_enhanced_attention
         
-        # 입력 임베딩
+        # 개선된 입력 임베딩
         self.input_embedding = nn.Sequential(
             nn.Linear(input_size, d_model),
             nn.LayerNorm(d_model),
-            nn.ReLU(),
+            nn.GELU(),  # ReLU 대신 GELU 사용
             nn.Dropout(dropout)
         )
         
-        # 위치 인코딩
-        self.pos_encoding = PositionalEncoding(d_model, max_seq_len)
+        # 금융 특화 위치 인코딩
+        self.pos_encoding = FinancialPositionalEncoding(d_model, max_seq_len)
+        
+        # Temporal Attention (시간적 패턴 집중)
+        if use_enhanced_attention:
+            self.temporal_attention = TemporalAttention(d_model, nhead, dropout)
         
         # Transformer 인코더
         encoder_layer = nn.TransformerEncoderLayer(
@@ -276,51 +434,105 @@ class MultiTimeframeTransformer(nn.Module):
             nhead=nhead,
             dim_feedforward=d_model * 4,
             dropout=dropout,
-            activation='relu',
+            activation='gelu',  # ReLU 대신 GELU 사용
             batch_first=True
         )
         self.transformer = nn.TransformerEncoder(encoder_layer, num_layers)
         
-        # 시간프레임별 특성 추출기
+        # Cross-Timeframe Attention (시간프레임 간 정보 교환)
+        if use_enhanced_attention:
+            self.cross_timeframe_attention = CrossTimeframeAttention(d_model//2, nhead//2, dropout)
+        
+        # 시간프레임별 특성 추출기 (개선됨)
         self.timeframe_extractors = nn.ModuleDict({
-            'short_term': self._build_timeframe_extractor(d_model, 'short'),
-            'medium_term': self._build_timeframe_extractor(d_model, 'medium'),
-            'long_term': self._build_timeframe_extractor(d_model, 'long')
+            'short_term': self._build_enhanced_timeframe_extractor(d_model, 'short'),
+            'medium_term': self._build_enhanced_timeframe_extractor(d_model, 'medium'),
+            'long_term': self._build_enhanced_timeframe_extractor(d_model, 'long')
         })
         
-        # 의사결정 헤드들 (단순화: action, confidence, profit만)
+        # 개선된 의사결정 헤드들
         self.decision_heads = nn.ModuleDict({
-            'action': nn.Sequential(
-                nn.Linear(d_model, d_model // 2),
-                nn.ReLU(),
-                nn.LayerNorm(d_model // 2),
-                nn.Dropout(dropout),
-                nn.Linear(d_model // 2, 3)  # BUY, SELL, HOLD
-            ),
-            'confidence': nn.Sequential(
-                nn.Linear(d_model, d_model // 2),
-                nn.ReLU(),
-                nn.LayerNorm(d_model // 2),
-                nn.Dropout(dropout),
-                nn.Linear(d_model // 2, 1),
-                nn.Sigmoid()
-            )
+            'action': self._build_decision_head(d_model, 3, dropout),  # BUY, SELL, HOLD
+            'confidence': self._build_decision_head(d_model, 1, dropout, activation='sigmoid'),
+            'risk': self._build_decision_head(d_model, 1, dropout)  # 리스크 예측 추가
         })
         
-        # 수익률 예측기
-        self.profit_predictor = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
-            nn.ReLU(),
-            nn.LayerNorm(d_model // 2),
-            nn.Dropout(dropout),
-            nn.Linear(d_model // 2, 1)
-        )
+        # 수익률 예측기 (개선됨)
+        self.profit_predictor = self._build_decision_head(d_model, 1, dropout)
+        
+        # Attention 가중치 저장용
+        self.attention_weights = {}
         
         # 가중치 초기화
         self.apply(self._init_weights)
     
+    def _build_enhanced_timeframe_extractor(self, d_model: int, timeframe: str):
+        """개선된 시간프레임별 특성 추출기"""
+        if timeframe == 'short':
+            # 단기: 빠른 반응, 높은 민감도
+            return nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.LayerNorm(d_model),
+                nn.Dropout(0.05),  # 낮은 드롭아웃
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.LayerNorm(d_model // 2),
+                nn.Dropout(0.05),
+                nn.Linear(d_model // 2, d_model // 2)
+            )
+        elif timeframe == 'medium':
+            # 중기: 균형잡힌 분석
+            return nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.LayerNorm(d_model),
+                nn.Dropout(0.1),
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.LayerNorm(d_model // 2),
+                nn.Dropout(0.1),
+                nn.Linear(d_model // 2, d_model // 2)
+            )
+        else:  # long
+            # 장기: 안정적, 낮은 민감도
+            return nn.Sequential(
+                nn.Linear(d_model, d_model),
+                nn.GELU(),
+                nn.LayerNorm(d_model),
+                nn.Dropout(0.15),  # 높은 드롭아웃
+                nn.Linear(d_model, d_model // 2),
+                nn.GELU(),
+                nn.LayerNorm(d_model // 2),
+                nn.Dropout(0.15),
+                nn.Linear(d_model // 2, d_model // 2)
+            )
+    
+    def _build_decision_head(self, d_model: int, output_size: int, dropout: float, activation: str = None):
+        """개선된 의사결정 헤드 빌더"""
+        layers = [
+            nn.Linear(d_model, d_model),
+            nn.GELU(),
+            nn.LayerNorm(d_model),
+            nn.Dropout(dropout),
+            nn.Linear(d_model, d_model // 2),
+            nn.GELU(),
+            nn.LayerNorm(d_model // 2),
+            nn.Dropout(dropout),
+            nn.Linear(d_model // 2, output_size)
+        ]
+        
+        if activation == 'sigmoid':
+            layers.append(nn.Sigmoid())
+        elif activation == 'softmax':
+            layers.append(nn.Softmax(dim=-1))
+        elif activation == 'tanh':
+            layers.append(nn.Tanh())
+        
+        return nn.Sequential(*layers)
+    
     def _build_timeframe_extractor(self, d_model: int, timeframe: str):
-        """시간프레임별 특성 추출기"""
+        """기존 시간프레임별 특성 추출기 (하위 호환성)"""
         if timeframe == 'short':
             # 단기: 빠른 반응, 높은 민감도
             return nn.Sequential(
@@ -357,6 +569,7 @@ class MultiTimeframeTransformer(nn.Module):
     
     def forward(self, x, mask=None):
         """
+        Enhanced forward pass with advanced attention mechanisms
         Args:
             x: [batch_size, seq_len, input_size] 또는 [batch_size, input_size]
             mask: [batch_size, seq_len] (선택적)
@@ -373,10 +586,15 @@ class MultiTimeframeTransformer(nn.Module):
         # 입력 임베딩
         x = self.input_embedding(x)  # [batch_size, seq_len, d_model]
         
-        # 위치 인코딩
-        x = x.transpose(0, 1)  # [seq_len, batch_size, d_model]
-        x = self.pos_encoding(x)
-        x = x.transpose(0, 1)  # [batch_size, seq_len, d_model]
+        # 금융 특화 위치 인코딩
+        x = self.pos_encoding(x)  # [batch_size, seq_len, d_model]
+        
+        # Temporal Attention (시간적 패턴 집중)
+        if self.use_enhanced_attention:
+            x = self.temporal_attention(x, mask)
+            # Attention 가중치 저장
+            if hasattr(self.temporal_attention, 'attention_weights'):
+                self.attention_weights['temporal'] = self.temporal_attention.attention_weights
         
         # Transformer 인코더
         if mask is not None:
@@ -392,6 +610,23 @@ class MultiTimeframeTransformer(nn.Module):
         timeframe_features = {}
         for timeframe, extractor in self.timeframe_extractors.items():
             timeframe_features[timeframe] = extractor(final_features)
+        
+        # Cross-Timeframe Attention (시간프레임 간 정보 교환)
+        if self.use_enhanced_attention:
+            enhanced_short, enhanced_medium, enhanced_long = self.cross_timeframe_attention(
+                timeframe_features['short_term'],
+                timeframe_features['medium_term'], 
+                timeframe_features['long_term']
+            )
+            
+            # Enhanced timeframe features 업데이트
+            timeframe_features['short_term'] = enhanced_short
+            timeframe_features['medium_term'] = enhanced_medium
+            timeframe_features['long_term'] = enhanced_long
+            
+            # Cross-timeframe attention 가중치 저장
+            if hasattr(self.cross_timeframe_attention, 'attention_weights'):
+                self.attention_weights['cross_timeframe'] = self.cross_timeframe_attention.attention_weights
         
         # 의사결정 출력
         decisions = {}
@@ -410,6 +645,14 @@ class MultiTimeframeTransformer(nn.Module):
                 timeframe_features[key] = timeframe_features[key].squeeze(0)
         
         return decisions, profit_pred, timeframe_features
+    
+    def get_attention_weights(self):
+        """Attention 가중치 반환 (시각화용)"""
+        return self.attention_weights
+    
+    def clear_attention_weights(self):
+        """Attention 가중치 초기화"""
+        self.attention_weights = {}
 
 class MultiTimeframeDecisionEngine:
     """Multi-Timeframe 의사결정 엔진"""
@@ -420,7 +663,8 @@ class MultiTimeframeDecisionEngine:
                     d_model: int = MODEL_D_MODEL,
                     nhead: int = MODEL_NHEAD,
                     num_layers: int = MODEL_NUM_LAYERS,
-                    device: str = 'auto'):
+                    device: str = 'auto',
+                    use_enhanced_attention: bool = True):
         
         # 디바이스 설정
         if device == 'auto':
@@ -428,14 +672,16 @@ class MultiTimeframeDecisionEngine:
         else:
             self.device = torch.device(device)
         
-        print(f"Multi-Timeframe Transformer 디바이스: {self.device}")
+        print(f"Enhanced Multi-Timeframe Transformer 디바이스: {self.device}")
+        print(f"Enhanced Attention 사용: {use_enhanced_attention}")
         
         # 모델 초기화
         self.model = MultiTimeframeTransformer(
             input_size=input_size,
             d_model=d_model,
             nhead=nhead,
-            num_layers=num_layers
+            num_layers=num_layers,
+            use_enhanced_attention=use_enhanced_attention
         ).to(self.device)
         
         # 옵티마이저
@@ -610,6 +856,42 @@ class MultiTimeframeDecisionEngine:
             self.total_decisions += 1
             
             return result
+    
+    def get_attention_visualization(self, decision_sequence: List[Dict], seq_len: int = SEQUENCE_LENGTH) -> Dict:
+        """Attention 가중치 시각화를 위한 데이터 반환"""
+        self.model.eval()
+        
+        with torch.no_grad():
+            # 시퀀스 데이터 전처리
+            if len(decision_sequence) < seq_len:
+                padded_sequence = decision_sequence + [decision_sequence[-1]] * (seq_len - len(decision_sequence))
+                input_tensor = self.preprocess_sequence_data(padded_sequence, seq_len)
+            else:
+                recent_sequence = decision_sequence[-seq_len:]
+                input_tensor = self.preprocess_sequence_data(recent_sequence, seq_len)
+            
+            # 모델 추론
+            decisions, profit_pred, timeframe_features = self.model(input_tensor)
+            
+            # Attention 가중치 가져오기
+            attention_weights = self.model.get_attention_weights()
+            
+            # 시각화용 데이터 구성
+            visualization_data = {
+                'temporal_attention': attention_weights.get('temporal', None),
+                'cross_timeframe_attention': attention_weights.get('cross_timeframe', None),
+                'decisions': {
+                    'action': decisions['action'].cpu().numpy(),
+                    'confidence': decisions['confidence'].cpu().numpy(),
+                    'risk': decisions.get('risk', torch.tensor([0.0])).cpu().numpy()
+                },
+                'profit_prediction': profit_pred.cpu().numpy(),
+                'timeframe_features': {
+                    k: v.cpu().numpy() for k, v in timeframe_features.items()
+                }
+            }
+            
+            return visualization_data
     
     def _interpret_action(self, action_logits: torch.Tensor) -> str:
         """액션 로짓을 해석 (확률 분포 확인 포함)"""
@@ -1392,12 +1674,13 @@ def resume_training(checkpoint_path: str = CHECKPOINT_SAVE_PATH,
         print("   처음부터 학습을 시작하려면 main() 함수를 사용하세요.")
         return {}
     
-    # 모델 초기화
+    # 모델 초기화 (Enhanced Attention 사용)
     engine = MultiTimeframeDecisionEngine(
         input_size=MODEL_INPUT_SIZE,
         d_model=MODEL_D_MODEL,
         nhead=MODEL_NHEAD,
-        num_layers=MODEL_NUM_LAYERS
+        num_layers=MODEL_NUM_LAYERS,
+        use_enhanced_attention=True
     )
     
     # 체크포인트 로드
@@ -1453,15 +1736,16 @@ def resume_training(checkpoint_path: str = CHECKPOINT_SAVE_PATH,
 
 def main():
     """메인 실행 함수"""
-    print("Multi-Timeframe Transformer 딥러닝 모델")
+    print("Enhanced Multi-Timeframe Transformer 딥러닝 모델")
     print("=" * 60)
     
-    # 모델 초기화
+    # 모델 초기화 (Enhanced Attention 사용)
     engine = MultiTimeframeDecisionEngine(
         input_size=MODEL_INPUT_SIZE,
         d_model=MODEL_D_MODEL,
         nhead=MODEL_NHEAD,
-        num_layers=MODEL_NUM_LAYERS
+        num_layers=MODEL_NUM_LAYERS,
+        use_enhanced_attention=True
     )
     
     # 1. Decision 데이터 로드 (테스트용으로 제한)
