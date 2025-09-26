@@ -15,30 +15,30 @@ MODEL_INPUT_SIZE = 58
 MODEL_D_MODEL = 256
 MODEL_NHEAD = 8
 MODEL_NUM_LAYERS = 3
-MODEL_DROPOUT = 0.1
-MODEL_MAX_SEQ_LEN = 60
+MODEL_DROPOUT = 0.15  # 드롭아웃 증가로 과적합 방지
+MODEL_MAX_SEQ_LEN = 120
 
 # 훈련 파라미터
 TRAINING_BATCH_SIZE = 64
 TRAINING_EPOCHS = 100
-SEQUENCE_LENGTH = 50
+SEQUENCE_LENGTH = 10
 TRAINING_VALIDATION_SPLIT = 0.2
-TRAINING_LEARNING_RATE = 5e-5
+TRAINING_LEARNING_RATE = 5e-4
 TRAINING_WEIGHT_DECAY = 3e-5
 TRAINING_PATIENCE = 5
-EARLY_STOPPING_PATIENCE = 20
+EARLY_STOPPING_PATIENCE = 15  # 더 빠른 조기 종료
 
 # 데이터 처리 파라미터
-DATA_TEST_LIMIT = 30000
+DATA_TEST_LIMIT = 10000
 DATA_NORMALIZATION_ENABLED = True
 NUM_BATCHES_PER_PRINT = 20
-# 손실 함수 가중치
-LOSS_PROFIT_WEIGHT = 3.0
-LOSS_ACTION_WEIGHT = 2.0
-LOSS_OTHER_WEIGHT = 1.0
+# 손실 함수 가중치 (균형 조정)
+LOSS_PROFIT_WEIGHT = 2.0  # 수익률 가중치 감소
+LOSS_ACTION_WEIGHT = 1.5  # 액션 가중치 감소
+LOSS_OTHER_WEIGHT = 1.0   # 기타 가중치 유지
 
-# 그래디언트 클리핑
-GRADIENT_CLIP_NORM = 1.0
+# 그래디언트 클리핑 (강화)
+GRADIENT_CLIP_NORM = 0.5  # 더 강한 클리핑
 
 # 모델 저장 경로
 MODEL_SAVE_PATH = 'agent/best_multitimeframe_model.pth'
@@ -293,75 +293,46 @@ class TemporalAttention(nn.Module):
         return x
 
 class CrossTimeframeAttention(nn.Module):
-    """서로 다른 시간프레임 간 정보 교환을 위한 어텐션"""
-    def __init__(self, d_model: int, nhead: int = 4, dropout: float = 0.1):
+    def __init__(self, feature_dim: int, nhead: int = 4, dropout: float = 0.1):
         super().__init__()
-        self.d_model = d_model
-        self.nhead = nhead
+        self.feature_dim = feature_dim  # d_model//2
         
-        # Cross-attention between timeframes
         self.cross_attention = nn.MultiheadAttention(
-            d_model, nhead, dropout=dropout, batch_first=True
+            feature_dim, nhead, dropout=dropout, batch_first=True
         )
-        
-        # Layer normalization
-        self.norm = nn.LayerNorm(d_model)
-        
-        # Attention weights storage
-        self.attention_weights = None
-        
+        self.norm = nn.LayerNorm(feature_dim)
+    
     def forward(self, short_term, medium_term, long_term):
-        """
-        Args:
-            short_term: [batch_size, d_model]
-            medium_term: [batch_size, d_model] 
-            long_term: [batch_size, d_model]
-        """
-        # Stack timeframes: [batch_size, 3, d_model]
+        # 모든 입력이 [batch_size, feature_dim]
         timeframes = torch.stack([short_term, medium_term, long_term], dim=1)
+        # [batch_size, 3, feature_dim]
         
-        # Cross-attention between timeframes
-        attn_out, attn_weights = self.cross_attention(
-            timeframes, timeframes, timeframes
-        )
-        
-        # Store attention weights for visualization
-        self.attention_weights = attn_weights.detach().cpu()
-        
-        # Layer normalization
+        attn_out, _ = self.cross_attention(timeframes, timeframes, timeframes)
         attn_out = self.norm(attn_out)
         
-        # Return enhanced timeframes
-        enhanced_short = attn_out[:, 0, :]  # [batch_size, d_model]
-        enhanced_medium = attn_out[:, 1, :]  # [batch_size, d_model]
-        enhanced_long = attn_out[:, 2, :]  # [batch_size, d_model]
-        
-        return enhanced_short, enhanced_medium, enhanced_long
+        return attn_out[:, 0, :], attn_out[:, 1, :], attn_out[:, 2, :]
 
 class FinancialPositionalEncoding(nn.Module):
-    """금융 시계열에 특화된 위치 인코딩"""
     def __init__(self, d_model: int, max_len: int = 5000):
         super().__init__()
         self.d_model = d_model
         self.dropout = nn.Dropout(p=0.1)
         
-        # 1. 기본 위치 인코딩
-        self.basic_pe = self._create_sinusoidal_pe(max_len, d_model)
+        # 모든 PE를 [max_len, d_model] 형태로 생성
+        self.register_buffer('basic_pe', self._create_sinusoidal_pe(max_len, d_model))
+        self.register_buffer('daily_pe', self._create_cyclical_pe(max_len, d_model, 24))
+        self.register_buffer('weekly_pe', self._create_cyclical_pe(max_len, d_model, 168))
         
-        # 2. 시간적 주기성 인코딩 (일, 주, 월)
-        self.daily_pe = self._create_cyclical_pe(max_len, d_model, period=24)  # 일일 주기
-        self.weekly_pe = self._create_cyclical_pe(max_len, d_model, period=168)  # 주간 주기
-        
-        # 3. 학습 가능한 위치 임베딩
+        # 학습 가능한 위치 임베딩
         self.learnable_pe = nn.Parameter(torch.randn(max_len, d_model) * 0.1)
-        
+    
     def _create_sinusoidal_pe(self, max_len, d_model):
         pe = torch.zeros(max_len, d_model)
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
         div_term = torch.exp(torch.arange(0, d_model, 2).float() * (-np.log(10000.0) / d_model))
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        return pe.unsqueeze(0).transpose(0, 1)
+        return pe  # [max_len, d_model]
     
     def _create_cyclical_pe(self, max_len, d_model, period):
         pe = torch.zeros(max_len, d_model)
@@ -370,28 +341,23 @@ class FinancialPositionalEncoding(nn.Module):
                 pe[pos, i] = torch.sin(torch.tensor(2 * np.pi * pos / period, dtype=torch.float))
                 if i + 1 < d_model:
                     pe[pos, i + 1] = torch.cos(torch.tensor(2 * np.pi * pos / period, dtype=torch.float))
-        return pe.unsqueeze(0).transpose(0, 1)  # [1, max_len, d_model]
+        return pe  # [max_len, d_model] - 올바른 차원
     
     def forward(self, x):
         seq_len = x.size(1)
-        batch_size = x.size(0)
         
-        # Combine different positional encodings
-        # basic_pe, daily_pe, weekly_pe are [1, max_len, d_model]
-        # learnable_pe is [max_len, d_model]
-        basic_pe = self.basic_pe[0, :seq_len, :]  # [seq_len, d_model]
-        daily_pe = self.daily_pe[0, :seq_len, :]  # [seq_len, d_model]
-        weekly_pe = self.weekly_pe[0, :seq_len, :]  # [seq_len, d_model]
-        learnable_pe = self.learnable_pe[:seq_len, :]  # [seq_len, d_model]
+        # 올바른 슬라이싱
+        combined_pe = (
+            self.basic_pe[:seq_len] + 
+            0.3 * self.daily_pe[:seq_len] + 
+            0.2 * self.weekly_pe[:seq_len] + 
+            0.1 * self.learnable_pe[:seq_len]
+        )  # [seq_len, d_model]
         
-        # Weighted combination
-        combined_pe = (basic_pe + 0.3 * daily_pe + 0.2 * weekly_pe + 0.1 * learnable_pe)
+        # 배치 차원 추가
+        combined_pe = combined_pe.unsqueeze(0).expand(x.size(0), -1, -1)
         
-        # Expand to match batch dimension: [seq_len, d_model] -> [batch_size, seq_len, d_model]
-        combined_pe = combined_pe.unsqueeze(0).expand(batch_size, -1, -1)
-        
-        x = x + combined_pe
-        return self.dropout(x)
+        return self.dropout(x + combined_pe)
 
 class MultiTimeframeTransformer(nn.Module):
     """Enhanced Multi-Timeframe Transformer 모델 with Advanced Attention Mechanisms"""
@@ -684,19 +650,40 @@ class MultiTimeframeDecisionEngine:
             use_enhanced_attention=use_enhanced_attention
         ).to(self.device)
         
-        # 옵티마이저
+        # 개선된 옵티마이저 (더 나은 설정)
         self.optimizer = optim.AdamW(
             self.model.parameters(),
             lr=TRAINING_LEARNING_RATE,
-            weight_decay=TRAINING_WEIGHT_DECAY
+            weight_decay=TRAINING_WEIGHT_DECAY,
+            betas=(0.9, 0.999),  # 기본값 유지
+            eps=1e-8,
+            amsgrad=False
         )
         
-        # 스케줄러
-        self.scheduler = optim.lr_scheduler.ReduceLROnPlateau(
+        # Warmup + Cosine Annealing 스케줄러
+        from torch.optim.lr_scheduler import LinearLR, SequentialLR
+        
+        # Warmup 스케줄러 (처음 5 에포크)
+        warmup_scheduler = LinearLR(
+            self.optimizer, 
+            start_factor=0.1, 
+            end_factor=1.0, 
+            total_iters=5
+        )
+        
+        # Cosine Annealing 스케줄러
+        cosine_scheduler = optim.lr_scheduler.CosineAnnealingWarmRestarts(
             self.optimizer,
-            mode='max',
-            factor=0.5,
-            patience=TRAINING_PATIENCE,
+            T_0=10,  # 10 에포크마다 리셋
+            T_mult=2,  # 리셋 주기 2배씩 증가
+            eta_min=1e-6  # 최소 학습률
+        )
+        
+        # 순차적 스케줄러
+        self.scheduler = SequentialLR(
+            self.optimizer,
+            schedulers=[warmup_scheduler, cosine_scheduler],
+            milestones=[5]  # 5 에포크 후 cosine으로 전환
         )
         
         # 모델 로드
@@ -961,14 +948,14 @@ class MultiTimeframeDecisionEngine:
         
         # 회귀 손실들 (단순화)
         for key in ['confidence']:
-            pred = decisions[key].squeeze()
+            pred = decisions[key].squeeze(-1)  # 마지막 차원만 제거
             target = torch.cat([t[key] for t in targets])
             loss = F.mse_loss(pred, target)
             total_loss += loss * other_loss_weight
         
         # 수익률 예측 손실 (가장 중요)
         profit_targets = torch.cat([t['profit'] for t in targets])
-        profit_loss = F.mse_loss(profit_pred.squeeze(), profit_targets)
+        profit_loss = F.mse_loss(profit_pred.squeeze(-1), profit_targets)  # 마지막 차원만 제거
         total_loss += profit_loss * profit_loss_weight
         
         # 역전파
@@ -1505,8 +1492,8 @@ class MultiTimeframeTrainer:
             # 검증
             val_loss = self._validate_sequence_epoch(val_sequences, val_sequence_labels, seq_len, batch_size)
             
-            # 스케줄러 업데이트
-            self.engine.scheduler.step(val_loss)
+            # 스케줄러 업데이트 (에포크 기반)
+            self.engine.scheduler.step()
             
             # 히스토리 저장
             epoch_stats = {
@@ -1649,14 +1636,14 @@ class MultiTimeframeTrainer:
         
         # 회귀 손실들 (단순화)
         for key in ['confidence']:
-            pred = decisions[key].squeeze()
+            pred = decisions[key].squeeze(-1)  # 마지막 차원만 제거
             target = torch.cat([t[key] for t in targets])
             loss = F.mse_loss(pred, target)
             total_loss += loss
         
         # 수익률 예측 손실
         profit_targets = torch.cat([t['profit'] for t in targets])
-        profit_loss = F.mse_loss(profit_pred.squeeze(), profit_targets)
+        profit_loss = F.mse_loss(profit_pred.squeeze(-1), profit_targets)  # 마지막 차원만 제거
         total_loss += profit_loss
         
         return float(total_loss.item())
