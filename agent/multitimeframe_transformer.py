@@ -21,11 +21,11 @@ MODEL_MAX_SEQ_LEN = 120
 # 훈련 파라미터
 TRAINING_BATCH_SIZE = 64
 TRAINING_EPOCHS = 100
-SEQUENCE_LENGTH = 10
+SEQUENCE_LENGTH = 20
 TRAINING_VALIDATION_SPLIT = 0.2
 TRAINING_LEARNING_RATE = 5e-4
 TRAINING_WEIGHT_DECAY = 3e-5
-TRAINING_PATIENCE = 5
+TRAINING_PATIENCE = 20
 EARLY_STOPPING_PATIENCE = 15  # 더 빠른 조기 종료
 
 # 데이터 처리 파라미터
@@ -267,8 +267,8 @@ class TemporalAttention(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # Skip connection projection (차원이 다를 때)
-        self.skip_projection = nn.Linear(d_model, d_model) if d_model != d_model else nn.Identity()
+        # Skip connection projection (불필요한 조건 제거)
+        self.skip_projection = nn.Identity()
         
         # Attention weights storage for visualization
         self.attention_weights = None
@@ -300,13 +300,12 @@ class TemporalAttention(nn.Module):
         return x
 
 class MultiScaleFeatureExtractor(nn.Module):
-    """간단한 다중 스케일 특성 추출기"""
+    """단순하고 안정적인 특성 추출기"""
     def __init__(self, d_model: int, scales: List[int] = [1, 2, 4], dropout: float = 0.1):
         super().__init__()
-        self.scales = scales
         self.d_model = d_model
         
-        # 단일 컨볼루션 (다중 스케일 대신)
+        # 단일 컨볼루션 (안정적인 구현)
         self.conv = nn.Sequential(
             nn.Conv1d(d_model, d_model, kernel_size=3, padding=1),
             nn.GELU(),
@@ -336,9 +335,9 @@ class MultiScaleFeatureExtractor(nn.Module):
         conv_feat = conv_feat.transpose(1, 2)
         
         # 융합
-        fused_features = self.fusion(conv_feat)
+        final_features = self.fusion(conv_feat)
         
-        return fused_features
+        return final_features
 
 class CrossTimeframeAttention(nn.Module):
     """개선된 Cross-Timeframe Attention (Multi-Scale + Residual)"""
@@ -364,8 +363,7 @@ class CrossTimeframeAttention(nn.Module):
             nn.Dropout(dropout)
         )
         
-        # Skip connection
-        self.skip_projection = nn.Identity()
+        # Skip connection (불필요한 Identity 제거)
     
     def forward(self, short_term, medium_term, long_term):
         # 모든 입력이 [batch_size, feature_dim]
@@ -389,22 +387,22 @@ class CrossTimeframeAttention(nn.Module):
         return timeframes[:, 0, :], timeframes[:, 1, :], timeframes[:, 2, :]
 
 class AdaptivePooling(nn.Module):
-    """적응형 풀링 레이어"""
+    """효율적인 적응형 풀링 레이어"""
     def __init__(self, d_model: int, output_size: int = 1):
         super().__init__()
         self.d_model = d_model
         self.output_size = output_size
         
-        # Attention-based pooling
-        self.attention_pool = nn.Sequential(
-            nn.Linear(d_model, d_model // 2),
+        # 통합된 attention mechanism
+        self.attention_mechanism = nn.Sequential(
+            nn.Linear(d_model, d_model // 4),
             nn.Tanh(),
-            nn.Linear(d_model // 2, 1),
+            nn.Linear(d_model // 4, 1),
             nn.Softmax(dim=1)
         )
         
-        # Adaptive pooling
-        self.adaptive_pool = nn.AdaptiveAvgPool1d(output_size)
+        # 가중치 학습을 위한 projection
+        self.weight_projection = nn.Linear(d_model, d_model)
         
     def forward(self, x):
         """
@@ -412,19 +410,15 @@ class AdaptivePooling(nn.Module):
             x: [batch_size, seq_len, d_model]
         """
         # Attention weights 계산
-        attention_weights = self.attention_pool(x)  # [batch_size, seq_len, 1]
+        attention_weights = self.attention_mechanism(x)  # [batch_size, seq_len, 1]
         
-        # Attention-weighted pooling
-        attention_pooled = torch.sum(x * attention_weights, dim=1)  # [batch_size, d_model]
+        # 가중치 적용된 특성 변환
+        weighted_features = self.weight_projection(x)  # [batch_size, seq_len, d_model]
         
-        # Adaptive pooling
-        x_transposed = x.transpose(1, 2)  # [batch_size, d_model, seq_len]
-        adaptive_pooled = self.adaptive_pool(x_transposed).squeeze(-1)  # [batch_size, d_model]
+        # Attention-weighted pooling (효율적인 결합)
+        pooled = torch.sum(weighted_features * attention_weights, dim=1)  # [batch_size, d_model]
         
-        # 결합
-        combined = attention_pooled + adaptive_pooled
-        
-        return combined
+        return pooled
 
 class FinancialPositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
