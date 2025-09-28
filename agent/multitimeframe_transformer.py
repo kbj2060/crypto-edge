@@ -12,16 +12,16 @@ Multi-Timeframe Transformer 딥러닝 모델
 
 # 모델 아키텍처 파라미터
 MODEL_INPUT_SIZE = 58
-MODEL_D_MODEL = 256
+MODEL_D_MODEL = 512
 MODEL_NHEAD = 8
 MODEL_NUM_LAYERS = 3
 MODEL_DROPOUT = 0.15  # 드롭아웃 증가로 과적합 방지
 MODEL_MAX_SEQ_LEN = 120
 
 # 훈련 파라미터
-TRAINING_BATCH_SIZE = 64
+TRAINING_BATCH_SIZE = 256
 TRAINING_EPOCHS = 100
-SEQUENCE_LENGTH = 20
+SEQUENCE_LENGTH = 100
 TRAINING_VALIDATION_SPLIT = 0.2
 TRAINING_LEARNING_RATE = 5e-4
 TRAINING_WEIGHT_DECAY = 3e-5
@@ -50,16 +50,14 @@ CHECKPOINT_SAVE_PATH = 'agent/training_checkpoint.pth'
 DATA_FILE_PATH = 'agent/decisions_data.parquet'  # 최적화된 데이터 사용
 
 # 테스트 파라미터
-TEST_SAMPLES_COUNT = 10
+TEST_SAMPLES_COUNT = 20
 
-# 고급 라벨링 파라미터
-LABEL_PROFIT_THRESHOLD = 0.008  # 0.5% 기본 임계값
-LABEL_VOLATILITY_FACTOR = 1.3  # 변동성 조정 계수
-LABEL_TREND_FACTOR = 1.2       # 트렌드 강도 계수
-LABEL_VOLUME_FACTOR = 1.2      # 거래량 계수
-LABEL_MIN_CONFIDENCE = 0.3     # 최소 신뢰도
-LABEL_MAX_CONFIDENCE = 0.8    # 최대 신뢰도
-LABEL_LOOKAHEAD_STEPS = 5      # 미래 데이터 참조 스텝
+# 간단한 라벨링 파라미터
+LABEL_PROFIT_THRESHOLD = 0.008   # 1% 기본 임계값 (더 엄격)
+LABEL_LOOKAHEAD_STEPS = 5       # 미래 데이터 참조 스텝 (단축)
+
+# 클래스 가중치 (클래스 불균형 해결) - HOLD에 더 높은 가중치
+CLASS_WEIGHTS = [2.0, 1.0, 1.0]  # HOLD: 2.0, BUY: 1.0, SELL: 1.0
 
 import numpy as np
 import pandas as pd
@@ -74,6 +72,7 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from pathlib import Path
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
+from torch.optim.lr_scheduler import LinearLR, SequentialLR
 
 # PyTorch 호환성 설정
 def setup_pytorch_compatibility():
@@ -772,9 +771,7 @@ class MultiTimeframeDecisionEngine:
             eps=1e-8,
             amsgrad=False
         )
-        
         # Warmup + Cosine Annealing 스케줄러
-        from torch.optim.lr_scheduler import LinearLR, SequentialLR
         
         # Warmup 스케줄러 (처음 5 에포크)
         warmup_scheduler = LinearLR(
@@ -1054,9 +1051,10 @@ class MultiTimeframeDecisionEngine:
         action_loss_weight = LOSS_ACTION_WEIGHT
         other_loss_weight = LOSS_OTHER_WEIGHT
         
-        # 액션 분류 손실
+        # 액션 분류 손실 (클래스 가중치 적용)
         action_targets = torch.cat([t['action'] for t in targets])
-        action_loss = F.cross_entropy(decisions['action'], action_targets)
+        class_weights = torch.FloatTensor(CLASS_WEIGHTS).to(self.device)
+        action_loss = F.cross_entropy(decisions['action'], action_targets, weight=class_weights)
         total_loss += action_loss * action_loss_weight
         
         # 회귀 손실들 (단순화)
@@ -1289,50 +1287,42 @@ class DecisionDataLoader:
     
     @staticmethod
     def create_realistic_training_labels(decision_data: List[Dict], lookback_steps: int = SEQUENCE_LENGTH):
-        """고급 라벨링 로직 - 시장 상황을 종합적으로 고려한 라벨 생성"""
+        """간단한 라벨링 로직 - 기본적인 수익률 기반 라벨 생성"""
         labels = []
         
         for i in range(lookback_steps, len(decision_data) - LABEL_LOOKAHEAD_STEPS):
             label = {
-                'action': 0,        # int (0, 1, 2)
+                'action': 0,        # int (0, 1, 2) - 기본값 HOLD
                 'confidence': 0.5,  # float (0.0-1.0)
                 'profit': 0.0       # float (수익률)
             }
             
-            # 현재 데이터 추출
-            current_data = decision_data[i]
-            current_price = current_data.get('close')
+            # 현재 가격
+            current_price = decision_data[i].get('close', 0)
             
-            # 미래 데이터 추출
-            future_prices = []
-            future_volumes = []
-            for j in range(1, LABEL_LOOKAHEAD_STEPS + 1):
-                future_data = decision_data[i + j]
-                future_prices.append(future_data.get('close'))
-                future_volumes.append(future_data.get('volume'))
+            # 미래 가격들 (간단하게 마지막 가격만 사용)
+            future_price = decision_data[i + LABEL_LOOKAHEAD_STEPS].get('close', 0)
             
-            if current_price > 0 and all(p > 0 for p in future_prices):
-                # 1. 기본 수익률 계산
-                future_returns = [(p - current_price) / current_price for p in future_prices]
-                max_return = max(future_returns)
-                min_return = min(future_returns)
-                avg_return = np.mean(future_returns)
+            if current_price > 0 and future_price > 0:
+                # 수익률 계산
+                return_rate = (future_price - current_price) / current_price
                 
-                # 2. 시장 상황 분석
-                market_context = DecisionDataLoader._analyze_market_context(
-                    decision_data, i, lookback_steps
-                )
-                
-                # 3. 동적 임계값 계산
-                dynamic_threshold = DecisionDataLoader._calculate_dynamic_threshold(
-                    market_context, current_data
-                )
-                
-                # 4. 고급 라벨 생성
-                label = DecisionDataLoader._generate_advanced_label(
-                    max_return, min_return, avg_return, 
-                    market_context, dynamic_threshold, future_volumes
-                )
+                # 간단한 라벨링 로직
+                if return_rate > LABEL_PROFIT_THRESHOLD:
+                    # 상승: BUY
+                    label['action'] = 1
+                    label['confidence'] = min(0.9, 0.5 + abs(return_rate) * 10)  # 수익률에 비례한 신뢰도
+                    label['profit'] = return_rate
+                elif return_rate < -LABEL_PROFIT_THRESHOLD:
+                    # 하락: SELL
+                    label['action'] = 2
+                    label['confidence'] = min(0.9, 0.5 + abs(return_rate) * 10)  # 수익률에 비례한 신뢰도
+                    label['profit'] = abs(return_rate)
+                else:
+                    # 횡보: HOLD
+                    label['action'] = 0
+                    label['confidence'] = 0.6  # HOLD는 기본적으로 높은 신뢰도
+                    label['profit'] = 0.0
             
             labels.append(label)
         
@@ -1349,165 +1339,6 @@ class DecisionDataLoader:
         
         return labels
     
-    @staticmethod
-    def _analyze_market_context(decision_data: List[Dict], current_idx: int, lookback_steps: int) -> Dict:
-        """시장 상황 종합 분석"""
-        context = {
-            'volatility': 0.0,
-            'trend_strength': 0.0,
-            'volume_trend': 0.0,
-            'price_momentum': 0.0,
-            'market_regime': 'normal'  # normal, trending, volatile, consolidation
-        }
-        
-        # 과거 데이터 추출
-        start_idx = max(0, current_idx - lookback_steps)
-        historical_data = decision_data[start_idx:current_idx]
-        
-        if len(historical_data) < 5:
-            return context
-        
-        # 가격 데이터 추출
-        prices = [d.get('close', 0) for d in historical_data if d.get('close', 0) > 0]
-        volumes = [d.get('volume', 0) for d in historical_data if d.get('volume', 0) > 0]
-        
-        if len(prices) < 5:
-            return context
-        
-        # 1. 변동성 계산 (ATR 기반)
-        price_changes = [abs(prices[i] - prices[i-1]) / prices[i-1] for i in range(1, len(prices))]
-        context['volatility'] = np.mean(price_changes) if price_changes else 0.0
-        
-        # 2. 트렌드 강도 계산 (선형 회귀 기울기)
-        x = np.arange(len(prices))
-        y = np.array(prices)
-        if len(x) > 1:
-            slope = np.polyfit(x, y, 1)[0]
-            context['trend_strength'] = abs(slope) / prices[-1] if prices[-1] > 0 else 0.0
-        
-        # 3. 거래량 트렌드
-        if len(volumes) > 1:
-            volume_changes = [volumes[i] - volumes[i-1] for i in range(1, len(volumes))]
-            context['volume_trend'] = np.mean(volume_changes) / volumes[-1] if volumes[-1] > 0 else 0.0
-        
-        # 4. 가격 모멘텀 (최근 vs 과거)
-        if len(prices) >= 10:
-            recent_avg = np.mean(prices[-5:])
-            past_avg = np.mean(prices[:5])
-            context['price_momentum'] = (recent_avg - past_avg) / past_avg if past_avg > 0 else 0.0
-        
-        # 5. 시장 레짐 분류
-        if context['volatility'] > 0.02:  # 2% 이상 변동성
-            context['market_regime'] = 'volatile'
-        elif abs(context['trend_strength']) > 0.001:  # 강한 트렌드
-            context['market_regime'] = 'trending'
-        elif context['volatility'] < 0.005:  # 낮은 변동성
-            context['market_regime'] = 'consolidation'
-        
-        return context
-    
-    @staticmethod
-    def _calculate_dynamic_threshold(market_context: Dict, current_data: Dict) -> float:
-        """시장 상황에 따른 동적 임계값 계산"""
-        base_threshold = LABEL_PROFIT_THRESHOLD
-        
-        # 변동성 조정
-        volatility_factor = 1.0 + (market_context['volatility'] * LABEL_VOLATILITY_FACTOR)
-        
-        # 트렌드 조정
-        trend_factor = 1.0 + (abs(market_context['trend_strength']) * LABEL_TREND_FACTOR)
-        
-        # 거래량 조정
-        volume_factor = 1.0 + (abs(market_context['volume_trend']) * LABEL_VOLUME_FACTOR)
-        
-        # 시장 레짐별 조정
-        regime_multiplier = {
-            'volatile': 1.5,      # 변동성 시장: 임계값 높임
-            'trending': 0.8,      # 트렌드 시장: 임계값 낮춤
-            'consolidation': 1.2, # 횡보 시장: 임계값 약간 높임
-            'normal': 1.0         # 정상 시장: 기본값
-        }
-        
-        regime_factor = regime_multiplier.get(market_context['market_regime'], 1.0)
-        
-        # 최종 동적 임계값
-        dynamic_threshold = base_threshold * volatility_factor * trend_factor * volume_factor * regime_factor
-        
-        # 최소/최대 제한
-        return max(LABEL_PROFIT_THRESHOLD, min(0.05, dynamic_threshold))  # 0.5% ~ 5% 범위
-    
-    @staticmethod
-    def _generate_advanced_label(max_return: float, min_return: float, avg_return: float,
-                                market_context: Dict, dynamic_threshold: float, 
-                                future_volumes: List[float]) -> Dict:
-        """고급 라벨 생성 로직"""
-        label = {
-            'action': 0,                        # int (0, 1, 2)
-            'confidence': LABEL_MIN_CONFIDENCE,  # float (0.0-1.0)
-            'profit': 0.0                       # float (수익률)
-        }
-        
-        # 거래량 가중치 계산
-        volume_weight = 1.0
-        if future_volumes:
-            avg_volume = np.mean(future_volumes)
-            if avg_volume > 0:
-                # 거래량이 평균보다 높으면 신뢰도 증가
-                volume_weight = min(1.5, avg_volume / (avg_volume * 0.8))
-        
-        # 1. BUY 조건 (상승 가능성)
-        if max_return > dynamic_threshold:
-            label['action'] = 1  # BUY
-            
-            # 수익률 기반 신뢰도
-            return_confidence = min(0.8, 0.4 + max_return * 15)
-            
-            # 시장 상황 기반 신뢰도 조정
-            market_confidence = 1.0
-            if market_context['trend_strength'] > 0:  # 상승 트렌드
-                market_confidence += 0.1
-            if market_context['price_momentum'] > 0:  # 상승 모멘텀
-                market_confidence += 0.1
-            if market_context['market_regime'] == 'trending':  # 트렌드 시장
-                market_confidence += 0.1
-            
-            # 최종 신뢰도
-            label['confidence'] = min(LABEL_MAX_CONFIDENCE, 
-                                    return_confidence * market_confidence * volume_weight)
-            label['profit'] = max_return
-            
-        # 2. SELL 조건 (하락 가능성)
-        elif min_return < -dynamic_threshold:
-            label['action'] = 2  # SELL
-            
-            # 수익률 기반 신뢰도
-            return_confidence = min(0.8, 0.4 + abs(min_return) * 15)
-            
-            # 시장 상황 기반 신뢰도 조정
-            market_confidence = 1.0
-            if market_context['trend_strength'] < 0:  # 하락 트렌드
-                market_confidence += 0.1
-            if market_context['price_momentum'] < 0:  # 하락 모멘텀
-                market_confidence += 0.1
-            if market_context['market_regime'] == 'trending':  # 트렌드 시장
-                market_confidence += 0.1
-            
-            # 최종 신뢰도
-            label['confidence'] = min(LABEL_MAX_CONFIDENCE, 
-                                    return_confidence * market_confidence * volume_weight)
-            label['profit'] = abs(min_return)
-            
-        # 3. HOLD 조건 (큰 움직임 없음)
-        else:
-            label['action'] = 0  # HOLD
-            label['profit'] = 0.0
-            
-            # HOLD 신뢰도는 시장 안정성에 따라 결정
-            stability_score = 1.0 - market_context['volatility'] * 10  # 변동성이 낮을수록 높은 신뢰도
-            label['confidence'] = max(LABEL_MIN_CONFIDENCE, 
-                                    min(0.7, stability_score * volume_weight))
-        
-        return label
 
 class MultiTimeframeTrainer:
     """Multi-Timeframe Transformer 훈련 클래스"""
@@ -1742,9 +1573,10 @@ class MultiTimeframeTrainer:
         # 손실 계산
         total_loss = 0.0
         
-        # 액션 분류 손실
+        # 액션 분류 손실 (클래스 가중치 적용)
         action_targets = torch.cat([t['action'] for t in targets])
-        action_loss = F.cross_entropy(decisions['action'], action_targets)
+        class_weights = torch.FloatTensor(CLASS_WEIGHTS).to(self.engine.device)
+        action_loss = F.cross_entropy(decisions['action'], action_targets, weight=class_weights)
         total_loss += action_loss
         
         # 회귀 손실들 (단순화)
