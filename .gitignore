@@ -143,3 +143,7 @@ Thumbs.db
 config/local_config.py
 data/cache/
 .env.local
+
+# Large installer files
+*.sh
+Miniconda*.sh
