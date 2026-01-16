@@ -49,17 +49,20 @@ class TradeDecisionEngine:
         self.medium_term_engine = MediumTermSynergyEngine(MediumTermConfig())
         self.long_term_engine = LongTermSynergyEngine(LongTermConfig())
         
-        # 메타 라벨링 엔진 초기화 (보수적 필터링)
+        # 메타 라벨링 엔진 초기화
         self.use_meta_labeling = use_meta_labeling
         self.meta_labeling_engine = None
         if use_meta_labeling:
-            # 보수적 필터링: confidence_threshold를 0.7로 설정 (기본 0.6보다 높음)
-            # Precision 향상을 위해 더 엄격한 기준 적용
+            # 모델 성능이 낮으므로 더 관대한 기준 사용
+            # ROC-AUC 0.549, Precision 17.4% → confidence_threshold 낮춤
             self.meta_labeling_engine = MetaLabelingEngine(
-                confidence_threshold=0.7  # 70% 이상 확률일 때만 거래 실행
+                confidence_threshold=0.5  # 50% 이상 확률일 때 거래 실행 (더 관대)
             )
             # 기존 모델이 있으면 로드
-            self.meta_labeling_engine.load_model()
+            if self.meta_labeling_engine.load_model():
+                print(f"✅ 메타 라벨링 모델 로드 완료 (임계값: {self.meta_labeling_engine.confidence_threshold:.0%})")
+            else:
+                print("⚠️ 메타 라벨링 모델 로드 실패 - 기본 휴리스틱 사용")
 
 
     def _normalize_single_decision(self, decision: Dict[str, Any], category_name: str) -> Dict[str, Any]:
@@ -953,15 +956,18 @@ class TradeDecisionEngine:
             original_action = final_decision.get("action")
             probability = meta_result.get("probability", 0.0)
             
+            # HOLD의 의미: "새로운 포지션을 열지 말라" (기존 포지션 유지)
+            # 주의: 이미 열려있는 포지션은 별도로 관리해야 함
             final_decision["action"] = "HOLD"
-            final_decision["reason"] = f"메타 라벨링: {original_action} → HOLD (확률: {probability:.1%}, 임계값: {self.meta_labeling_engine.confidence_threshold:.1%} 미달)"
+            final_decision["reason"] = f"메타 라벨링: {original_action} → HOLD (확률: {probability:.1%}, 임계값: {self.meta_labeling_engine.confidence_threshold:.1%} 미달) [새 포지션 미개설]"
             final_decision["net_score"] = 0.0
             
-            # 원본 정보 저장
+            # 원본 정보 저장 (기존 포지션 관리에 사용 가능)
             final_decision["meta"]["_original_action"] = original_action
             final_decision["meta"]["_original_score"] = final_decision.get("net_score", 0.0)
+            final_decision["meta"]["_meta_blocked"] = True  # 메타 라벨링에 의해 차단됨 표시
             
-            # 포지션 크기 초기화
+            # 포지션 크기 초기화 (새 포지션을 열지 않음)
             final_decision["sizing"] = {
                 "qty": None,
                 "risk_usd": 0.0,

@@ -77,8 +77,9 @@ def _print_meta_guided_consensus_decision(decision: dict) -> None:
         original_action = final_decision.get("meta", {}).get("_original_action")
         if original_action:
             # 임계값은 엔진에서 가져와야 하지만, 여기서는 간단히 표시
-            threshold = 0.7  # 기본값 (실제로는 엔진에서 가져와야 함)
+            threshold = 0.5  # 기본값 (실제로는 엔진에서 가져와야 함)
             print(f"   ⚠️ {original_action} → HOLD (확률 {probability:.0%} < 임계값 {threshold:.0%})")
+            print(f"   💡 의미: 새로운 {original_action} 포지션을 열지 않음 (기존 포지션은 유지)")
 
 
 def print_decision_interpretation(decision: dict) -> None:

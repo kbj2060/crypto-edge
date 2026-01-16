@@ -681,10 +681,16 @@ class MetaLabelingEngine:
             return self._default_prediction(decision)
         
         # 거래 실행 여부 결정
+        # 모델 성능이 낮을 수 있으므로 더 관대한 기준 사용
+        # prediction == 1이면 확률이 임계값보다 약간 낮아도 허용
         should_execute = (
             prediction == 1 and 
-            probability >= self.confidence_threshold
+            probability >= (self.confidence_threshold * 0.9)  # 임계값의 90%만 넘으면 실행
         )
+        
+        # 디버깅용 로그 (필요시 주석 해제)
+        # if not should_execute:
+        #     print(f"   메타 라벨링 차단: prediction={prediction}, probability={probability:.2%}, threshold={self.confidence_threshold:.2%}")
         
         return {
             "should_execute": should_execute,
@@ -694,7 +700,7 @@ class MetaLabelingEngine:
         }
     
     def _default_prediction(self, decision: Dict[str, Any]) -> Dict[str, Any]:
-        """모델이 학습되지 않았을 때 기본 예측 로직"""
+        """모델이 학습되지 않았을 때 기본 예측 로직 (더 관대한 기준)"""
         net_score = decision.get("net_score", 0.0)
         meta = decision.get("meta", {})
         synergy_meta = meta.get("synergy_meta", {})
@@ -704,10 +710,10 @@ class MetaLabelingEngine:
         confidence_map = {"HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.2}
         confidence_value = confidence_map.get(confidence, 0.2)
         
-        # 높은 점수와 신뢰도일 때만 실행
+        # 더 관대한 기준: 점수와 신뢰도가 어느 정도만 있으면 실행
         should_execute = (
-            abs(net_score) > 0.3 and
-            confidence_value >= 0.5
+            abs(net_score) > 0.2 and  # 0.3 → 0.2 (더 관대)
+            confidence_value >= 0.3   # 0.5 → 0.3 (더 관대)
         )
         
         return {
