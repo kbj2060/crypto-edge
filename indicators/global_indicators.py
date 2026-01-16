@@ -115,7 +115,7 @@ class GlobalIndicatorManager:
             
             self.session_manager = get_session_manager(self.target_time)
             self.time_manager = get_time_manager(self.target_time)
-            
+
             try:
                 data_manager = self.get_data_manager()
                 if not data_manager.is_ready():

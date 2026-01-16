@@ -55,6 +55,7 @@ class TradeDecisionEngine:
         normalized = {
             "action": decision.get("action", "HOLD"),
             "net_score": decision.get("net_score", 0.0),
+            "reason": decision.get("reason", ""),  # reason 필드 추가
             "category": category_name,
             "max_holding_minutes": self.STRATEGY_CATEGORIES[category_name]["max_holding_minutes"],
             "leverage": self.STRATEGY_CATEGORIES[category_name]["leverage"],
@@ -124,126 +125,20 @@ class TradeDecisionEngine:
         # 포지션 충돌 체크
         conflicts = self._check_position_conflicts(decisions)
         
-        # 강화학습용 결정 데이터로 변환
-        rl_decisions = self._convert_to_rl_decisions(decisions)
+        # 결정 스키마 정규화 (display_utils에서 필요한 필드들 포함)
+        normalized_decisions = self._normalize_decisions_schema(decisions)
         
         return {
-            "decisions": rl_decisions,
+            "decisions": normalized_decisions,
             "conflicts": conflicts,
         }
-    
-    def _convert_to_rl_decisions(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
-        """결정 데이터를 강화학습용 수치 정보로 변환"""
-        rl_decisions = {}
-        
-        for category, decision in decisions.items():
-            # 액션을 수치로 변환
-            action_value = {"LONG": 1.0, "SHORT": -1.0, "HOLD": 0.0}.get(decision.get("action", "HOLD"), 0.0)
-            
-            # 신뢰도를 수치로 변환
-            confidence = decision.get("meta", {}).get("synergy_meta", {}).get("confidence", "LOW")
-            confidence_value = {"HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.2}.get(confidence, 0.2)
-            
-            # 시장 상황을 수치로 변환
-            market_context = decision.get("meta", {}).get("synergy_meta", {}).get("market_context", "NEUTRAL")
-            context_value = self._convert_market_context_to_value(market_context)
-            
-            # 카테고리별 특화 메타데이터 수치화
-            synergy_meta = decision.get("meta", {}).get("synergy_meta", {})
-            category_specific_values = self._extract_category_specific_values(category, synergy_meta)
-            
-            rl_decisions[category] = {
-                # 기본 수치 정보
-                "action_value": action_value,
-                "net_score": round(decision.get("net_score", 0.0), 3),
-                "confidence_value": confidence_value,
-                "market_context_value": context_value,
-                
-                # 시너지 메타데이터 수치
-                "buy_score": round(synergy_meta.get("buy_score", 0.0), 3),
-                "sell_score": round(synergy_meta.get("sell_score", 0.0), 3),
-                "signals_used": synergy_meta.get("signals_used", 0),
-                "conflicts_detected_count": len(synergy_meta.get("conflicts_detected", [])),
-                "bonuses_applied_count": len(synergy_meta.get("bonuses_applied", [])),
-                
-                # 카테고리별 특화 수치
-                **category_specific_values,
-                
-                # 포지션 크기 정보
-                "leverage": decision.get("leverage", 0),
-                "risk_multiplier": decision.get("sizing", {}).get("risk_multiplier", 0.0),
-                "risk_usd": round(decision.get("sizing", {}).get("risk_usd", 0.0), 2),
-                
-                # 전략 사용 정보
-                "strategies_count": len(decision.get("strategies_used", [])),
-                "max_holding_minutes": decision.get("max_holding_minutes", 0)
-            }
-        
-        return rl_decisions
-    
-    def _convert_market_context_to_value(self, context: str) -> float:
-        """시장 상황을 수치로 변환"""
-        context_mapping = {
-            "TRENDING": 0.8,
-            "RANGING": 0.3,
-            "BREAKOUT": 0.9,
-            "CONSOLIDATION": 0.4,
-            "STRONG_TREND": 0.9,
-            "REVERSAL_ZONE": 0.6,
-            "INSTITUTIONAL_ACCUMULATION": 0.8,
-            "DISTRIBUTION_PHASE": 0.2,
-            "MACRO_TREND": 0.7,
-            "RANGE_BOUND": 0.3,
-            "VOLATILITY_EXPANSION": 0.6,
-            "NEUTRAL": 0.5
-        }
-        return context_mapping.get(context, 0.5)
-    
-    def _extract_category_specific_values(self, category: str, synergy_meta: Dict[str, Any]) -> Dict[str, float]:
-        """카테고리별 특화 메타데이터를 수치로 변환"""
-        if category == "short_term":
-            return {
-                "momentum_strength": self._convert_strength_to_value(synergy_meta.get("momentum_strength", "WEAK")),
-                "reversion_potential": self._convert_potential_to_value(synergy_meta.get("reversion_potential", "LOW"))
-            }
-        elif category == "medium_term":
-            return {
-                "trend_strength": self._convert_strength_to_value(synergy_meta.get("trend_strength", "WEAK")),
-                "consolidation_level": self._convert_level_to_value(synergy_meta.get("consolidation_level", "NEUTRAL"))
-            }
-        elif category == "long_term":
-            return {
-                "institutional_bias": self._convert_bias_to_value(synergy_meta.get("institutional_bias", "NEUTRAL")),
-                "macro_trend_strength": self._convert_strength_to_value(synergy_meta.get("macro_trend_strength", "WEAK"))
-            }
-        else:
-            return {}
-    
-    def _convert_strength_to_value(self, strength: str) -> float:
-        """강도 문자열을 수치로 변환"""
-        strength_mapping = {"STRONG": 0.8, "MEDIUM": 0.5, "WEAK": 0.2}
-        return strength_mapping.get(strength, 0.2)
-    
-    def _convert_potential_to_value(self, potential: str) -> float:
-        """잠재력 문자열을 수치로 변환"""
-        potential_mapping = {"HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.2}
-        return potential_mapping.get(potential, 0.2)
-    
-    def _convert_level_to_value(self, level: str) -> float:
-        """수준 문자열을 수치로 변환"""
-        level_mapping = {"HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.2, "NEUTRAL": 0.5}
-        return level_mapping.get(level, 0.5)
-    
-    def _convert_bias_to_value(self, bias: str) -> float:
-        """편향 문자열을 수치로 변환"""
-        bias_mapping = {"BULLISH": 0.8, "WEAK_BULLISH": 0.6, "NEUTRAL": 0.5, "WEAK_BEARISH": 0.4, "BEARISH": 0.2}
-        return bias_mapping.get(bias, 0.5)
     
     def _create_category_hold_decision(self, category_name: str) -> Dict[str, Any]:
         """카테고리별 HOLD 결정 생성"""
         return {
             "action": "HOLD",
             "net_score": 0.0,
+            "reason": "신호 없음",
             "category": category_name,
             "max_holding_minutes": self.STRATEGY_CATEGORIES[category_name]["max_holding_minutes"],
             "leverage": self.STRATEGY_CATEGORIES[category_name]["leverage"],
@@ -324,10 +219,21 @@ class TradeDecisionEngine:
         # 시너지 엔진 실행
         synergy_result = self.short_term_engine.calculate_synergy_score(category_signals)
         
+        # 이유 생성
+        reason_parts = []
+        if synergy_result.get('confidence'):
+            reason_parts.append(f"신뢰도: {synergy_result['confidence']}")
+        if synergy_result.get('market_context'):
+            reason_parts.append(f"시장상황: {synergy_result['market_context']}")
+        if synergy_result.get('signals_used', 0) > 0:
+            reason_parts.append(f"신호 {synergy_result['signals_used']}개 사용")
+        reason = ", ".join(reason_parts) if reason_parts else "단기 전략 분석"
+        
         # 시너지 결과를 기반으로 결정 생성
         decision = {
             "action": 'LONG' if synergy_result['action'] == 'BUY' else 'SHORT' if synergy_result['action'] == 'SELL' else 'HOLD',
             "net_score": round(synergy_result['net_score'], 4),
+            "reason": reason,
             "category": "SHORT_TERM",
             "max_holding_minutes": category_config["max_holding_minutes"],
             "leverage": category_config["leverage"],
@@ -399,10 +305,21 @@ class TradeDecisionEngine:
         # 시너지 엔진 실행
         synergy_result = self.medium_term_engine.calculate_synergy_score(category_signals)
         
+        # 이유 생성
+        reason_parts = []
+        if synergy_result.get('confidence'):
+            reason_parts.append(f"신뢰도: {synergy_result['confidence']}")
+        if synergy_result.get('market_context'):
+            reason_parts.append(f"시장상황: {synergy_result['market_context']}")
+        if synergy_result.get('signals_used', 0) > 0:
+            reason_parts.append(f"신호 {synergy_result['signals_used']}개 사용")
+        reason = ", ".join(reason_parts) if reason_parts else "중기 전략 분석"
+        
         # 시너지 결과를 기반으로 결정 생성
         decision = {
             "action": 'LONG' if synergy_result['action'] == 'BUY' else 'SHORT' if synergy_result['action'] == 'SELL' else 'HOLD',
             "net_score": round(synergy_result['net_score'], 4),
+            "reason": reason,
             "category": "MEDIUM_TERM",
             "max_holding_minutes": category_config["max_holding_minutes"],
             "leverage": category_config["leverage"],
@@ -474,10 +391,21 @@ class TradeDecisionEngine:
         # 시너지 엔진 실행
         synergy_result = self.long_term_engine.calculate_synergy_score(category_signals)
         
+        # 이유 생성
+        reason_parts = []
+        if synergy_result.get('confidence'):
+            reason_parts.append(f"신뢰도: {synergy_result['confidence']}")
+        if synergy_result.get('market_context'):
+            reason_parts.append(f"시장상황: {synergy_result['market_context']}")
+        if synergy_result.get('signals_used', 0) > 0:
+            reason_parts.append(f"신호 {synergy_result['signals_used']}개 사용")
+        reason = ", ".join(reason_parts) if reason_parts else "장기 전략 분석"
+        
         # 시너지 결과를 기반으로 결정 생성
         decision = {
             "action": 'LONG' if synergy_result['action'] == 'BUY' else 'SHORT' if synergy_result['action'] == 'SELL' else 'HOLD',
             "net_score": round(synergy_result['net_score'], 4),
+            "reason": reason,
             "category": "LONG_TERM",
             "max_holding_minutes": category_config["max_holding_minutes"],
             "leverage": category_config["leverage"],
@@ -632,7 +560,7 @@ class TradeDecisionEngine:
         return qty
 
     def _check_position_conflicts(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Any]:
-        """포지션 충돌 체크 - 강화학습 데이터 최적화"""
+        """포지션 충돌 체크"""
         long_categories = [k for k, v in decisions.items() if v["action"] == "LONG"]
         short_categories = [k for k, v in decisions.items() if v["action"] == "SHORT"]
         hold_categories = [k for k, v in decisions.items() if v["action"] == "HOLD"]
@@ -759,32 +687,21 @@ class TradeDecisionEngine:
             "hold_ratio": len(hold_categories) / len(decisions) if decisions else 0
         }
         
-        # 6. 강화학습을 위한 보상/페널티 신호
-        rl_signals = {
-            "conflict_penalty": -conflict_severity,  # 충돌 시 음수 보상
-            "consensus_bonus": directional_consensus * 0.5,  # 컨센서스 시 양수 보상
-            "diversity_bonus": risk_indicators["timeframe_diversity"] * 0.1,  # 다양성 보상
-            "risk_penalty": -min(1.0, risk_indicators["max_leverage_used"] / 20.0) * 0.3  # 과도한 레버리지 페널티
-        }
-        
         return {
-            # 강화학습용 핵심 수치 정보
+            "has_conflicts": len(conflicts) > 0,
             "conflict_severity": round(conflict_severity, 3),
             "directional_consensus": round(directional_consensus, 3),
             "conflict_ratio": round(len(conflicts) / max(1, active_categories - 1) if active_categories > 1 else 0, 3),
             "active_categories": active_categories,
             "hold_ratio": round(risk_indicators["hold_ratio"], 3),
+            "conflict_types": conflicts,
+            "long_categories": long_categories,
+            "short_categories": short_categories,
             
             # 리스크 지표
             "max_leverage_used": risk_indicators["max_leverage_used"],
             "total_exposure": risk_indicators["total_exposure"],
             "timeframe_diversity": risk_indicators["timeframe_diversity"],
-            
-            # 강화학습 보상/페널티 신호
-            "conflict_penalty": round(rl_signals["conflict_penalty"], 3),
-            "consensus_bonus": round(rl_signals["consensus_bonus"], 3),
-            "diversity_bonus": round(rl_signals["diversity_bonus"], 3),
-            "risk_penalty": round(rl_signals["risk_penalty"], 3),
             
             # 포지션 분포
             "long_count": len(long_categories),

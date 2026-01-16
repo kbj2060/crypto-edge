@@ -69,6 +69,14 @@ class DataManager:
                     limit=300
                 )
                 
+                # 가져온 데이터를 인스턴스 변수에 할당
+                if df_3m is not None and not df_3m.empty:
+                    self.data = df_3m.copy()
+                if df_15m is not None and not df_15m.empty:
+                    self.data_15m = df_15m.copy()
+                if df_1h is not None and not df_1h.empty:
+                    self.data_1h = df_1h.copy()
+                
                 self._data_loaded = True
                 return True
             else:   

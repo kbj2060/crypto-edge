@@ -7,18 +7,16 @@ from typing import Dict, Callable, Optional
 from datetime import datetime
 
 # 리팩토링된 컴포넌트들
-from agent.live_trading_agent import LiveTradingAgent
 from managers.strategy_executor import StrategyExecutor
 from managers.candle_creator import CandleCreator
 from managers.event_manager import EventManager
 from engines.trade_decision_engine import TradeDecisionEngine
 
 # 기존 imports
-from llm.LLM_decider import LLMDecider
 from managers.data_manager import get_data_manager
 from indicators.global_indicators import get_all_indicators, get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
-from utils.display_utils import print_decision_interpretation, print_ai_final_decision
-from utils.telegram import send_telegram_message, send_telegram_agent_decision
+from utils.display_utils import print_decision_interpretation
+from utils.telegram import send_telegram_message
 from managers.time_manager import get_time_manager
 from utils.session_manager import get_session_manager
 from utils.decision_logger import get_decision_logger
@@ -51,7 +49,6 @@ class BinanceWebSocket:
         self.global_manager = get_global_indicator_manager()
         self.data_manager = get_data_manager()
         self.data_loader = BinanceDataLoader()
-        self.llm_decider = LLMDecider()
         self.decision_logger = get_decision_logger(symbol)
 
         # 데이터 저장소
@@ -64,7 +61,6 @@ class BinanceWebSocket:
 
         # 카운트다운 태스크
         self.countdown_task = None
-        self.agent = LiveTradingAgent(model_path='agent/final_optimized_model.pth')
 
     def update_session_status(self, price_data: Dict):
         """세션 상태 업데이트"""
@@ -81,7 +77,6 @@ class BinanceWebSocket:
         if event_type in self.callbacks:
             if callback in self.callbacks[event_type]:
                 self.callbacks[event_type].remove(callback)
-    
     
     async def connect_kline_3m_stream(self):
         """3분봉 Kline 스트림 연결"""
@@ -191,19 +186,14 @@ class BinanceWebSocket:
 
         indicators = get_all_indicators()
         signals.update({'timestamp': price_data['timestamp'], 'indicators': indicators})
-        
-        agent_decision = self.agent.make_trading_decision(signals, price_data)
 
         # Decision 로그에 저장
         # self.decision_logger.log_decision(decision)
         
         print_decision_interpretation(decision)
-        print_ai_final_decision(agent_decision)
 
         if decision.get("action") != "HOLD":
             send_telegram_message(decision)
-        if agent_decision.get("action") != "HOLD":
-            send_telegram_agent_decision(agent_decision)
 
         self._execute_kline_callbacks(price_data)
 

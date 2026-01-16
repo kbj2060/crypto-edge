@@ -32,11 +32,11 @@ class IntegratedSmartTrader:
         # 전략 실행기 초기화 (내부에서 모든 전략 자동 초기화)
         self._init_strategy_executor()
 
-        self.warmup_strategies()
+    #     self.warmup_strategies()
 
 
-    def warmup_strategies(self):
-        """전략 웜업"""
+    # def warmup_strategies(self):
+    #     """전략 웜업"""
 
     def _init_data_manager(self):
         """DataManager 우선 초기화 (데이터 준비)"""
