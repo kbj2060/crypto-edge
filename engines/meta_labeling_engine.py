@@ -47,7 +47,8 @@ class MetaLabelingEngine:
         self.model_type = model_type
         self.min_samples_for_training = min_samples_for_training
         self.confidence_threshold = confidence_threshold
-        self.model_save_path = model_save_path or "engines/meta_labeling_model.pkl"
+        # 기본 경로: data 폴더 (기존 engines 폴더도 지원)
+        self.model_save_path = model_save_path or "data/meta_labeling_model.pkl"
         
         self.model = None
         self.scaler = StandardScaler()
@@ -154,21 +155,223 @@ class MetaLabelingEngine:
         
         return np.array(features, dtype=np.float32)
     
+    def _extract_final_action_from_strategies(self, row: pd.Series) -> tuple:
+        """
+        전략별 action에서 최종 action 추출
+        
+        Returns:
+            (action, net_score, confidence) 튜플
+        """
+        # 전략별 action 컬럼 찾기
+        action_columns = [col for col in row.index if col.endswith('_action')]
+        score_columns = [col for col in row.index if col.endswith('_score')]
+        
+        if not action_columns:
+            return ('HOLD', 0.0, 'LOW')
+        
+        # 각 전략의 action과 score 수집
+        buy_signals = []
+        sell_signals = []
+        
+        for action_col in action_columns:
+            action = row.get(action_col)
+            if pd.isna(action) or action is None:
+                continue
+            
+            # 해당 전략의 score 찾기
+            strategy_name = action_col.replace('_action', '')
+            score_col = f"{strategy_name}_score"
+            score = row.get(score_col, 0.0)
+            if pd.isna(score):
+                score = 0.0
+            
+            if action == 'BUY':
+                buy_signals.append(score)
+            elif action == 'SELL':
+                sell_signals.append(score)
+        
+        # 최종 결정
+        buy_total = sum(buy_signals) if buy_signals else 0.0
+        sell_total = sum(sell_signals) if sell_signals else 0.0
+        net_score = buy_total - sell_total
+        
+        # 신뢰도 계산
+        total_signals = len(buy_signals) + len(sell_signals)
+        if total_signals == 0:
+            return ('HOLD', 0.0, 'LOW')
+        elif total_signals >= 5:
+            confidence = 'HIGH'
+        elif total_signals >= 3:
+            confidence = 'MEDIUM'
+        else:
+            confidence = 'LOW'
+        
+        # 최종 action 결정
+        if abs(net_score) < 0.1:  # 너무 작은 차이는 HOLD
+            return ('HOLD', net_score, confidence)
+        elif net_score > 0:
+            return ('LONG', net_score, confidence)
+        else:
+            return ('SHORT', net_score, confidence)
+    
+    def _extract_entry_stop_from_strategies(self, row: pd.Series, action: str) -> tuple:
+        """
+        전략별 entry와 stop 가격 추출
+        
+        Returns:
+            (entry_price, stop_price) 튜플
+        """
+        entry_price = None
+        stop_price = None
+        
+        # 전략별 entry/stop 컬럼 찾기
+        entry_columns = [col for col in row.index if col.endswith('_entry')]
+        stop_columns = [col for col in row.index if col.endswith('_stop')]
+        
+        # action에 맞는 전략 찾기
+        action_columns = [col for col in row.index if col.endswith('_action')]
+        
+        for action_col in action_columns:
+            strategy_action = row.get(action_col)
+            if pd.isna(strategy_action) or strategy_action is None:
+                continue
+            
+            # action이 일치하는지 확인
+            if (action == 'LONG' and strategy_action == 'BUY') or \
+               (action == 'SHORT' and strategy_action == 'SELL'):
+                strategy_name = action_col.replace('_action', '')
+                entry_col = f"{strategy_name}_entry"
+                stop_col = f"{strategy_name}_stop"
+                
+                if entry_col in row.index:
+                    entry_val = row.get(entry_col)
+                    if not pd.isna(entry_val) and entry_val is not None:
+                        entry_price = float(entry_val)
+                
+                if stop_col in row.index:
+                    stop_val = row.get(stop_col)
+                    if not pd.isna(stop_val) and stop_val is not None:
+                        stop_price = float(stop_val)
+                
+                # 하나라도 찾으면 사용
+                if entry_price is not None or stop_price is not None:
+                    break
+        
+        return (entry_price, stop_price)
+    
+    def _calculate_actual_return(
+        self,
+        action: str,
+        entry_price: float,
+        stop_price: float,
+        future_prices: pd.Series,
+        min_profit_threshold: float = 0.005,  # 최소 0.5% 수익
+        commission_rate: float = 0.0004  # 0.04% 수수료 (바이낸스 선물)
+    ) -> tuple:
+        """
+        실제 수익률 계산
+        
+        Returns:
+            (actual_return, hit_stop, hit_target, meta_label) 튜플
+        """
+        if entry_price is None or stop_price is None:
+            return (0.0, False, False, 0)
+        
+        if action == 'LONG':
+            # LONG: entry에서 진입, stop에서 손절
+            # 손절가가 진입가보다 낮아야 함
+            if stop_price >= entry_price:
+                return (0.0, False, False, 0)
+            
+            # 손절 거리
+            stop_distance = (entry_price - stop_price) / entry_price
+            
+            # 미래 가격들 확인
+            for future_price in future_prices:
+                # 손절가 도달 확인
+                if future_price <= stop_price:
+                    # 손절 발생
+                    loss = (stop_price - entry_price) / entry_price
+                    net_return = loss - commission_rate * 2  # 진입/청산 수수료
+                    return (net_return, True, False, 0)
+                
+                # 수익률 계산
+                profit = (future_price - entry_price) / entry_price
+                net_return = profit - commission_rate * 2
+                
+                # 최소 수익률 달성 확인
+                if net_return >= min_profit_threshold:
+                    return (net_return, False, True, 1)
+            
+            # lookforward 기간 내에 목표 달성 못함
+            final_price = future_prices.iloc[-1]
+            profit = (final_price - entry_price) / entry_price
+            net_return = profit - commission_rate * 2
+            
+            # 손실이면 0, 작은 수익이면 0 (임계값 미달)
+            if net_return < 0:
+                return (net_return, False, False, 0)
+            else:
+                return (net_return, False, False, 0)  # 임계값 미달
+            
+        elif action == 'SHORT':
+            # SHORT: entry에서 진입, stop에서 손절
+            # 손절가가 진입가보다 높아야 함
+            if stop_price <= entry_price:
+                return (0.0, False, False, 0)
+            
+            # 손절 거리
+            stop_distance = (stop_price - entry_price) / entry_price
+            
+            # 미래 가격들 확인
+            for future_price in future_prices:
+                # 손절가 도달 확인
+                if future_price >= stop_price:
+                    # 손절 발생
+                    loss = (entry_price - stop_price) / entry_price
+                    net_return = loss - commission_rate * 2
+                    return (net_return, True, False, 0)
+                
+                # 수익률 계산
+                profit = (entry_price - future_price) / entry_price
+                net_return = profit - commission_rate * 2
+                
+                # 최소 수익률 달성 확인
+                if net_return >= min_profit_threshold:
+                    return (net_return, False, True, 1)
+            
+            # lookforward 기간 내에 목표 달성 못함
+            final_price = future_prices.iloc[-1]
+            profit = (entry_price - final_price) / entry_price
+            net_return = profit - commission_rate * 2
+            
+            # 손실이면 0, 작은 수익이면 0 (임계값 미달)
+            if net_return < 0:
+                return (net_return, False, False, 0)
+            else:
+                return (net_return, False, False, 0)  # 임계값 미달
+        
+        return (0.0, False, False, 0)
+    
     def create_meta_labels(
         self,
         decisions_df: pd.DataFrame,
         price_data: pd.DataFrame,
-        lookforward_periods: int = 20
+        lookforward_periods: int = 20,
+        min_profit_threshold: float = 0.005,  # 최소 0.5% 수익
+        use_profit_based: bool = True  # 실제 수익률 기반 사용 여부
     ) -> pd.DataFrame:
         """
         과거 결정 데이터에서 메타 라벨 생성
         
-        메타 라벨: 방향 예측이 맞았는지 여부 (1: 맞음, 0: 틀림)
+        메타 라벨: 실제 수익률 기반 (1: 수익, 0: 손실 또는 수익 미달)
         
         Args:
-            decisions_df: 과거 결정 데이터프레임
+            decisions_df: 과거 결정 데이터프레임 (전략별 action 포함)
             price_data: 가격 데이터프레임 (close 컬럼 필요)
             lookforward_periods: 미래 몇 기간을 보고 성공 여부 판단
+            min_profit_threshold: 최소 수익률 임계값 (기본 0.5%)
+            use_profit_based: 실제 수익률 기반 사용 여부
             
         Returns:
             메타 라벨이 추가된 데이터프레임
@@ -191,20 +394,34 @@ class MetaLabelingEngine:
         
         price_data = price_data.sort_index()
         
-        # 메타 라벨 생성
+        # 최종 action 추출 및 메타 라벨 생성
         meta_labels = []
+        extracted_actions = []
+        extracted_scores = []
+        actual_returns = []
         
         for idx, row in df.iterrows():
+            # 최종 action 추출
+            action, net_score, confidence = self._extract_final_action_from_strategies(row)
+            extracted_actions.append(action)
+            extracted_scores.append(net_score)
+            
+            # HOLD는 거래하지 않으므로 0
+            if action == 'HOLD':
+                meta_labels.append(0)
+                actual_returns.append(0.0)
+                continue
+            
             # 해당 시점의 가격 찾기
             try:
                 current_price = price_data.loc[idx, 'close']
             except KeyError:
-                # 가장 가까운 가격 찾기
                 try:
                     nearest_idx = price_data.index.get_indexer([idx], method='nearest')[0]
                     current_price = price_data.iloc[nearest_idx]['close']
                 except:
                     meta_labels.append(0)
+                    actual_returns.append(0.0)
                     continue
             
             # 미래 가격 찾기
@@ -212,35 +429,53 @@ class MetaLabelingEngine:
                 future_idx = price_data.index[price_data.index > idx][:lookforward_periods]
                 if len(future_idx) < lookforward_periods:
                     meta_labels.append(0)
+                    actual_returns.append(0.0)
                     continue
                 
-                future_price = price_data.loc[future_idx[-1], 'close']
+                future_prices = price_data.loc[future_idx, 'close']
             except:
                 meta_labels.append(0)
+                actual_returns.append(0.0)
                 continue
             
-            # 방향 예측 확인
-            action = row.get('action', 'HOLD')
-            if action == 'HOLD':
-                meta_labels.append(0)  # HOLD는 거래하지 않으므로 0
-                continue
-            
-            # 실제 가격 변화
-            price_change = (future_price - current_price) / current_price
-            
-            # 방향이 맞았는지 확인
-            if action == 'LONG':
-                # LONG 예측이 맞았는지 (가격 상승)
-                is_correct = 1 if price_change > 0 else 0
-            elif action == 'SHORT':
-                # SHORT 예측이 맞았는지 (가격 하락)
-                is_correct = 1 if price_change < 0 else 0
+            if use_profit_based:
+                # 실제 수익률 기반 라벨링
+                entry_price, stop_price = self._extract_entry_stop_from_strategies(row, action)
+                
+                if entry_price is None or stop_price is None:
+                    # entry/stop이 없으면 현재 가격 사용
+                    entry_price = current_price
+                    if action == 'LONG':
+                        stop_price = current_price * 0.98  # 2% 하락 가정
+                    else:
+                        stop_price = current_price * 1.02  # 2% 상승 가정
+                
+                actual_return, hit_stop, hit_target, meta_label = self._calculate_actual_return(
+                    action, entry_price, stop_price, future_prices, min_profit_threshold
+                )
+                
+                meta_labels.append(meta_label)
+                actual_returns.append(actual_return)
             else:
-                is_correct = 0
-            
-            meta_labels.append(is_correct)
+                # 기존 방식 (방향 기반)
+                future_price = future_prices.iloc[-1]
+                price_change = (future_price - current_price) / current_price
+                
+                if action == 'LONG':
+                    is_correct = 1 if price_change > 0 else 0
+                elif action == 'SHORT':
+                    is_correct = 1 if price_change < 0 else 0
+                else:
+                    is_correct = 0
+                
+                meta_labels.append(is_correct)
+                actual_returns.append(price_change)
         
+        # 결과 추가
+        df['action'] = extracted_actions
+        df['net_score'] = extracted_scores
         df['meta_label'] = meta_labels
+        df['actual_return'] = actual_returns
         return df.reset_index()
     
     def train(
@@ -248,7 +483,9 @@ class MetaLabelingEngine:
         decisions_df: pd.DataFrame,
         price_data: pd.DataFrame,
         test_size: float = 0.2,
-        retrain: bool = False
+        retrain: bool = False,
+        min_profit_threshold: float = 0.005,
+        use_profit_based: bool = True
     ) -> Dict[str, Any]:
         """
         메타 라벨링 모델 학습
@@ -264,7 +501,20 @@ class MetaLabelingEngine:
         """
         # 메타 라벨 생성
         print("📊 메타 라벨 생성 중...")
-        labeled_df = self.create_meta_labels(decisions_df, price_data)
+        if use_profit_based:
+            print(f"   실제 수익률 기반 라벨링 (최소 수익률: {min_profit_threshold*100:.2f}%)")
+        labeled_df = self.create_meta_labels(
+            decisions_df, price_data, 
+            min_profit_threshold=min_profit_threshold,
+            use_profit_based=use_profit_based
+        )
+        
+        # action 컬럼이 있는지 확인
+        if 'action' not in labeled_df.columns:
+            return {
+                "success": False,
+                "message": "action 컬럼을 찾을 수 없습니다"
+            }
         
         # 거래가 있는 결정만 필터링 (HOLD 제외)
         labeled_df = labeled_df[labeled_df['action'].isin(['LONG', 'SHORT'])]
@@ -445,7 +695,10 @@ class MetaLabelingEngine:
             return
         
         save_path = path or self.model_save_path
-        Path(save_path).parent.mkdir(parents=True, exist_ok=True)
+        save_file = Path(save_path)
+        
+        # 디렉토리 생성
+        save_file.parent.mkdir(parents=True, exist_ok=True)
         
         with open(save_path, 'wb') as f:
             pickle.dump({
@@ -459,26 +712,39 @@ class MetaLabelingEngine:
         print(f"💾 모델 저장 완료: {save_path}")
     
     def load_model(self, path: Optional[str] = None):
-        """모델 로드"""
-        load_path = path or self.model_save_path
+        """모델 로드 (여러 경로 시도)"""
+        # 우선순위: 지정된 경로 > data 폴더 > engines 폴더 (하위 호환성)
+        possible_paths = []
         
-        if not Path(load_path).exists():
-            print(f"⚠️ 모델 파일 없음: {load_path}")
-            return False
+        if path:
+            possible_paths.append(path)
+        else:
+            # 기본 경로들
+            possible_paths.append(self.model_save_path)  # data/meta_labeling_model.pkl
+            possible_paths.append("engines/meta_labeling_model.pkl")  # 기존 경로 (하위 호환성)
         
-        try:
-            with open(load_path, 'rb') as f:
-                data = pickle.load(f)
-            
-            self.model = data['model']
-            self.scaler = data['scaler']
-            self.feature_names = data.get('feature_names', [])
-            self.model_type = data.get('model_type', self.model_type)
-            self.is_trained = data.get('is_trained', False)
-            
-            print(f"📂 모델 로드 완료: {load_path}")
-            return True
-        except Exception as e:
-            print(f"❌ 모델 로드 실패: {e}")
-            return False
+        for load_path in possible_paths:
+            model_file = Path(load_path)
+            if model_file.exists():
+                try:
+                    with open(load_path, 'rb') as f:
+                        data = pickle.load(f)
+                    
+                    self.model = data['model']
+                    self.scaler = data['scaler']
+                    self.feature_names = data.get('feature_names', [])
+                    self.model_type = data.get('model_type', self.model_type)
+                    self.is_trained = data.get('is_trained', False)
+                    
+                    # 로드된 경로를 저장 경로로 업데이트
+                    self.model_save_path = str(load_path)
+                    
+                    print(f"📂 모델 로드 완료: {load_path}")
+                    return True
+                except Exception as e:
+                    print(f"⚠️ 모델 로드 실패 ({load_path}): {e}")
+                    continue
+        
+        print(f"⚠️ 모델 파일을 찾을 수 없습니다. 시도한 경로: {possible_paths}")
+        return False
 

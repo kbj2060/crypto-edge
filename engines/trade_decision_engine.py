@@ -49,11 +49,15 @@ class TradeDecisionEngine:
         self.medium_term_engine = MediumTermSynergyEngine(MediumTermConfig())
         self.long_term_engine = LongTermSynergyEngine(LongTermConfig())
         
-        # 메타 라벨링 엔진 초기화
+        # 메타 라벨링 엔진 초기화 (보수적 필터링)
         self.use_meta_labeling = use_meta_labeling
         self.meta_labeling_engine = None
         if use_meta_labeling:
-            self.meta_labeling_engine = MetaLabelingEngine()
+            # 보수적 필터링: confidence_threshold를 0.7로 설정 (기본 0.6보다 높음)
+            # Precision 향상을 위해 더 엄격한 기준 적용
+            self.meta_labeling_engine = MetaLabelingEngine(
+                confidence_threshold=0.7  # 70% 이상 확률일 때만 거래 실행
+            )
             # 기존 모델이 있으면 로드
             self.meta_labeling_engine.load_model()
 
@@ -769,9 +773,18 @@ class TradeDecisionEngine:
             # 메타 라벨링이 거래 실행을 권장하지 않으면 HOLD로 변경
             if not meta_result.get("should_execute", True):
                 original_action = decision.get("action")
+                original_score = decision.get("net_score", 0.0)
+                probability = meta_result.get("probability", 0.0)
+                
                 decision["action"] = "HOLD"
-                decision["reason"] = f"메타 라벨링: {original_action} → HOLD (신뢰도: {meta_result.get('probability', 0):.2f})"
+                decision["reason"] = f"메타 라벨링: {original_action} → HOLD (확률: {probability:.1%}, 임계값: {self.meta_labeling_engine.confidence_threshold:.1%} 미달)"
                 decision["net_score"] = 0.0
+                
+                # 원본 정보 저장 (디버깅용)
+                if "meta" not in decision:
+                    decision["meta"] = {}
+                decision["meta"]["_original_action"] = original_action
+                decision["meta"]["_original_score"] = original_score
                 
                 # 포지션 크기 초기화
                 decision["sizing"] = {
@@ -782,5 +795,10 @@ class TradeDecisionEngine:
                     "leverage": decision.get("leverage", 1),
                     "risk_multiplier": 1.0
                 }
+            else:
+                # 거래 실행 권장 시 이유 업데이트
+                probability = meta_result.get("probability", 0.0)
+                original_reason = decision.get("reason", "")
+                decision["reason"] = f"{original_reason} [메타 라벨링: {probability:.1%}]"
         
         return decisions
