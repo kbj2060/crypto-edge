@@ -921,19 +921,21 @@ class TradeDecisionEngine:
         }
         
         # 메타 라벨링을 위한 종합 결정 생성
-        # (conflict_severity를 포함한 확장된 특성)
+        # 시그널 특성만 사용 (충돌/시너지 특성 제외)
         meta_decision = final_decision.copy()
         meta_decision["meta"] = meta_decision.get("meta", {})
         meta_decision["meta"]["synergy_meta"] = {
             "confidence": final_decision.get("confidence", "LOW"),
-            "conflict_severity": conflicts.get("conflict_severity", 0.0),
-            "directional_consensus": conflicts.get("directional_consensus", 0.5),
-            "active_categories": final_decision.get("consensus_meta", {}).get("long_categories", 0) + 
-                                final_decision.get("consensus_meta", {}).get("short_categories", 0),
+            # 충돌 관련 특성 제거: conflict_severity, directional_consensus, active_categories
             "buy_score": final_decision.get("net_score", 0.0) if final_decision.get("action") == "LONG" else 0.0,
             "sell_score": abs(final_decision.get("net_score", 0.0)) if final_decision.get("action") == "SHORT" else 0.0,
             "signals_used": sum(len(dec.get("strategies_used", [])) for dec in category_decisions.values())
         }
+        
+        # strategies_used 추가 (extract_features에서 사용)
+        meta_decision["strategies_used"] = []
+        for dec in category_decisions.values():
+            meta_decision["strategies_used"].extend(dec.get("strategies_used", []))
         
         # 메타 라벨링 예측
         meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)

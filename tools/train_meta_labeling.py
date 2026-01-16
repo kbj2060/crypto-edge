@@ -307,12 +307,12 @@ def main():
         print(f"❌ 데이터 준비 실패: {e}")
         return
     
-    # 3. 메타 라벨링 엔진 초기화
+    # 3. 메타 라벨링 엔진 초기화 (성능 개선 버전)
     print("\n🤖 메타 라벨링 엔진 초기화...")
     engine = MetaLabelingEngine(
-        model_type="random_forest",
+        model_type="random_forest",  # 또는 "gradient_boosting" 시도 가능
         min_samples_for_training=100,
-        confidence_threshold=0.6
+        confidence_threshold=0.7  # 0.6 → 0.7 (더 보수적)
     )
     
     # 4. 모델 학습

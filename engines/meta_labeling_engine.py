@@ -59,21 +59,27 @@ class MetaLabelingEngine:
         self._init_model()
     
     def _init_model(self):
-        """모델 초기화"""
+        """모델 초기화 (성능 개선 버전)"""
         if self.model_type == "random_forest":
+            # 하이퍼파라미터 튜닝: 더 많은 트리, 더 깊은 트리, 더 나은 분할
+            # 클래스 불균형 대응: 'balanced' 가중치 사용
             self.model = RandomForestClassifier(
-                n_estimators=100,
-                max_depth=10,
-                min_samples_split=20,
-                min_samples_leaf=10,
+                n_estimators=300,  # 100 → 300 (더 많은 트리)
+                max_depth=20,      # 10 → 20 (더 깊은 트리)
+                min_samples_split=10,  # 20 → 10 (더 세밀한 분할)
+                min_samples_leaf=5,   # 10 → 5 (더 세밀한 분할)
+                max_features='sqrt',  # 특성 샘플링 추가
                 random_state=42,
-                class_weight='balanced'
+                class_weight='balanced_subsample',  # 'balanced' → 'balanced_subsample' (더 나은 불균형 처리)
+                n_jobs=-1  # 병렬 처리
             )
         elif self.model_type == "gradient_boosting":
+            # Gradient Boosting도 개선
             self.model = GradientBoostingClassifier(
-                n_estimators=100,
-                max_depth=5,
-                learning_rate=0.1,
+                n_estimators=200,  # 100 → 200
+                max_depth=7,       # 5 → 7
+                learning_rate=0.05,  # 0.1 → 0.05 (더 안정적 학습)
+                subsample=0.8,     # 과적합 방지
                 random_state=42
             )
         else:
@@ -153,26 +159,10 @@ class MetaLabelingEngine:
             # 기본값
             features.extend([0.0, 0.0, 0.0])
         
-        # 8. 충돌 및 컨센서스 특성 (Meta-Guided Consensus용) - 선택적
-        # 학습된 모델이 이 특성들을 포함하는지에 따라 추가
-        synergy_meta = meta.get("synergy_meta", {})
-        conflict_severity = synergy_meta.get("conflict_severity", 0.0)
-        directional_consensus = synergy_meta.get("directional_consensus", 0.5)
-        active_categories = synergy_meta.get("active_categories", 0)
+        # 충돌/시너지 특성 제거: 시그널 특성만 사용 (15개 특성)
+        # conflict_severity, directional_consensus, active_categories 제거됨
         
-        # 기본 특성 (15개) - 항상 포함
-        base_features = np.array(features, dtype=np.float32)
-        
-        # 확장 특성 (3개) - 모델이 지원하는 경우에만 추가
-        extended_features = np.array([
-            conflict_severity,
-            directional_consensus,
-            active_categories
-        ], dtype=np.float32)
-        
-        # 특성 개수에 따라 반환 (하위 호환성)
-        # predict 메서드에서 모델의 특성 개수에 맞춰 조정됨
-        return np.concatenate([base_features, extended_features])
+        return np.array(features, dtype=np.float32)
     
     def _extract_final_action_from_strategies(self, row: pd.Series) -> tuple:
         """
@@ -575,14 +565,33 @@ class MetaLabelingEngine:
         X = np.array(X)
         y = np.array(y)
         
-        # 특성 이름 저장
+        # 특성 이름 저장 (시그널 특성만, 충돌/시너지 특성 제외)
         self.feature_names = [
             'action_encoded', 'net_score', 'abs_net_score', 'confidence',
             'num_strategies', 'buy_score', 'sell_score', 'signals_used',
             'score_diff', 'risk_usd', 'leverage', 'category',
-            'atr', 'volume', 'volatility',
-            'conflict_severity', 'directional_consensus', 'active_categories'
+            'atr', 'volume', 'volatility'
         ]
+        
+        # 클래스 분포 확인 및 분석
+        unique, counts = np.unique(y, return_counts=True)
+        class_dist = dict(zip(unique, counts))
+        print(f"📊 클래스 분포: {class_dist}")
+        
+        # 클래스 불균형 분석
+        if len(class_dist) == 2:
+            success_count = class_dist.get(1, 0)  # 성공한 거래 (1)
+            fail_count = class_dist.get(0, 0)     # 실패한 거래 (0)
+            total = success_count + fail_count
+            success_rate = success_count / total if total > 0 else 0
+            ratio = min(class_dist.values()) / max(class_dist.values())
+            
+            print(f"   ✅ 성공한 거래(1): {success_count:,}개 ({success_rate:.1%})")
+            print(f"   ❌ 실패한 거래(0): {fail_count:,}개 ({(1-success_rate):.1%})")
+            
+            if ratio < 0.3:
+                print(f"⚠️ 클래스 불균형 감지 (비율: {ratio:.2f})")
+                print(f"   → 'balanced_subsample' 가중치로 불균형 처리 중")
         
         # 데이터 분할
         X_train, X_test, y_train, y_test = train_test_split(
@@ -661,29 +670,6 @@ class MetaLabelingEngine:
         # 특성 추출
         try:
             features = self.extract_features(decision, market_data)
-            
-            # 특성 개수 조정 (하위 호환성)
-            # feature_names가 없으면 scaler의 n_features_in_ 사용
-            if self.feature_names:
-                expected_features = len(self.feature_names)
-            elif hasattr(self.scaler, 'n_features_in_'):
-                expected_features = self.scaler.n_features_in_
-            else:
-                # 기본값: 기존 모델은 15개
-                expected_features = 15
-            
-            actual_features = len(features)
-            
-            if actual_features != expected_features:
-                if expected_features == 15 and actual_features == 18:
-                    # 기존 모델(15개): 마지막 3개 특성 제거
-                    features = features[:15]
-                elif expected_features == 18 and actual_features == 15:
-                    # 새 모델(18개)인데 특성 부족: 기본값 추가
-                    features = np.concatenate([features, np.array([0.0, 0.5, 0], dtype=np.float32)])
-                else:
-                    raise ValueError(f"특성 개수 불일치: 모델 {expected_features}개, 현재 {actual_features}개")
-            
             features_scaled = self.scaler.transform([features])
             
             # 예측
