@@ -10,16 +10,93 @@ from datetime import datetime, timezone
 from typing import Dict, Any
 
 
+def _print_meta_guided_consensus_decision(decision: dict) -> None:
+    """Meta-Guided Consensus 결정 출력 (간단명료 버전)"""
+    final_decision = decision.get("final_decision", {})
+    category_decisions = decision.get("category_decisions", {})
+    conflicts = decision.get("conflicts", {})
+    
+    # 최종 결정
+    action = final_decision.get("action", "HOLD")
+    net_score = final_decision.get("net_score", 0.0)
+    confidence = final_decision.get("confidence", "LOW")
+    sizing = final_decision.get("sizing", {})
+    
+    action_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(action, "❓")
+    confidence_emoji = {"HIGH": "🔥", "MEDIUM": "⚡", "LOW": "💤"}.get(confidence, "❓")
+    
+    # 메타 라벨링 정보
+    meta_labeling = final_decision.get("meta", {}).get("meta_labeling", {})
+    should_execute = meta_labeling.get("should_execute", True) if meta_labeling else True
+    probability = meta_labeling.get("probability", 0.0) if meta_labeling else 0.0
+    
+    # 카테고리 요약 (한 줄)
+    consensus_meta = final_decision.get("consensus_meta", {})
+    long_count = consensus_meta.get("long_categories", 0)
+    short_count = consensus_meta.get("short_categories", 0)
+    hold_count = consensus_meta.get("hold_categories", 0)
+    
+    # 간단한 출력 (한 줄 또는 최소한의 정보)
+    time_str = datetime.now(timezone.utc).strftime('%H:%M:%S')
+    
+    # 1줄 요약
+    execute_status = "✅" if should_execute else "❌"
+    ml_prob = f"{probability:.0%}" if meta_labeling else "N/A"
+    
+    print(f"\n[{time_str}] {action_emoji} {action} | {confidence_emoji} {confidence} | 점수: {net_score:.2f} | ML: {execute_status} {ml_prob}")
+    
+    # 포지션 정보 (간단히)
+    if action != "HOLD" and sizing:
+        entry = sizing.get("entry_used")
+        stop = sizing.get("stop_used")
+        risk_usd = sizing.get("risk_usd", 0)
+        leverage = sizing.get("leverage", 1)
+        
+        if entry and stop:
+            print(f"   💰 진입: ${entry:.2f} | 손절: ${stop:.2f} | 리스크: ${risk_usd:.1f} | 레버: {leverage}x")
+    
+    # 카테고리 요약 (한 줄)
+    cat_summary = []
+    for cat_name, cat_decision in category_decisions.items():
+        cat_action = cat_decision.get("action", "HOLD")
+        cat_score = cat_decision.get("net_score", 0.0)
+        cat_emoji = {"LONG": "🟢", "SHORT": "🔴", "HOLD": "🟡"}.get(cat_action, "❓")
+        cat_short = {"short_term": "단", "medium_term": "중", "long_term": "장"}.get(cat_name, cat_name[:2])
+        cat_summary.append(f"{cat_short}{cat_emoji}{cat_score:.1f}")
+    
+    if cat_summary:
+        print(f"   📊 카테고리: {' | '.join(cat_summary)}")
+    
+    # 충돌 정보 (있는 경우만)
+    if conflicts.get("has_conflicts", False):
+        severity = conflicts.get("conflict_severity", 0.0)
+        print(f"   ⚠️ 충돌: 심각도 {severity:.2f}")
+    
+    # 메타 라벨링이 차단한 경우만 상세 표시
+    if not should_execute and meta_labeling:
+        original_action = final_decision.get("meta", {}).get("_original_action")
+        if original_action:
+            # 임계값은 엔진에서 가져와야 하지만, 여기서는 간단히 표시
+            threshold = 0.7  # 기본값 (실제로는 엔진에서 가져와야 함)
+            print(f"   ⚠️ {original_action} → HOLD (확률 {probability:.0%} < 임계값 {threshold:.0%})")
+
+
 def print_decision_interpretation(decision: dict) -> None:
     """
-    decision: decide_trade_realtime(...) 반환값 (독립적 다중 포지션 구조)
+    decision: decide_trade_realtime(...) 반환값 (Meta-Guided Consensus 구조)
     사람이 보기 쉽게 해석해서 출력합니다.
     """
     if not decision or not isinstance(decision, dict):
         print("⚠️ decision이 비어있거나 형식이 잘못되었습니다.")
         return
 
-    # 새로운 구조에서 decisions와 conflicts 추출
+    # Meta-Guided Consensus 구조: final_decision이 있으면 새 구조
+    final_decision = decision.get("final_decision")
+    if final_decision:
+        _print_meta_guided_consensus_decision(decision)
+        return
+    
+    # 기존 구조 (하위 호환성)
     decisions = decision.get("decisions", {})
     conflicts = decision.get("conflicts", {})
     meta = decision.get("meta", {})

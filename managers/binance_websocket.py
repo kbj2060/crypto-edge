@@ -192,7 +192,11 @@ class BinanceWebSocket:
         
         print_decision_interpretation(decision)
 
-        if decision.get("action") != "HOLD":
+        # Meta-Guided Consensus 구조: final_decision에서 action 확인
+        final_decision = decision.get("final_decision", {})
+        action = final_decision.get("action") if final_decision else decision.get("action")
+        
+        if action and action != "HOLD":
             send_telegram_message(decision)
 
         self._execute_kline_callbacks(price_data)

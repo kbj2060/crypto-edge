@@ -123,30 +123,42 @@ class TradeDecisionEngine:
         session_priority: bool = True,
         news_event: bool = False,
     ) -> Dict[str, Any]:
-        """실시간 거래 결정 - 독립적 다중 포지션 지원"""
+        """
+        실시간 거래 결정 - Meta-Guided Consensus 아키텍처
         
-        # 각 카테고리별로 독립적으로 결정
-        decisions = {}
+        1단계: 각 카테고리별 결정 생성
+        2단계: 카테고리 종합 및 충돌 분석
+        3단계: 메타 라벨링으로 최종 실행 여부 결정
+        4단계: 단일 최종 결정 반환
+        """
+        
+        # 1단계: 각 카테고리별로 독립적으로 결정
+        category_decisions = {}
         for category_name, category_config in self.STRATEGY_CATEGORIES.items():
-            decisions[category_name.lower()] = self._decide_category_trade(
+            category_decisions[category_name.lower()] = self._decide_category_trade(
                 signals, category_name, category_config,
                 account_balance, base_risk_pct, open_threshold,
                 immediate_threshold, confirm_threshold, confirm_window_sec,
                 session_priority, news_event
             )
         
-        # 메타 라벨링 적용 (거래 실행 여부 결정)
+        # 2단계: 포지션 충돌 체크
+        conflicts = self._check_position_conflicts(category_decisions)
+        
+        # 3단계: Meta-Guided Consensus - 모든 카테고리를 종합하여 최종 결정 생성
+        final_decision = self._build_consensus_decision(
+            category_decisions, conflicts, account_balance, base_risk_pct
+        )
+        
+        # 4단계: 메타 라벨링으로 최종 실행 여부 검증
         if self.use_meta_labeling and self.meta_labeling_engine:
-            decisions = self._apply_meta_labeling(decisions)
-        
-        # 포지션 충돌 체크
-        conflicts = self._check_position_conflicts(decisions)
-        
-        # 결정 스키마 정규화 (display_utils에서 필요한 필드들 포함)
-        normalized_decisions = self._normalize_decisions_schema(decisions)
+            final_decision = self._apply_meta_guided_consensus(
+                final_decision, category_decisions, conflicts
+            )
         
         return {
-            "decisions": normalized_decisions,
+            "final_decision": final_decision,
+            "category_decisions": self._normalize_decisions_schema(category_decisions),
             "conflicts": conflicts,
         }
     
@@ -725,6 +737,244 @@ class TradeDecisionEngine:
             "short_count": len(short_categories),
             "hold_count": len(hold_categories)
         }
+    
+    def _build_consensus_decision(
+        self,
+        category_decisions: Dict[str, Dict[str, Any]],
+        conflicts: Dict[str, Any],
+        account_balance: float,
+        base_risk_pct: float
+    ) -> Dict[str, Any]:
+        """
+        모든 카테고리를 종합하여 최종 결정 생성 (Meta-Guided Consensus)
+        
+        Args:
+            category_decisions: 카테고리별 결정 딕셔너리
+            conflicts: 충돌 정보
+            account_balance: 계좌 잔액
+            base_risk_pct: 기본 리스크 비율
+            
+        Returns:
+            최종 결정 딕셔너리
+        """
+        # 카테고리별 점수 수집
+        category_scores = {}
+        category_actions = {}
+        category_confidences = {}
+        total_weight = 0.0
+        weighted_score = 0.0
+        
+        for category_name, category_config in self.STRATEGY_CATEGORIES.items():
+            cat_key = category_name.lower()
+            decision = category_decisions.get(cat_key, {})
+            
+            action = decision.get("action", "HOLD")
+            net_score = decision.get("net_score", 0.0)
+            confidence = decision.get("meta", {}).get("synergy_meta", {}).get("confidence", "LOW")
+            weight = category_config.get("weight", 0.0)
+            
+            category_actions[cat_key] = action
+            category_scores[cat_key] = net_score
+            category_confidences[cat_key] = confidence
+            
+            # HOLD가 아닌 경우에만 가중치 적용
+            if action != "HOLD":
+                # 신뢰도에 따른 가중치 조정
+                confidence_multiplier = {"HIGH": 1.2, "MEDIUM": 1.0, "LOW": 0.8}.get(confidence, 1.0)
+                adjusted_weight = weight * confidence_multiplier
+                weighted_score += net_score * adjusted_weight
+                total_weight += adjusted_weight
+        
+        # 최종 점수 계산
+        if total_weight > 0:
+            consensus_score = weighted_score / total_weight
+        else:
+            consensus_score = 0.0
+        
+        # 방향성 컨센서스 계산
+        long_count = sum(1 for a in category_actions.values() if a == "LONG")
+        short_count = sum(1 for a in category_actions.values() if a == "SHORT")
+        hold_count = sum(1 for a in category_actions.values() if a == "HOLD")
+        
+        # 최종 action 결정
+        if abs(consensus_score) < 0.1 or (long_count == 0 and short_count == 0):
+            final_action = "HOLD"
+        elif long_count > short_count:
+            final_action = "LONG"
+        elif short_count > long_count:
+            final_action = "SHORT"
+        else:
+            # 동점인 경우 점수로 결정
+            final_action = "LONG" if consensus_score > 0 else "SHORT" if consensus_score < 0 else "HOLD"
+        
+        # 최종 신뢰도 계산
+        active_categories = long_count + short_count
+        if active_categories == 0:
+            final_confidence = "LOW"
+        elif active_categories >= 2 and conflicts.get("conflict_severity", 0.0) < 0.3:
+            # 여러 카테고리가 일치하고 충돌이 적으면 높은 신뢰도
+            final_confidence = "HIGH"
+        elif active_categories >= 2:
+            final_confidence = "MEDIUM"
+        else:
+            final_confidence = "LOW"
+        
+        # 진입가/손절가 결정 (가장 신뢰도 높은 카테고리 사용)
+        entry_price = None
+        stop_price = None
+        leverage = 1
+        
+        for cat_key in ["short_term", "medium_term", "long_term"]:
+            decision = category_decisions.get(cat_key, {})
+            if decision.get("action") == final_action:
+                sizing = decision.get("sizing", {})
+                if sizing.get("entry_used") and sizing.get("stop_used"):
+                    entry_price = sizing.get("entry_used")
+                    stop_price = sizing.get("stop_used")
+                    leverage = decision.get("leverage", 1)
+                    break
+        
+        # 포지션 크기 계산
+        sizing = {}
+        if final_action != "HOLD" and entry_price and stop_price:
+            # 가장 보수적인 리스크 사용
+            risk_multiplier = min([
+                self.STRATEGY_CATEGORIES[cat.upper()].get("risk_multiplier", 1.0)
+                for cat, dec in category_decisions.items()
+                if dec.get("action") == final_action
+            ] or [1.0])
+            
+            adjusted_risk_pct = base_risk_pct * risk_multiplier
+            risk_usd = account_balance * adjusted_risk_pct
+            
+            distance = abs(entry_price - stop_price)
+            qty = None
+            if distance > 0:
+                qty = risk_usd / distance * leverage
+            
+            sizing = {
+                "qty": qty,
+                "risk_usd": risk_usd,
+                "entry_used": entry_price,
+                "stop_used": stop_price,
+                "leverage": leverage,
+                "risk_multiplier": risk_multiplier
+            }
+        
+        # 이유 생성
+        reason_parts = []
+        if long_count > 0:
+            reason_parts.append(f"LONG {long_count}개 카테고리")
+        if short_count > 0:
+            reason_parts.append(f"SHORT {short_count}개 카테고리")
+        if conflicts.get("conflict_severity", 0.0) > 0.3:
+            reason_parts.append(f"충돌 심각도: {conflicts.get('conflict_severity', 0):.2f}")
+        reason = ", ".join(reason_parts) if reason_parts else "신호 없음"
+        
+        return {
+            "action": final_action,
+            "net_score": round(consensus_score, 4),
+            "reason": reason,
+            "confidence": final_confidence,
+            "consensus_meta": {
+                "long_categories": long_count,
+                "short_categories": short_count,
+                "hold_categories": hold_count,
+                "total_weight": round(total_weight, 4),
+                "category_scores": {k: round(v, 4) for k, v in category_scores.items()},
+                "category_actions": category_actions,
+                "category_confidences": category_confidences
+            },
+            "sizing": sizing,
+            "meta": {
+                "timestamp_utc": self.time_manager.get_current_time().isoformat(),
+                "timeframe": "MULTI",
+                "architecture": "meta_guided_consensus"
+            }
+        }
+    
+    def _apply_meta_guided_consensus(
+        self,
+        final_decision: Dict[str, Any],
+        category_decisions: Dict[str, Dict[str, Any]],
+        conflicts: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Meta-Guided Consensus: 메타 라벨링으로 최종 결정 검증
+        
+        모든 카테고리 정보와 충돌 정보를 종합하여
+        최종 실행 여부를 결정합니다.
+        """
+        if not self.meta_labeling_engine:
+            return final_decision
+        
+        # HOLD는 메타 라벨링 불필요
+        if final_decision.get("action") == "HOLD":
+            return final_decision
+        
+        # 시장 데이터 수집
+        indicators = get_all_indicators()
+        market_data = {
+            "atr": indicators.get("atr", 0.0),
+            "volume": 0.0,  # TODO: 실제 볼륨 데이터 추가
+            "volatility": indicators.get("vwap_std", 0.0) if indicators.get("vwap") else 0.0
+        }
+        
+        # 메타 라벨링을 위한 종합 결정 생성
+        # (conflict_severity를 포함한 확장된 특성)
+        meta_decision = final_decision.copy()
+        meta_decision["meta"] = meta_decision.get("meta", {})
+        meta_decision["meta"]["synergy_meta"] = {
+            "confidence": final_decision.get("confidence", "LOW"),
+            "conflict_severity": conflicts.get("conflict_severity", 0.0),
+            "directional_consensus": conflicts.get("directional_consensus", 0.5),
+            "active_categories": final_decision.get("consensus_meta", {}).get("long_categories", 0) + 
+                                final_decision.get("consensus_meta", {}).get("short_categories", 0),
+            "buy_score": final_decision.get("net_score", 0.0) if final_decision.get("action") == "LONG" else 0.0,
+            "sell_score": abs(final_decision.get("net_score", 0.0)) if final_decision.get("action") == "SHORT" else 0.0,
+            "signals_used": sum(len(dec.get("strategies_used", [])) for dec in category_decisions.values())
+        }
+        
+        # 메타 라벨링 예측
+        meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)
+        
+        # 메타 라벨링 결과를 결정에 추가
+        final_decision["meta"]["meta_labeling"] = {
+            "should_execute": meta_result.get("should_execute", True),
+            "prediction": meta_result.get("prediction", 1),
+            "probability": meta_result.get("probability", 0.5),
+            "confidence": meta_result.get("confidence", "MEDIUM")
+        }
+        
+        # 메타 라벨링이 거래 실행을 권장하지 않으면 HOLD로 변경
+        if not meta_result.get("should_execute", True):
+            original_action = final_decision.get("action")
+            probability = meta_result.get("probability", 0.0)
+            
+            final_decision["action"] = "HOLD"
+            final_decision["reason"] = f"메타 라벨링: {original_action} → HOLD (확률: {probability:.1%}, 임계값: {self.meta_labeling_engine.confidence_threshold:.1%} 미달)"
+            final_decision["net_score"] = 0.0
+            
+            # 원본 정보 저장
+            final_decision["meta"]["_original_action"] = original_action
+            final_decision["meta"]["_original_score"] = final_decision.get("net_score", 0.0)
+            
+            # 포지션 크기 초기화
+            final_decision["sizing"] = {
+                "qty": None,
+                "risk_usd": 0.0,
+                "entry_used": None,
+                "stop_used": None,
+                "leverage": 1,
+                "risk_multiplier": 1.0
+            }
+        else:
+            # 거래 실행 권장 시 이유 업데이트
+            probability = meta_result.get("probability", 0.0)
+            original_reason = final_decision.get("reason", "")
+            final_decision["reason"] = f"{original_reason} [메타 라벨링: {probability:.1%}]"
+        
+        return final_decision
     
     def _apply_meta_labeling(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
         """
