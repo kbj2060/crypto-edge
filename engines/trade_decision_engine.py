@@ -2,10 +2,11 @@ from typing import Dict, Any, Optional
 from datetime import datetime
 import math
 from managers.time_manager import get_time_manager
-from indicators.global_indicators import get_atr
+from indicators.global_indicators import get_atr, get_all_indicators
 from engines.short_term_synergy_engine import ShortTermSynergyEngine, SynergyConfig
 from engines.medium_term_synergy_engine import MediumTermSynergyEngine, MediumTermConfig
 from engines.long_term_synergy_engine import LongTermSynergyEngine, LongTermConfig
+from engines.meta_labeling_engine import MetaLabelingEngine
 
 
 class TradeDecisionEngine:
@@ -41,12 +42,20 @@ class TradeDecisionEngine:
         }
     }
     
-    def __init__(self):
+    def __init__(self, use_meta_labeling: bool = True):
         self.time_manager = get_time_manager()
         # 각 카테고리별 시너지 엔진 초기화
         self.short_term_engine = ShortTermSynergyEngine(SynergyConfig())
         self.medium_term_engine = MediumTermSynergyEngine(MediumTermConfig())
         self.long_term_engine = LongTermSynergyEngine(LongTermConfig())
+        
+        # 메타 라벨링 엔진 초기화
+        self.use_meta_labeling = use_meta_labeling
+        self.meta_labeling_engine = None
+        if use_meta_labeling:
+            self.meta_labeling_engine = MetaLabelingEngine()
+            # 기존 모델이 있으면 로드
+            self.meta_labeling_engine.load_model()
 
 
     def _normalize_single_decision(self, decision: Dict[str, Any], category_name: str) -> Dict[str, Any]:
@@ -121,6 +130,10 @@ class TradeDecisionEngine:
                 immediate_threshold, confirm_threshold, confirm_window_sec,
                 session_priority, news_event
             )
+        
+        # 메타 라벨링 적용 (거래 실행 여부 결정)
+        if self.use_meta_labeling and self.meta_labeling_engine:
+            decisions = self._apply_meta_labeling(decisions)
         
         # 포지션 충돌 체크
         conflicts = self._check_position_conflicts(decisions)
@@ -708,3 +721,66 @@ class TradeDecisionEngine:
             "short_count": len(short_categories),
             "hold_count": len(hold_categories)
         }
+    
+    def _apply_meta_labeling(self, decisions: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
+        """
+        메타 라벨링을 적용하여 거래 실행 여부 결정
+        
+        Args:
+            decisions: 원본 결정 딕셔너리
+            
+        Returns:
+            메타 라벨링이 적용된 결정 딕셔너리
+        """
+        if not self.meta_labeling_engine:
+            return decisions
+        
+        # 시장 데이터 수집
+        indicators = get_all_indicators()
+        market_data = {
+            "atr": indicators.get("atr", 0.0),
+            "volume": 0.0,  # TODO: 실제 볼륨 데이터 추가
+            "volatility": indicators.get("vwap_std", 0.0) if indicators.get("vwap") else 0.0
+        }
+        
+        # 각 결정에 메타 라벨링 적용
+        for category_name, decision in decisions.items():
+            # HOLD는 메타 라벨링 불필요
+            if decision.get("action") == "HOLD":
+                continue
+            
+            # 메타 라벨링 예측
+            meta_result = self.meta_labeling_engine.predict(decision, market_data)
+            
+            # 메타 라벨링 결과를 결정에 추가
+            if "meta" not in decision:
+                decision["meta"] = {}
+            
+            if "meta_labeling" not in decision["meta"]:
+                decision["meta"]["meta_labeling"] = {}
+            
+            decision["meta"]["meta_labeling"] = {
+                "should_execute": meta_result.get("should_execute", True),
+                "prediction": meta_result.get("prediction", 1),
+                "probability": meta_result.get("probability", 0.5),
+                "confidence": meta_result.get("confidence", "MEDIUM")
+            }
+            
+            # 메타 라벨링이 거래 실행을 권장하지 않으면 HOLD로 변경
+            if not meta_result.get("should_execute", True):
+                original_action = decision.get("action")
+                decision["action"] = "HOLD"
+                decision["reason"] = f"메타 라벨링: {original_action} → HOLD (신뢰도: {meta_result.get('probability', 0):.2f})"
+                decision["net_score"] = 0.0
+                
+                # 포지션 크기 초기화
+                decision["sizing"] = {
+                    "qty": None,
+                    "risk_usd": 0.0,
+                    "entry_used": None,
+                    "stop_used": None,
+                    "leverage": decision.get("leverage", 1),
+                    "risk_multiplier": 1.0
+                }
+        
+        return decisions
