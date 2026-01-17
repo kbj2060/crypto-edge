@@ -439,6 +439,10 @@ def generate_signal_data_with_indicators(
     last_print_time = start_time
     
     try:
+        # 시간 변환 최적화: 미리 계산
+        current_time_dt_cache = None
+        last_cached_time = None
+        
         for i in range(start_idx+1, end_idx):
             # 현재 캔들 데이터
             series_3m = price_data.iloc[i]
@@ -469,25 +473,38 @@ def generate_signal_data_with_indicators(
             # 전략 실행
             strategy_executor.execute_all_strategies()
             
-            # 신호 수집
+            # 신호 수집 (복사 최소화)
             signals = strategy_executor.get_signals()
             
             # 거래 결정 생성 (최종 action 포함)
-            current_time_dt = time_manager.get_timestamp_datetime(current_time)
+            # 시간 변환 캐싱 (같은 시간이면 재사용)
+            if current_time != last_cached_time:
+                current_time_dt = time_manager.get_timestamp_datetime(current_time)
+                current_time_dt_cache = current_time_dt
+                last_cached_time = current_time
+            else:
+                current_time_dt = current_time_dt_cache
+                
             decision_result = decision_engine.decide_trade_realtime(signals)
             final_decision = decision_result.get("final_decision", {})
             
-            # decisions 딕셔너리 구성 (기존 신호 + 최종 결정)
-            decisions = signals.copy()
-            decisions.update({
+            # decisions 딕셔너리 구성 (복사 최소화 - 직접 생성)
+            # series_3m.to_dict() 대신 직접 값 추출 (더 빠름)
+            decisions = {
+                **signals,  # 신호 직접 병합 (copy() 제거)
                 'timestamp': current_time_dt,
                 'indicators': indicators,
-                **series_3m.to_dict(),
+                'open': float(series_3m['open']),
+                'high': float(series_3m['high']),
+                'low': float(series_3m['low']),
+                'close': float(series_3m['close']),
+                'volume': float(series_3m['volume']),
+                'quote_volume': float(series_3m.get('quote_volume', 0)),
                 # 최종 결정 정보 추가 (net_score, action, confidence만)
                 'action': final_decision.get('action', 'HOLD'),
                 'net_score': final_decision.get('net_score', 0.0),
                 'confidence': final_decision.get('confidence', 'LOW')
-            })
+            }
 
             # 키 개수 확인 제거 (속도 향상을 위해 디버깅 코드 제거)
             temp_decision_data.append(decisions)
