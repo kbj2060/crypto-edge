@@ -31,7 +31,8 @@ class BinanceWebSocket:
         symbol: str = "ETHUSDT",
         strategy_executor: Optional[StrategyExecutor] = None,
         enable_trading: bool = False,
-        simulation_mode: bool = True
+        simulation_mode: bool = True,
+        demo: bool = False
     ):
         """
         웹소켓 초기화
@@ -43,10 +44,15 @@ class BinanceWebSocket:
             simulation_mode: 시뮬레이션 모드 (실제 주문 실행 안 함)
         """
         self.symbol = symbol.lower()
-        self.ws_url = "wss://fstream.binance.com/ws"
+        # 웹소켓 URL 설정
+        if demo:
+            self.ws_url = "wss://demo-stream.binance.com/ws"  # Demo Trading 웹소켓 (Spot)
+        else:
+            self.ws_url = "wss://fstream.binance.com/ws"  # 메인넷 웹소켓
         self.running = False
         self.enable_trading = enable_trading
         self.simulation_mode = simulation_mode
+        self.demo = demo
         
         # 콜백 함수들
         self.callbacks = {
@@ -71,12 +77,22 @@ class BinanceWebSocket:
         self.trade_executor = None
         if self.enable_trading:
             try:
-                binance_trader = BinanceTrader(simulation_mode=self.simulation_mode)
+                binance_trader = BinanceTrader(
+                    simulation_mode=self.simulation_mode,
+                    demo=self.demo,
+                    use_futures=False  # Spot 거래 사용 (LONG=매수, SHORT=매도)
+                )
                 self.trade_executor = TradeExecutor(
                     binance_trader=binance_trader,
                     symbol=symbol.upper()
                 )
-                print(f"✅ 거래 실행기 초기화 완료 ({'시뮬레이션' if simulation_mode else '실제 거래'} 모드)")
+                if simulation_mode:
+                    mode_str = '시뮬레이션'
+                elif self.demo:
+                    mode_str = 'Demo Trading'
+                else:
+                    mode_str = '실제 거래'
+                print(f"✅ 거래 실행기 초기화 완료 ({mode_str} 모드)")
             except Exception as e:
                 print(f"⚠️ 거래 실행기 초기화 실패: {e}")
                 print("   거래 없이 계속 실행됩니다.")
@@ -210,24 +226,45 @@ class BinanceWebSocket:
         signals = self.strategy_executor.get_signals()
         decision = self.decision_engine.decide_trade_realtime(signals)
 
+        # decision이 None이거나 비어있으면 스킵
+        if not decision or not isinstance(decision, dict):
+            print("⚠️ decision 생성 실패: decision이 None이거나 비어있습니다.")
+            return
+
         indicators = get_all_indicators()
         signals.update({'timestamp': price_data['timestamp'], 'indicators': indicators})
 
         # Decision 로그에 저장
         # self.decision_logger.log_decision(decision)
         
-        print_decision_interpretation(decision)
+        # decision이 유효한 경우에만 출력
+        try:
+            print_decision_interpretation(decision)
+        except Exception as e:
+            print(f"⚠️ decision 출력 실패: {e}")
 
         # Meta-Guided Consensus 구조: final_decision에서 action 확인
-        final_decision = decision.get("final_decision", {})
-        action = final_decision.get("action") if final_decision else decision.get("action")
+        final_decision = decision.get("final_decision")
+        if not final_decision or not isinstance(final_decision, dict):
+            # final_decision이 없으면 스킵
+            return
+        
+        action = final_decision.get("action", "HOLD")
         
         if action and action != "HOLD":
-            send_telegram_message(decision)
+            try:
+                send_telegram_message(decision)
+            except Exception as e:
+                print(f"⚠️ 텔레그램 메시지 전송 실패: {e}")
         
         # 거래 실행 (활성화된 경우)
-        if self.enable_trading and self.trade_executor and final_decision:
-            if final_decision.get("action") != "HOLD":
+        if self.enable_trading and self.trade_executor:
+            # final_decision이 없거나 비어있으면 스킵
+            if not final_decision or not isinstance(final_decision, dict):
+                return
+            
+            action = final_decision.get("action", "HOLD")
+            if action != "HOLD":
                 # 메타 라벨링 결과 확인
                 meta_labeling = final_decision.get("meta", {}).get("meta_labeling", {})
                 should_execute = meta_labeling.get("should_execute", False)

@@ -8,6 +8,11 @@ class IntegratedConfig:
         # 기본 설정
         self.symbol: str = "ETHUSDT"
         
+        # 거래 실행 설정
+        self.enable_trading: bool = True   # 실제 거래 활성화 여부
+        self.simulation_mode: bool = False  # 시뮬레이션 모드 (False: API 실제 호출)
+        self.use_demo: bool = True         # Demo Trading 사용 여부
+        
         # 세션 기반 전략 설정
         self.enable_session_strategy = True
         self.session_timeframe = "3m"

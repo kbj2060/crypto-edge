@@ -117,7 +117,7 @@ class TradeExecutor:
     
     def execute_decision(self, decision: Dict[str, Any]) -> Optional[Dict[str, Any]]:
         """
-        거래 결정 실행
+        거래 결정 실행 (Spot 거래: LONG=매수, SHORT=매도)
         
         Args:
             decision: TradeDecisionEngine의 final_decision
@@ -135,44 +135,121 @@ class TradeExecutor:
             account_info = self.trader.get_account_info()
             available_balance = float(account_info.get("availableBalance", 0.0))
             
-            if available_balance < 10.0:  # 최소 10 USDT 필요
-                self._send_notification(
-                    f"잔액 부족: {available_balance:.2f} USDT",
-                    "WARNING"
-                )
-                return None
-            
-            # 현재 포지션 확인
-            current_position = self.trader.get_position_info(self.symbol)
-            current_position_amt = 0.0
-            if current_position:
-                current_position_amt = float(current_position.get("positionAmt", 0.0))
-            
-            # 포지션 크기 계산
-            position_size_usdt = self._calculate_position_size(decision, available_balance)
-            
-            if position_size_usdt < 10.0:  # 최소 주문 금액
-                return None
-            
-            # 주문 실행
-            if action == "LONG":
-                # 기존 SHORT 포지션이 있으면 먼저 청산
-                if current_position_amt < 0:
-                    self._close_position(abs(current_position_amt))
+            # Spot 거래: 잔액 확인
+            if self.trader.use_futures:
+                # Futures 거래 로직 (기존)
+                if available_balance < 10.0:
+                    self._send_notification(
+                        f"잔액 부족: {available_balance:.2f} USDT",
+                        "WARNING"
+                    )
+                    return None
                 
-                # LONG 포지션 개설
-                result = self._open_long_position(position_size_usdt, decision)
+                # 현재 포지션 확인
+                current_position = self.trader.get_position_info(self.symbol)
+                current_position_amt = 0.0
+                if current_position:
+                    current_position_amt = float(current_position.get("positionAmt", 0.0))
                 
-            elif action == "SHORT":
-                # 기존 LONG 포지션이 있으면 먼저 청산
-                if current_position_amt > 0:
-                    self._close_position(current_position_amt)
+                # 포지션 크기 계산
+                position_size_usdt = self._calculate_position_size(decision, available_balance)
                 
-                # SHORT 포지션 개설
-                result = self._open_short_position(position_size_usdt, decision)
-            
+                if position_size_usdt < 10.0:
+                    return None
+                
+                # 주문 실행
+                if action == "LONG":
+                    if current_position_amt < 0:
+                        self._close_position(abs(current_position_amt))
+                    result = self._open_long_position(position_size_usdt, decision)
+                elif action == "SHORT":
+                    if current_position_amt > 0:
+                        self._close_position(current_position_amt)
+                    result = self._open_short_position(position_size_usdt, decision)
+                else:
+                    return None
             else:
-                return None
+                # Spot 거래 로직: LONG=매수, SHORT=매도
+                if action == "LONG":
+                    # LONG 신호: ETH 매수 (USDT로 ETH 구매)
+                    if available_balance < 10.0:
+                        self._send_notification(
+                            f"USDT 잔액 부족: {available_balance:.2f} USDT",
+                            "WARNING"
+                        )
+                        return None
+                    
+                    # 포지션 크기 계산
+                    position_size_usdt = self._calculate_position_size(decision, available_balance)
+                    
+                    if position_size_usdt < 10.0:
+                        return None
+                    
+                    # ETH 매수
+                    result = self._open_long_position(position_size_usdt, decision)
+                    
+                elif action == "SHORT":
+                    # SHORT 신호: ETH 매도 (보유한 ETH를 USDT로 판매)
+                    # Spot 거래에서는 보유한 ETH 잔액 확인 필요
+                    balances = account_info.get("balances", [])
+                    eth_balance = 0.0
+                    eth_symbol = self.symbol.replace("USDT", "")  # "ETHUSDT" -> "ETH"
+                    
+                    for balance in balances:
+                        if balance.get("asset") == eth_symbol:
+                            eth_balance = float(balance.get("free", 0.0))
+                            break
+                    
+                    if eth_balance < 0.001:  # 최소 거래 수량 (ETH는 보통 0.001 이상)
+                        self._send_notification(
+                            f"ETH 잔액 부족: {eth_balance:.8f} ETH (매도 불가, SHORT 신호 무시)",
+                            "WARNING"
+                        )
+                        print(f"⚠️ SHORT 신호 무시: ETH 잔액이 부족합니다 ({eth_balance:.8f} ETH)")
+                        return None
+                    
+                    # 보유한 ETH 전부 매도 또는 일부만 매도
+                    # 일단 보유한 ETH의 일정 비율만 매도하도록 설정
+                    sell_ratio = 0.5  # 50%만 매도
+                    sell_quantity = eth_balance * sell_ratio
+                    
+                    # LOT_SIZE 필터에 맞게 수량 조정
+                    try:
+                        sell_quantity = self.trader._adjust_quantity_to_lot_size(self.symbol, sell_quantity)
+                    except Exception as e:
+                        self._send_notification(
+                            f"수량 조정 실패: {e}",
+                            "WARNING"
+                        )
+                        return None
+                    
+                    # 최소 거래 수량 확인 (조정된 수량 기준)
+                    if sell_quantity < 0.001:
+                        self._send_notification(
+                            f"매도 수량 부족: {sell_quantity:.8f} ETH (최소 0.001 ETH 필요)",
+                            "WARNING"
+                        )
+                        return None
+                    
+                    # ETH 매도
+                    try:
+                        result = self._open_short_position(sell_quantity, decision)
+                    except Exception as e:
+                        # 매도 실패 시 상세 에러 메시지
+                        error_msg = str(e)
+                        if "insufficient balance" in error_msg.lower() or "잔액" in error_msg:
+                            self._send_notification(
+                                f"ETH 매도 실패: 잔액 부족 ({eth_balance:.8f} ETH)",
+                                "ERROR"
+                            )
+                        else:
+                            self._send_notification(
+                                f"ETH 매도 실패: {error_msg}",
+                                "ERROR"
+                            )
+                        raise
+                else:
+                    return None
             
             # 결과 로깅
             if result:
@@ -187,7 +264,7 @@ class TradeExecutor:
             return None
     
     def _open_long_position(self, usdt_amount: float, decision: Dict[str, Any]) -> Dict[str, Any]:
-        """LONG 포지션 개설"""
+        """LONG 포지션 개설 (Spot: ETH 매수, Futures: 롱 포지션)"""
         try:
             current_price = self.trader.get_current_price(self.symbol)
             quantity = self.trader._calculate_quantity(self.symbol, usdt_amount, current_price)
@@ -198,10 +275,12 @@ class TradeExecutor:
                 quantity=quantity
             )
             
-            self._send_notification(
-                f"LONG 포지션 개설: {quantity:.4f} {self.symbol.replace('USDT', '')} @ ${current_price:.2f}",
-                "SUCCESS"
-            )
+            if self.trader.use_futures:
+                msg = f"LONG 포지션 개설: {quantity:.4f} {self.symbol.replace('USDT', '')} @ ${current_price:.2f}"
+            else:
+                msg = f"ETH 매수: {quantity:.4f} ETH @ ${current_price:.2f} (USDT {usdt_amount:.2f})"
+            
+            self._send_notification(msg, "SUCCESS")
             
             return result
         
@@ -209,11 +288,15 @@ class TradeExecutor:
             self._send_notification(f"LONG 포지션 개설 실패: {e}", "ERROR")
             raise
     
-    def _open_short_position(self, usdt_amount: float, decision: Dict[str, Any]) -> Dict[str, Any]:
-        """SHORT 포지션 개설"""
+    def _open_short_position(self, quantity: float, decision: Dict[str, Any]) -> Dict[str, Any]:
+        """SHORT 포지션 개설 (Spot: ETH 매도, Futures: 숏 포지션)"""
         try:
             current_price = self.trader.get_current_price(self.symbol)
-            quantity = self.trader._calculate_quantity(self.symbol, usdt_amount, current_price)
+            
+            # Spot 거래에서는 quantity가 이미 ETH 수량
+            # Futures 거래에서는 USDT 금액을 수량으로 변환 필요
+            if self.trader.use_futures:
+                quantity = self.trader._calculate_quantity(self.symbol, quantity, current_price)
             
             result = self.trader.place_market_order(
                 symbol=self.symbol,
@@ -221,10 +304,13 @@ class TradeExecutor:
                 quantity=quantity
             )
             
-            self._send_notification(
-                f"SHORT 포지션 개설: {quantity:.4f} {self.symbol.replace('USDT', '')} @ ${current_price:.2f}",
-                "SUCCESS"
-            )
+            if self.trader.use_futures:
+                msg = f"SHORT 포지션 개설: {quantity:.4f} {self.symbol.replace('USDT', '')} @ ${current_price:.2f}"
+            else:
+                usdt_amount = quantity * current_price
+                msg = f"ETH 매도: {quantity:.4f} ETH @ ${current_price:.2f} (USDT {usdt_amount:.2f})"
+            
+            self._send_notification(msg, "SUCCESS")
             
             return result
         

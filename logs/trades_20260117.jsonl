@@ -1,0 +1,5 @@
+{"timestamp": "2026-01-17T12:20:46.826385+00:00", "symbol": "ETHUSDT", "action": "LONG", "net_score": 0.5, "confidence": "MEDIUM", "order_id": 1051098, "quantity": "0.01800000", "price": "0.00000000", "simulation": false}
+{"timestamp": "2026-01-17T12:20:49.960719+00:00", "symbol": "ETHUSDT", "action": "SHORT", "net_score": -0.5, "confidence": "MEDIUM", "order_id": 1051100, "quantity": "0.01800000", "price": "0.00000000", "simulation": false}
+{"timestamp": "2026-01-17T12:27:03.334145+00:00", "symbol": "ETHUSDT", "action": "SHORT", "net_score": -0.2604, "confidence": "MEDIUM", "order_id": 1051379, "quantity": "0.50150000", "price": "0.00000000", "simulation": false}
+{"timestamp": "2026-01-17T12:31:58.407585+00:00", "symbol": "ETHUSDT", "action": "LONG", "net_score": 0.5, "confidence": "MEDIUM", "order_id": 1051576, "quantity": "0.02100000", "price": "0.00000000", "simulation": false}
+{"timestamp": "2026-01-17T12:32:01.781669+00:00", "symbol": "ETHUSDT", "action": "SHORT", "net_score": -0.5, "confidence": "MEDIUM", "order_id": 1051577, "quantity": "0.26250000", "price": "0.00000000", "simulation": false}

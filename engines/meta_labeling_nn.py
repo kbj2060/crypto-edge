@@ -212,9 +212,21 @@ class MetaLabelingNNEngine:
         X_train_scaled = self.scaler.fit_transform(X_train)
         X_test_scaled = self.scaler.transform(X_test)
         
+        # 클래스 가중치 계산 (불균형 데이터 처리)
+        from sklearn.utils.class_weight import compute_class_weight
+        class_weights = compute_class_weight(
+            'balanced',
+            classes=np.unique(y_train),
+            y=y_train
+        )
+        class_weight_dict = dict(zip(np.unique(y_train), class_weights))
+        print(f"📊 클래스 가중치: {class_weight_dict}")
+        
         # MLPClassifier 모델 초기화
         # alpha는 L2 정규화 (dropout 대신 사용)
         # learning_rate_init는 학습률
+        # class_weight는 MLPClassifier에서 직접 지원하지 않으므로, 
+        # sample_weight를 fit()에 전달해야 함
         self.model = MLPClassifier(
             hidden_layer_sizes=self.hidden_layer_sizes,
             activation='relu',
@@ -230,26 +242,47 @@ class MetaLabelingNNEngine:
             verbose=True
         )
         
-        # 학습
+        # sample_weight 계산 (클래스 가중치 적용)
+        sample_weights = np.array([class_weight_dict[y] for y in y_train])
+        
+        # 학습 (클래스 가중치 적용)
         print(f"🎓 모델 학습 중... ({len(X_train)}개 샘플, 최대 {self.max_iter} 반복)")
-        self.model.fit(X_train_scaled, y_train)
+        self.model.fit(X_train_scaled, y_train, sample_weight=sample_weights)
         
         # 최종 평가
         y_pred = self.model.predict(X_test_scaled)
         y_pred_proba = self.model.predict_proba(X_test_scaled)[:, 1]
         
+        # 예측 분포 확인
+        unique_pred, counts_pred = np.unique(y_pred, return_counts=True)
+        pred_dist = dict(zip(unique_pred, counts_pred))
+        print(f"📊 예측 분포: {pred_dist}")
+        
         accuracy = np.mean(y_pred == y_test)
         roc_auc = roc_auc_score(y_test, y_pred_proba)
         
         report = classification_report(y_test, y_pred, output_dict=True, zero_division=0)
-        precision = report.get('1', {}).get('precision', 0.0)
-        recall = report.get('1', {}).get('recall', 0.0)
+        
+        # 클래스 1이 예측되지 않은 경우를 처리
+        if '1' in report:
+            precision = report['1'].get('precision', 0.0)
+            recall = report['1'].get('recall', 0.0)
+            f1 = report['1'].get('f1-score', 0.0)
+        else:
+            # 클래스 1이 예측되지 않았을 때
+            precision = 0.0
+            recall = 0.0
+            f1 = 0.0
+            print("⚠️ 경고: 모델이 클래스 1을 전혀 예측하지 않았습니다.")
+            print(f"   실제 클래스 1 개수: {np.sum(y_test == 1)}개")
+            print(f"   예측된 클래스 1 개수: {np.sum(y_pred == 1)}개")
         
         print(f"✅ 모델 학습 완료!")
         print(f"   정확도: {accuracy:.3f}")
         print(f"   ROC-AUC: {roc_auc:.3f}")
         print(f"   Precision: {precision:.3f}")
         print(f"   Recall: {recall:.3f}")
+        print(f"   F1-Score: {f1:.3f}")
         
         self.is_trained = True
         

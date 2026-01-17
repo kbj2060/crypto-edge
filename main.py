@@ -6,6 +6,23 @@
 
 from datetime import datetime, timezone
 import time
+import os
+from pathlib import Path
+
+# .env 파일 로드 (가장 먼저 실행)
+try:
+    from dotenv import load_dotenv
+    # 프로젝트 루트 디렉토리에서 .env 파일 찾기
+    env_path = Path(__file__).parent / '.env'
+    if env_path.exists():
+        load_dotenv(env_path)
+        print(f"✅ .env 파일 로드 완료: {env_path}")
+    else:
+        print(f"⚠️ .env 파일을 찾을 수 없습니다: {env_path}")
+        print("   환경 변수를 직접 설정하거나 .env 파일을 생성하세요.")
+except ImportError:
+    print("⚠️ python-dotenv가 설치되지 않았습니다. pip install python-dotenv로 설치하세요.")
+    print("   환경 변수를 직접 설정하거나 .env 파일을 사용할 수 없습니다.")
 
 from config.integrated_config import IntegratedConfig
 from managers.bucket_aggregator import BucketAggregator

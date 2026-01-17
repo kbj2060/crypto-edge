@@ -19,7 +19,18 @@ class TraderCore:
         self.time_manager = get_time_manager()
         
         # 핵심 컴포넌트 초기화
-        self.websocket = BinanceWebSocket(self.config.symbol, strategy_executor)
+        # 거래 활성화 여부는 config에서 가져오거나 기본값 사용
+        enable_trading = getattr(config, 'enable_trading', False)
+        simulation_mode = getattr(config, 'simulation_mode', True)
+        use_demo = getattr(config, 'use_demo', False)
+        
+        self.websocket = BinanceWebSocket(
+            self.config.symbol, 
+            strategy_executor,
+            enable_trading=enable_trading,
+            simulation_mode=simulation_mode,
+            demo=use_demo
+        )
     
     def start_websocket(self):
         """웹소켓 시작"""
