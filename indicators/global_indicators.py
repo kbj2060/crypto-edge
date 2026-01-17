@@ -16,13 +16,11 @@ import pandas as pd
 
 
 # 지표 클래스들 import
-from indicators.opening_range import OpeningRange
 from indicators.vpvr import SessionVPVR
 from indicators.atr import ATR3M
 from indicators.daily_levels import DailyLevels
 from indicators.vwap import SessionVWAP
 from managers.data_manager import get_data_manager
-from utils.session_manager import get_session_manager
 from managers.time_manager import get_time_manager
 
 
@@ -42,7 +40,6 @@ class GlobalIndicatorManager:
         self._data_manager = None  # DataManager 인스턴스 (지연 초기화)
         self.target_time = target_time if target_time is not None else datetime.now(timezone.utc)
         self.time_manager = get_time_manager(self.target_time)
-        self.session_manager = get_session_manager(self.target_time)
 
         # 지표 설정
         self.indicator_configs = {
@@ -60,10 +57,6 @@ class GlobalIndicatorManager:
             },
             'vwap': {
                 'class': SessionVWAP,
-                'target_time': self.target_time,
-            },
-            'opening_range': {
-                'class': OpeningRange,
                 'target_time': self.target_time,
             }
         }
@@ -83,10 +76,6 @@ class GlobalIndicatorManager:
                     target_time=self.target_time,
                 )
             elif name == 'vwap':
-                self._indicators[name] = indicator_class(
-                    target_time=self.target_time,
-                )
-            elif name == 'opening_range':
                 self._indicators[name] = indicator_class(
                     target_time=self.target_time,
                 )
@@ -113,7 +102,6 @@ class GlobalIndicatorManager:
                 print("🔄 전역 지표 이미 초기화됨")
                 return
             
-            self.session_manager = get_session_manager(self.target_time)
             self.time_manager = get_time_manager(self.target_time)
 
             try:
@@ -145,7 +133,6 @@ class GlobalIndicatorManager:
         if not self._initialized:
             return
 
-        self.session_manager.update_with_candle(candle_data)
         self.time_manager.update_with_candle(candle_data)
         
         # 1. ATR 업데이트 (가장 먼저 - 다른 지표들이 사용)
@@ -167,10 +154,6 @@ class GlobalIndicatorManager:
         if 'daily_levels' in self._indicators and self._indicators['daily_levels'] is not None:
             self._indicators['daily_levels'].update_with_candle(candle_data)
             #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]Daily Levels 업데이트 완료: {self._indicators['daily_levels'].get_status().get('prev_day_high')} {self._indicators['daily_levels'].get_status().get('prev_day_low')}")
-        
-        if 'opening_range' in self._indicators and self._indicators['opening_range'] is not None:
-            self._indicators['opening_range'].update_with_candle(candle_data)
-            #print(f"✅ [{candle_data.name.strftime('%H:%M:%S')}]Opening Range 업데이트 완료: {self._indicators['opening_range'].get_status().get('high')} {self._indicators['opening_range'].get_status().get('low')}")
 
         #print(f"✅ 전체 지표 업데이트 완료: {candle_data.name.strftime('%H:%M:%S')}")
         #print(f"")
@@ -253,12 +236,6 @@ def get_daily_levels() -> Tuple[Optional[float], Optional[float]]:
     daily_indicator = manager.get_indicator('daily_levels')
     return (daily_indicator.get_status().get('prev_day_high'), daily_indicator.get_status().get('prev_day_low'))
 
-def get_opening_range() -> Tuple[Optional[float], Optional[float]]:
-    """개장 범위 고가 바로 가져오기"""
-    manager = get_global_indicator_manager()
-    opening_indicator = manager.get_indicator('opening_range')
-    return (opening_indicator.get_status().get('high'), opening_indicator.get_status().get('low'))
-
 def get_vpvr() -> Optional[int]:
     """VPVR 활성 구간 수 바로 가져오기"""
     manager = get_global_indicator_manager()
@@ -280,7 +257,6 @@ def get_all_indicators() -> Dict[str, Any]:
     vwap, vwap_std = get_vwap()
     atr = get_atr() 
     prev_day_high, prev_day_low = get_daily_levels()
-    opening_range_high, opening_range_low = get_opening_range()
     
     return {
         "poc" : round(float(poc), 3) if poc is not None else None,
@@ -291,6 +267,4 @@ def get_all_indicators() -> Dict[str, Any]:
         "atr" : round(float(atr), 3) if atr is not None else None,
         "prev_day_high" : round(float(prev_day_high), 3) if prev_day_high is not None else None,
         "prev_day_low" : round(float(prev_day_low), 3) if prev_day_low is not None else None,
-        "opening_range_high" : round(float(opening_range_high), 3) if opening_range_high is not None else None,
-        "opening_range_low" : round(float(opening_range_low), 3) if opening_range_low is not None else None,
     }

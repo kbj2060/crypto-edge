@@ -4,6 +4,7 @@ from datetime import timedelta
 import os
 import sys
 import pickle
+import time as time_module
 from typing import Dict, Any, List, Optional
 from datetime import datetime, timezone
 
@@ -395,10 +396,15 @@ def generate_signal_data_with_indicators(
         start_idx = progress_state['current_index']
         print(f"이전 진행 상태에서 재시작: {start_idx}번째 캔들부터 (저장된 위치: {progress_state['current_index']})")
     else:
-        # 최근 데이터부터 처리 (최대 max_periods개)
-        target_datetime = price_data.iloc[0].name + timedelta(days=4)
-        start_idx = price_data.index.get_loc(target_datetime)
-        print(f"기준 날짜 {target_datetime}의 인덱스 위치: {start_idx}")
+        # 최근 1달 데이터부터 처리 (3달에서 1달로 변경)
+        # 마지막 데이터에서 1달 전부터 시작
+        last_datetime = price_data.index[-1]
+        target_datetime = last_datetime - timedelta(days=30)  # 1달 전
+        # target_datetime이 데이터 범위 내에 있는지 확인
+        if target_datetime < price_data.index[0]:
+            target_datetime = price_data.index[0]
+        start_idx = price_data.index.get_indexer([target_datetime], method='nearest')[0]
+        print(f"최근 1달 데이터 처리 시작: {target_datetime} (인덱스: {start_idx})")
     
     # 초기 데이터 로딩
     target_time = price_data.index[start_idx]
@@ -417,11 +423,20 @@ def generate_signal_data_with_indicators(
     global_manager.initialize_indicators()
 
     strategy_executor = StrategyExecutor()
-    # decision_engine = TradeDecisionEngine()
+    decision_engine = TradeDecisionEngine(use_meta_labeling=False)  # 메타 라벨링은 학습 시에만 사용
 
     end_idx = len(price_data)
-    batch_size = 10000  # 50,000개씩 배치로 저장 (Parquet 최적화)
+    batch_size = 20000  # 20,000개씩 배치로 저장 (속도 향상을 위해 증가)
     temp_decision_data = []  # 임시 저장용
+    
+    total_periods = end_idx - start_idx - 1
+    print(f"\n📊 처리할 총 캔들 수: {total_periods:,}개")
+    print(f"   시작 인덱스: {start_idx + 1}, 종료 인덱스: {end_idx - 1}")
+    print(f"   예상 소요 시간: 약 {total_periods * 0.01 / 60:.1f}분\n")
+    
+    # 진행률 추적을 위한 변수
+    start_time = time_module.time()
+    last_print_time = start_time
     
     try:
         for i in range(start_idx+1, end_idx):
@@ -455,15 +470,26 @@ def generate_signal_data_with_indicators(
             strategy_executor.execute_all_strategies()
             
             # 신호 수집
-            decisions = strategy_executor.get_signals()
+            signals = strategy_executor.get_signals()
             
-            # 거래 결정
-            current_time = time_manager.get_timestamp_datetime(current_time)
-            decisions.update({'timestamp': current_time, 'indicators': indicators, **series_3m.to_dict()})
+            # 거래 결정 생성 (최종 action 포함)
+            current_time_dt = time_manager.get_timestamp_datetime(current_time)
+            decision_result = decision_engine.decide_trade_realtime(signals)
+            final_decision = decision_result.get("final_decision", {})
+            
+            # decisions 딕셔너리 구성 (기존 신호 + 최종 결정)
+            decisions = signals.copy()
+            decisions.update({
+                'timestamp': current_time_dt,
+                'indicators': indicators,
+                **series_3m.to_dict(),
+                # 최종 결정 정보 추가 (net_score, action, confidence만)
+                'action': final_decision.get('action', 'HOLD'),
+                'net_score': final_decision.get('net_score', 0.0),
+                'confidence': final_decision.get('confidence', 'LOW')
+            })
 
-            if len(decisions.keys()) != 24:
-                raise Exception("decisions 키 수가 58개가 아님.")
-
+            # 키 개수 확인 제거 (속도 향상을 위해 디버깅 코드 제거)
             temp_decision_data.append(decisions)
             
             # 배치 크기마다 Parquet 파일에 저장
@@ -471,13 +497,48 @@ def generate_signal_data_with_indicators(
                 save_decisions_to_parquet(temp_decision_data)
                 temp_decision_data = []  # 임시 데이터 초기화
             
-            # 진행 상태 저장 및 메모리 모니터링 (5000개마다)
-            if (i - start_idx) % 5000 == 0:
-                save_progress_state(i, end_idx)
-                total_periods = end_idx - start_idx
-                processed = i - start_idx + 1
+            # 진행률 표시 (500개마다 또는 2초마다) - 속도 향상을 위해 빈도 감소
+            processed = i - start_idx
+            current_time_elapsed = time_module.time()
+            
+            # 500개마다 또는 2초마다 표시 (속도 향상)
+            should_print = (processed % 500 == 0) or (current_time_elapsed - last_print_time >= 2.0)
+            
+            if should_print:
+                percentage = (processed / total_periods * 100) if total_periods > 0 else 0
                 
-                print(f"   진행률: {processed}/{total_periods} ({processed / total_periods * 100:.1f}%) - 인덱스 {i} 저장됨")
+                # 실제 경과 시간 계산
+                elapsed_seconds = current_time_elapsed - start_time
+                elapsed_minutes = elapsed_seconds / 60
+                
+                # 처리 속도 계산 (개/초)
+                if elapsed_seconds > 0:
+                    speed = processed / elapsed_seconds
+                    remaining_seconds = (total_periods - processed) / speed if speed > 0 else 0
+                    remaining_minutes = remaining_seconds / 60
+                else:
+                    speed = 0
+                    remaining_minutes = 0
+                
+                # 진행 바 생성
+                bar_length = 50
+                filled = int(bar_length * percentage / 100)
+                bar = '█' * filled + '░' * (bar_length - filled)
+                
+                # 시간 포맷팅
+                elapsed_str = f"{int(elapsed_minutes)}분 {int(elapsed_seconds % 60)}초"
+                remaining_str = f"{int(remaining_minutes)}분 {int(remaining_seconds % 60)}초" if remaining_minutes > 0 else "계산 중..."
+                
+                print(f"\r🔄 진행률: [{bar}] {percentage:5.1f}% ({processed:,}/{total_periods:,}) | "
+                      f"경과: {elapsed_str} | 남은 시간: {remaining_str} | "
+                      f"속도: {speed:.1f}개/초", end='', flush=True)
+                
+                last_print_time = current_time_elapsed
+            
+            # 진행 상태 저장 (10000개마다) - 속도 향상을 위해 빈도 감소
+            if processed % 10000 == 0 and processed > 0:
+                save_progress_state(i, end_idx)
+                print()  # 새 줄
         
         # 남은 decision 데이터가 있으면 저장
         if temp_decision_data:

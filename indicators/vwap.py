@@ -12,7 +12,6 @@ from datetime import datetime, timedelta
 
 from managers.data_manager import get_data_manager
 from managers.time_manager import get_time_manager
-from utils.session_manager import get_session_manager
 
 class SessionVWAP:
     """세션 기반 VWAP 관리 클래스"""
@@ -21,7 +20,6 @@ class SessionVWAP:
         """VWAP 초기화"""
         self.symbol = symbol
         self.time_manager = get_time_manager()
-        self.session_manager = get_session_manager()
         
         # VWAP 데이터
         self.current_vwap = 0.0
@@ -41,16 +39,11 @@ class SessionVWAP:
     
     def _initialize_vwap(self):
         """초기 데이터 자동 로딩"""
-        is_active = self.session_manager.is_session_active()
-        session_config = self.session_manager.get_indicator_mode_config()
-
-        if is_active and session_config.get('start_time') + timedelta(minutes=30) <= self.time_manager.get_current_time():
-            self._load_session_data(session_config)
-        else:
-            self._load_recent_data()
+        # 세션 관련 로직 제거 - 최근 데이터만 로드
+        self._load_recent_data()
         
-        # 초기 세션 이름 설정
-        self.last_session_name = session_config.get('session_name', 'UNKNOWN')
+        # 초기 세션 이름 설정 (더 이상 사용하지 않음)
+        self.last_session_name = 'UNKNOWN'
     
     def _load_session_data(self, session_config: Dict[str, Any]):
         """세션 시작부터 현재까지 데이터 로딩"""
@@ -76,28 +69,26 @@ class SessionVWAP:
             traceback.print_exc()
     
     def _load_recent_data(self):
-        """세션 외 시간용 데이터 로딩 - 이전 세션 종료 시점부터 현재까지"""
+        """최근 데이터 로딩 - 최근 24시간 데이터 사용"""
         try:
-            
             data_manager = get_data_manager()
-            previous_session_end = self.session_manager.get_previous_session_close()
-
-            if previous_session_end:
-                print(f"📊 세션 외 시간: 이전 세션 종료 시점({self.time_manager.format_datetime(previous_session_end)})부터 현재({self.time_manager.format_datetime(self.target_time)})까지 데이터 로딩")
-                df = data_manager.get_data_range(previous_session_end, self.target_time)
+            # 최근 24시간 데이터 로드
+            start_time = self.target_time - timedelta(hours=24)
+            
+            df = data_manager.get_data_range(start_time, self.target_time)
 
             if df is None or df.empty:
-                print("❌ 세션 외 시간 데이터 로드 실패")
+                print("❌ 최근 데이터 로드 실패")
                 return
             
             # 초기 로딩된 데이터 수 저장
             self.initial_data_count = len(df)
             
-            # 세션 외 시간 데이터로 VWAP 계산
+            # VWAP 계산
             self._calculate_session_vwap(df)
         
         except Exception as e:
-            print(f"❌ 세션 외 시간 데이터 로드 오류: {e}")
+            print(f"❌ 최근 데이터 로드 오류: {e}")
             import traceback
             traceback.print_exc()
     
@@ -155,11 +146,6 @@ class SessionVWAP:
         """새로운 캔들로 VWAP 업데이트"""
         try:
             self.target_time = self.time_manager.ensure_utc(candle_data.name)
-            # 세션 상태 업데이트
-            session_config = self.session_manager.get_indicator_mode_config()
-            
-            # 세션 변경 확인 및 리셋
-            self._check_session_reset(session_config)
             
             # 새로운 캔들 추가
             self.session_data.append(candle_data)
@@ -168,52 +154,22 @@ class SessionVWAP:
             # VWAP 재계산
             df = pd.DataFrame(self.session_data)
             self._calculate_session_vwap(df)
-            
-            # 세션 정보 출력
-            session_config.get('elapsed_minutes', 0)
 
         except Exception as e:
             print(f"❌ VWAP 업데이트 오류: {e}")
     
-    def _check_session_reset(self, session_config: Dict[str, Any]):
-        """세션 변경 시 VWAP 리셋 확인"""
-        try:
-            current_session = session_config.get('session_name', 'UNKNOWN')
-            
-            # 이전 세션과 다른 경우 리셋
-            if hasattr(self, 'last_session_name') and self.last_session_name != current_session:
-                print(f"🔄 세션 변경 감지: {self.last_session_name} → {current_session}")
-                print("🔄 VWAP 세션 데이터 리셋")
-                self.reset_session()
-            
-            # 현재 세션 이름 저장
-            self.last_session_name = current_session
-            
-        except Exception as e:
-            print(f"❌ 세션 리셋 확인 오류: {e}")
     
     def _update_vwap_result(self):
         """VWAP 결과 업데이트"""
         try:
-            session_config = self.session_manager.get_indicator_mode_config()
-            
-        
             result = {
                 "vwap": self.current_vwap,
                 "vwap_std": self.current_vwap_std,
                 "total_volume": sum([candle.get('volume', 0) for candle in self.session_data]),
                 "data_count": self.processed_candle_count,
                 "last_update": self.target_time.isoformat(),
-                "mode": "session" if session_config['use_session_mode'] else "outside_session"
+                "mode": "lookback"
             }
-            
-            # 세션 정보 추가
-            if session_config['use_session_mode']:
-                result.update({
-                    "session": session_config.get('session_name'),
-                    "session_start": session_config.get('start_time').isoformat() if session_config.get('start_time') else None,
-                    "elapsed_minutes": session_config.get('elapsed_minutes', 0)
-                })
             
             self.cached_result = result
             self.last_update_time = self.target_time

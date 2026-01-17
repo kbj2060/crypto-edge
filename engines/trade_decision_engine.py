@@ -16,7 +16,7 @@ class TradeDecisionEngine:
     STRATEGY_CATEGORIES = {
         "SHORT_TERM": {  # 3분봉 기반, 5-30분 보유
             "strategies": ["VOL_SPIKE", "ORDERFLOW_CVD", "VPVR_MICRO",
-                            "SESSION", "LIQUIDITY_GRAB", "VWAP_PINBALL", "ZSCORE_MEAN_REVERSION"],
+                            "LIQUIDITY_GRAB", "VWAP_PINBALL", "ZSCORE_MEAN_REVERSION"],
             "weight": 0.60,
             "timeframe": "3m",
             "max_holding_minutes": 30,
@@ -938,7 +938,7 @@ class TradeDecisionEngine:
             
             # 개별 전략의 score 추가
             all_strategies = [
-                'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+                'vol_spike', 'orderflow_cvd', 'vpvr_micro', 
                 'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
                 'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
                 'support_resistance', 'ema_confluence',
@@ -946,7 +946,7 @@ class TradeDecisionEngine:
             ]
             strategy_name_mapping = {
                 'vol_spike': 'VOL_SPIKE', 'orderflow_cvd': 'ORDERFLOW_CVD', 'vpvr_micro': 'VPVR_MICRO',
-                'session': 'SESSION', 'liquidity_grab': 'LIQUIDITY_GRAB', 'vwap_pinball': 'VWAP_PINBALL',
+                'liquidity_grab': 'LIQUIDITY_GRAB', 'vwap_pinball': 'VWAP_PINBALL',
                 'zscore_mean_reversion': 'ZSCORE_MEAN_REVERSION', 'multi_timeframe': 'MULTI_TIMEFRAME',
                 'htf_trend': 'HTF_TREND', 'bollinger_squeeze': 'BOLLINGER_SQUEEZE',
                 'support_resistance': 'SUPPORT_RESISTANCE', 'ema_confluence': 'EMA_CONFLUENCE',
@@ -1022,7 +1022,7 @@ class TradeDecisionEngine:
         # 개별 전략의 score를 meta_decision에 추가 (extract_features에서 사용)
         # 모든 전략 목록
         all_strategies = [
-            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 
             'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
             'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
             'support_resistance', 'ema_confluence',
@@ -1034,7 +1034,6 @@ class TradeDecisionEngine:
             'vol_spike': 'VOL_SPIKE',
             'orderflow_cvd': 'ORDERFLOW_CVD',
             'vpvr_micro': 'VPVR_MICRO',
-            'session': 'SESSION',
             'liquidity_grab': 'LIQUIDITY_GRAB',
             'vwap_pinball': 'VWAP_PINBALL',
             'zscore_mean_reversion': 'ZSCORE_MEAN_REVERSION',

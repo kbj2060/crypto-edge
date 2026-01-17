@@ -12,7 +12,6 @@ from signals.vwap_pinball_strategy import VWAPPinballCfg
 from managers.time_manager import get_time_manager
 
 # 전략 imports
-from signals.session_or_lite import SessionORLite
 from signals.vpvr_golden_strategy import LVNGoldenPocket
 from signals.vpvr_micro import VPVRMicro, VPVRConfig
 from signals.bollinger_squeeze_strategy import BollingerSqueezeStrategy
@@ -34,9 +33,6 @@ class StrategyExecutor:
         self.signals = {}
         
         # 전략 인스턴스들 직접 초기화
-        # 세션 전략
-        self.session_strategy = SessionORLite()
-        
         # VPVR 골든 포켓 전략
         self.vpvr_golden_strategy = LVNGoldenPocket()
         
@@ -85,7 +81,6 @@ class StrategyExecutor:
         """모든 전략 실행"""
         self.signals = {}  # 시그널 초기화
         
-        self._execute_session_strategy()
         self._execute_vpvr_golden_strategy()
         self._execute_bollinger_squeeze_strategy()
         self._execute_orderflow_cvd_strategy()
@@ -322,32 +317,6 @@ class StrategyExecutor:
             self.signals['ZSCORE_MEAN_REVERSION'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
-            }
-
-    def _execute_session_strategy(self):
-        """세션 전략 실행"""
-        if not self.session_strategy:
-            return
-        
-        df_3m = self.data_manager.get_latest_data(count=2)
-        result = self.session_strategy.on_kline_close_3m(df_3m)
-        
-        if result:
-            self.signals['SESSION'] = {
-                'action': result.get('action', 'UNKNOWN'),
-                'score': result.get('score', 0), 
-                'entry': result.get('entry', 0),
-                'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
-            }
-        else:
-            # result가 없을 때 기본 결과값 저장
-            self.signals['SESSION'] = {
-                'action': 'HOLD',
-                'score': 0,
-                'entry': 0,
-                'stop': 0,
                 'timestamp': self.time_manager.get_current_time()
             }
 

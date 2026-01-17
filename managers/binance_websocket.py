@@ -14,27 +14,44 @@ from engines.trade_decision_engine import TradeDecisionEngine
 
 # 기존 imports
 from managers.data_manager import get_data_manager
-from indicators.global_indicators import get_all_indicators, get_atr, get_daily_levels, get_global_indicator_manager, get_opening_range, get_vpvr, get_vwap
+from indicators.global_indicators import get_all_indicators, get_atr, get_daily_levels, get_global_indicator_manager, get_vpvr, get_vwap
 from utils.display_utils import print_decision_interpretation
 from utils.telegram import send_telegram_message
 from managers.time_manager import get_time_manager
-from utils.session_manager import get_session_manager
 from utils.decision_logger import get_decision_logger
 from managers.binance_dataloader import BinanceDataLoader
+from managers.binance_trader import BinanceTrader
+from managers.trade_executor import TradeExecutor
 
 class BinanceWebSocket:
     """바이낸스 웹소켓 클라이언트 - 실시간 청산 데이터 및 Kline 데이터 수집"""
     
-    def __init__(self, symbol: str = "ETHUSDT", strategy_executor: Optional[StrategyExecutor] = None):
-        """웹소켓 초기화"""
+    def __init__(
+        self,
+        symbol: str = "ETHUSDT",
+        strategy_executor: Optional[StrategyExecutor] = None,
+        enable_trading: bool = False,
+        simulation_mode: bool = True
+    ):
+        """
+        웹소켓 초기화
+        
+        Args:
+            symbol: 거래 심볼
+            strategy_executor: 전략 실행기
+            enable_trading: 실제 거래 활성화 여부
+            simulation_mode: 시뮬레이션 모드 (실제 주문 실행 안 함)
+        """
         self.symbol = symbol.lower()
         self.ws_url = "wss://fstream.binance.com/ws"
         self.running = False
+        self.enable_trading = enable_trading
+        self.simulation_mode = simulation_mode
         
         # 콜백 함수들
         self.callbacks = {
             'liquidation': [],
-            'kline_3m': [self.update_session_status]
+            'kline_3m': []
         }
         
         # 리팩토링된 컴포넌트들
@@ -45,27 +62,36 @@ class BinanceWebSocket:
         
         # 기존 매니저들
         self.time_manager = get_time_manager()
-        self.session_manager = get_session_manager()
         self.global_manager = get_global_indicator_manager()
         self.data_manager = get_data_manager()
         self.data_loader = BinanceDataLoader()
         self.decision_logger = get_decision_logger(symbol)
+        
+        # 거래 실행기 초기화
+        self.trade_executor = None
+        if self.enable_trading:
+            try:
+                binance_trader = BinanceTrader(simulation_mode=self.simulation_mode)
+                self.trade_executor = TradeExecutor(
+                    binance_trader=binance_trader,
+                    symbol=symbol.upper()
+                )
+                print(f"✅ 거래 실행기 초기화 완료 ({'시뮬레이션' if simulation_mode else '실제 거래'} 모드)")
+            except Exception as e:
+                print(f"⚠️ 거래 실행기 초기화 실패: {e}")
+                print("   거래 없이 계속 실행됩니다.")
 
         # 데이터 저장소
         self.liquidation_bucket = []
         self.max_liquidations = 1000
         
-        # 세션 상태
-        self._session_activated = self.session_manager.is_session_active()
+        # 세션 상태 (더 이상 사용하지 않음)
+        self._session_activated = False
         self.queue = asyncio.Queue()
 
         # 카운트다운 태스크
         self.countdown_task = None
 
-    def update_session_status(self, price_data: Dict):
-        """세션 상태 업데이트"""
-        self.session_manager.update_session()
-        self._session_activated = self.session_manager.is_session_active()
 
     def add_callback(self, event_type: str, callback: Callable):
         """콜백 함수 등록"""
@@ -198,6 +224,24 @@ class BinanceWebSocket:
         
         if action and action != "HOLD":
             send_telegram_message(decision)
+        
+        # 거래 실행 (활성화된 경우)
+        if self.enable_trading and self.trade_executor and final_decision:
+            if final_decision.get("action") != "HOLD":
+                # 메타 라벨링 결과 확인
+                meta_labeling = final_decision.get("meta", {}).get("meta_labeling", {})
+                should_execute = meta_labeling.get("should_execute", False)
+                
+                if should_execute:
+                    try:
+                        self.trade_executor.execute_decision(final_decision)
+                    except Exception as e:
+                        print(f"❌ 거래 실행 오류: {e}")
+                        import traceback
+                        traceback.print_exc()
+                else:
+                    probability = meta_labeling.get("probability", 0.0)
+                    print(f"⚠️ 메타 라벨링에 의해 거래 차단 (확률: {probability:.1%})")
 
         self._execute_kline_callbacks(price_data)
 

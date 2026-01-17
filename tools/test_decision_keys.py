@@ -29,7 +29,6 @@ def test_decision_keys():
     # 테스트용 신호 생성
     test_signals = {
         "short_term": {
-            "session_or": {"action": "BUY", "score": 0.7, "entry": 2300, "stop": 2280},
             "orderflow_cvd": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None},
             "vwap_pinball": {"action": "SELL", "score": 0.6, "entry": 2295, "stop": 2305},
             "vol_spike": {"action": "HOLD", "score": 0.0, "entry": None, "stop": None},

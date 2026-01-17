@@ -39,19 +39,20 @@ def flatten_decision_data(decision_data: Dict[str, Any]) -> Dict[str, Any]:
         flattened[f'indicator_{key}'] = safe_convert(value)
     
     # 전략별 decision 정보를 평면화 (최상위 키들 중에서 전략 정보 찾기)
-    strategy_keys = [k for k in decision_data.keys() if k not in ['timestamp', 'indicators', 'open', 'high', 'low', 'close', 'volume', 'quote_volume', 'decisions']]
+    strategy_keys = [k for k in decision_data.keys() if k not in ['timestamp', 'indicators', 'open', 'high', 'low', 'close', 'volume', 'quote_volume', 'decisions', 'action', 'net_score', 'confidence']]
     
     for strategy_name in strategy_keys:
         strategy_data = decision_data.get(strategy_name, {})
         if isinstance(strategy_data, dict):
             prefix = f"{strategy_name.lower()}_"
             
-            # 기본 전략 정보
-            flattened[f'{prefix}action'] = safe_convert(strategy_data.get('action'))
+            # 전략 score만 저장
             flattened[f'{prefix}score'] = safe_convert(strategy_data.get('score'))
-            flattened[f'{prefix}confidence'] = safe_convert(strategy_data.get('confidence'))
-            flattened[f'{prefix}entry'] = safe_convert(strategy_data.get('entry'))
-            flattened[f'{prefix}stop'] = safe_convert(strategy_data.get('stop'))
+    
+    # 최종 결정 정보 추가 (net_score, action, confidence만)
+    flattened['action'] = safe_convert(decision_data.get('action'))
+    flattened['net_score'] = safe_convert(decision_data.get('net_score'))
+    flattened['confidence'] = safe_convert(decision_data.get('confidence'))
     
     return flattened
 

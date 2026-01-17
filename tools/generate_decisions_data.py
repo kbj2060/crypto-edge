@@ -135,7 +135,7 @@ def main():
     # CSV가 없으면 API에서 로드
     if price_data is None:
         print("⚠️ CSV 파일이 없어 API에서 데이터를 가져옵니다...")
-        price_data, price_data_15m, price_data_1h = load_ethusdt_data_from_api(months_back=3)
+        price_data, price_data_15m, price_data_1h = load_ethusdt_data_from_api(months_back=1)  # 3달에서 1달로 변경
     
     if price_data is None:
         print("❌ 데이터 로드 실패")

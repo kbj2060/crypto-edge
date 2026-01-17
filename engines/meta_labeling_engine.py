@@ -48,7 +48,7 @@ class MetaLabelingEngine:
         self.min_samples_for_training = min_samples_for_training
         self.confidence_threshold = confidence_threshold
         # 기본 경로: data 폴더 (기존 engines 폴더도 지원)
-        self.model_save_path = model_save_path or "data/meta_labeling_model.pkl"
+        self.model_save_path = model_save_path or "data/meta_labeling_nn_model.pkl"
         
         self.model = None
         self.scaler = StandardScaler()
@@ -102,7 +102,7 @@ class MetaLabelingEngine:
         # 모든 전략 목록 (STRATEGY_CATEGORIES 기반)
         all_strategies = [
             # SHORT_TERM
-            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 
             'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
             # MEDIUM_TERM
             'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
@@ -369,8 +369,25 @@ class MetaLabelingEngine:
         actual_returns = []
         
         for idx, row in df.iterrows():
-            # 최종 action 추출
-            action, net_score, confidence = self._extract_final_action_from_strategies(row)
+            # 최종 action 추출 (저장된 최종 action 우선 사용)
+            if 'action' in row.index and pd.notna(row.get('action')):
+                # 저장된 최종 action 사용 (decision_generator에서 저장한 것)
+                action = str(row.get('action')).upper()
+                if action not in ['LONG', 'SHORT', 'HOLD']:
+                    # 유효하지 않은 action이면 fallback
+                    action, net_score, confidence = self._extract_final_action_from_strategies(row)
+                else:
+                    # 저장된 net_score와 confidence 사용
+                    net_score = float(row.get('net_score', 0.0)) if pd.notna(row.get('net_score')) else 0.0
+                    confidence_str = str(row.get('confidence', 'LOW')).upper()
+                    if confidence_str in ['HIGH', 'MEDIUM', 'LOW']:
+                        confidence = confidence_str
+                    else:
+                        confidence = 'LOW'
+            else:
+                # 저장된 action이 없으면 전략별 action에서 추출 (fallback)
+                action, net_score, confidence = self._extract_final_action_from_strategies(row)
+            
             extracted_actions.append(action)
             extracted_scores.append(net_score)
             
@@ -635,6 +652,23 @@ class MetaLabelingEngine:
         # 특성 추출
         try:
             features = self.extract_features(decision, market_data)
+            
+            # feature 개수 확인 및 조정
+            expected_features = self.scaler.n_features_in_ if hasattr(self.scaler, 'n_features_in_') else len(self.feature_names) if self.feature_names else 16
+            actual_features = len(features)
+            
+            if actual_features != expected_features:
+                print(f"⚠️ Feature 개수 불일치: 예상 {expected_features}개, 실제 {actual_features}개")
+                # feature 개수를 맞춰주기 (부족하면 0으로 채우기, 많으면 자르기)
+                if actual_features < expected_features:
+                    # 부족한 feature를 0으로 채우기
+                    features = np.pad(features, (0, expected_features - actual_features), 'constant', constant_values=0.0)
+                    print(f"   → 부족한 {expected_features - actual_features}개 feature를 0으로 채웠습니다.")
+                else:
+                    # 많은 feature를 자르기
+                    features = features[:expected_features]
+                    print(f"   → 초과한 {actual_features - expected_features}개 feature를 제거했습니다.")
+            
             features_scaled = self.scaler.transform([features])
             
             # 예측
@@ -719,9 +753,12 @@ class MetaLabelingEngine:
         if path:
             possible_paths.append(path)
         else:
-            # 기본 경로들
+            # 기본 경로들 (NN 모델도 포함)
             possible_paths.append(self.model_save_path)  # data/meta_labeling_model.pkl
+            possible_paths.append("data/meta_labeling_model.pkl")
+            possible_paths.append("data/meta_labeling_nn_model.pkl")  # NN 모델도 시도
             possible_paths.append("engines/meta_labeling_model.pkl")  # 기존 경로 (하위 호환성)
+            possible_paths.append("engines/meta_labeling_nn_model.pkl")  # NN 모델 기존 경로
         
         for load_path in possible_paths:
             model_file = Path(load_path)
@@ -730,17 +767,99 @@ class MetaLabelingEngine:
                     with open(load_path, 'rb') as f:
                         data = pickle.load(f)
                     
+                    # 모델 파일 형식 확인
+                    if not isinstance(data, dict):
+                        print(f"⚠️ 모델 파일 형식 오류 ({load_path}): 딕셔너리가 아닙니다.")
+                        continue
+                    
+                    # 필수 키 확인
+                    if 'model' not in data:
+                        print(f"⚠️ 모델 파일에 'model' 키가 없습니다 ({load_path})")
+                        continue
+                    
                     self.model = data['model']
-                    self.scaler = data['scaler']
-                    self.feature_names = data.get('feature_names', [])
                     self.model_type = data.get('model_type', self.model_type)
                     self.is_trained = data.get('is_trained', False)
+                    
+                    # scaler 로드 (모델 파일에 있거나 별도 파일에서)
+                    if 'scaler' in data:
+                        # 오래된 형식: 모델 파일에 scaler 포함
+                        self.scaler = data['scaler']
+                    else:
+                        # 새로운 형식: 별도 파일에서 로드 시도
+                        # 모델 파일 이름에 따라 scaler 파일 이름 추정
+                        model_name = Path(load_path).stem  # 예: "meta_labeling_nn_model" 또는 "meta_labeling_model"
+                        if "nn" in model_name:
+                            # NN 모델인 경우
+                            scaler_paths = [
+                                str(Path(load_path).parent / "meta_labeling_nn_scaler.pkl"),
+                                "data/meta_labeling_nn_scaler.pkl",
+                                "engines/meta_labeling_nn_scaler.pkl"
+                            ]
+                        else:
+                            # 일반 모델인 경우
+                            scaler_paths = [
+                                str(Path(load_path).parent / "meta_labeling_scaler.pkl"),
+                                "data/meta_labeling_scaler.pkl",
+                                "engines/meta_labeling_scaler.pkl"
+                            ]
+                        
+                        scaler_loaded = False
+                        for scaler_path in scaler_paths:
+                            if Path(scaler_path).exists():
+                                try:
+                                    with open(scaler_path, 'rb') as sf:
+                                        self.scaler = pickle.load(sf)
+                                    scaler_loaded = True
+                                    break
+                                except Exception as e:
+                                    continue
+                        
+                        if not scaler_loaded:
+                            print(f"⚠️ Scaler 파일을 찾을 수 없습니다. 시도한 경로: {scaler_paths}")
+                            continue
+                    
+                    # feature_names 로드
+                    if 'feature_names' in data:
+                        self.feature_names = data['feature_names']
+                    else:
+                        # 별도 파일에서 로드 시도
+                        # 모델 파일 이름에 따라 feature_names 파일 이름 추정
+                        model_name = Path(load_path).stem
+                        if "nn" in model_name:
+                            # NN 모델인 경우
+                            feature_names_paths = [
+                                str(Path(load_path).parent / "meta_labeling_nn_feature_names.pkl"),
+                                "data/meta_labeling_nn_feature_names.pkl",
+                                "engines/meta_labeling_nn_feature_names.pkl"
+                            ]
+                        else:
+                            # 일반 모델인 경우
+                            feature_names_paths = [
+                                str(Path(load_path).parent / "meta_labeling_feature_names.pkl"),
+                                "data/meta_labeling_feature_names.pkl",
+                                "engines/meta_labeling_feature_names.pkl"
+                            ]
+                        
+                        for feature_names_path in feature_names_paths:
+                            if Path(feature_names_path).exists():
+                                try:
+                                    with open(feature_names_path, 'rb') as fnf:
+                                        self.feature_names = pickle.load(fnf)
+                                    break
+                                except Exception:
+                                    continue
+                        else:
+                            self.feature_names = []
                     
                     # 로드된 경로를 저장 경로로 업데이트
                     self.model_save_path = str(load_path)
                     
                     print(f"📂 모델 로드 완료: {load_path}")
                     return True
+                except KeyError as e:
+                    print(f"⚠️ 모델 로드 실패 ({load_path}): {e}")
+                    continue
                 except Exception as e:
                     print(f"⚠️ 모델 로드 실패 ({load_path}): {e}")
                     continue

@@ -83,7 +83,7 @@ class MetaLabelingNNEngine:
         # 모든 전략 목록 (STRATEGY_CATEGORIES 기반)
         all_strategies = [
             # SHORT_TERM
-            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 
             'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
             # MEDIUM_TERM
             'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
@@ -172,7 +172,7 @@ class MetaLabelingNNEngine:
         
         # 특성 이름 저장 (전략 score만 사용)
         all_strategies = [
-            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 
             'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
             'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
             'support_resistance', 'ema_confluence',
@@ -290,6 +290,23 @@ class MetaLabelingNNEngine:
         try:
             # 특성 추출
             features = self.extract_features(decision, market_data, indicators)
+            
+            # feature 개수 확인 및 조정
+            expected_features = self.scaler.n_features_in_ if hasattr(self.scaler, 'n_features_in_') else len(self.feature_names) if self.feature_names else 16
+            actual_features = len(features)
+            
+            if actual_features != expected_features:
+                print(f"⚠️ Feature 개수 불일치: 예상 {expected_features}개, 실제 {actual_features}개")
+                # feature 개수를 맞춰주기 (부족하면 0으로 채우기, 많으면 자르기)
+                if actual_features < expected_features:
+                    # 부족한 feature를 0으로 채우기
+                    features = np.pad(features, (0, expected_features - actual_features), 'constant', constant_values=0.0)
+                    print(f"   → 부족한 {expected_features - actual_features}개 feature를 0으로 채웠습니다.")
+                else:
+                    # 많은 feature를 자르기
+                    features = features[:expected_features]
+                    print(f"   → 초과한 {actual_features - expected_features}개 feature를 제거했습니다.")
+            
             features_scaled = self.scaler.transform([features])
             
             # 예측
@@ -362,28 +379,97 @@ class MetaLabelingNNEngine:
         scaler_path = Path(self.SCALER_PATH)
         feature_names_path = Path(self.FEATURE_NAMES_PATH)
         
-        if not all([model_path.exists(), scaler_path.exists(), feature_names_path.exists()]):
-            print("⚠️ 저장된 모델 파일이 없습니다.")
-            return False
+        # 모델 파일 존재 확인
+        if not model_path.exists():
+            # 이전 경로도 시도
+            old_model_path = Path("engines/meta_labeling_nn_model.pkl")
+            if old_model_path.exists():
+                self.MODEL_PATH = str(old_model_path)
+                model_path = old_model_path
+            else:
+                print(f"⚠️ 모델 파일을 찾을 수 없습니다. 시도한 경로: ['{self.MODEL_PATH}', 'engines/meta_labeling_nn_model.pkl']")
+                return False
+        
+        # scaler 파일 존재 확인
+        if not scaler_path.exists():
+            old_scaler_path = Path("engines/meta_labeling_nn_scaler.pkl")
+            if old_scaler_path.exists():
+                self.SCALER_PATH = str(old_scaler_path)
+                scaler_path = old_scaler_path
+            else:
+                print(f"⚠️ Scaler 파일을 찾을 수 없습니다. 시도한 경로: ['{self.SCALER_PATH}', 'engines/meta_labeling_nn_scaler.pkl']")
+                return False
+        
+        # feature_names 파일 존재 확인
+        if not feature_names_path.exists():
+            old_feature_names_path = Path("engines/meta_labeling_nn_feature_names.pkl")
+            if old_feature_names_path.exists():
+                self.FEATURE_NAMES_PATH = str(old_feature_names_path)
+                feature_names_path = old_feature_names_path
+            else:
+                print(f"⚠️ Feature names 파일을 찾을 수 없습니다. 시도한 경로: ['{self.FEATURE_NAMES_PATH}', 'engines/meta_labeling_nn_feature_names.pkl']")
+                return False
         
         try:
+            # 모델 파일 로드
             with open(self.MODEL_PATH, 'rb') as f:
                 checkpoint = pickle.load(f)
             
-            self.model = checkpoint['model']
-            self.input_dim = checkpoint['input_dim']
-            self.hidden_layer_sizes = checkpoint['hidden_layer_sizes']
-            self.dropout = checkpoint['dropout']
-            self.is_trained = checkpoint['is_trained']
+            # checkpoint가 딕셔너리인지 확인
+            if not isinstance(checkpoint, dict):
+                print(f"❌ 모델 파일 형식 오류: 딕셔너리가 아닙니다.")
+                return False
             
-            with open(self.SCALER_PATH, 'rb') as f:
-                self.scaler = pickle.load(f)
+            # 필수 키 확인
+            required_keys = ['model', 'input_dim', 'hidden_layer_sizes', 'dropout', 'is_trained']
+            missing_keys = [key for key in required_keys if key not in checkpoint]
+            if missing_keys:
+                print(f"❌ 모델 파일에 필수 키가 없습니다: {missing_keys}")
+                return False
             
-            with open(self.FEATURE_NAMES_PATH, 'rb') as f:
-                self.feature_names = pickle.load(f)
+            self.model = checkpoint.get('model')
+            self.input_dim = checkpoint.get('input_dim')
+            self.hidden_layer_sizes = checkpoint.get('hidden_layer_sizes')
+            self.dropout = checkpoint.get('dropout')
+            self.is_trained = checkpoint.get('is_trained')
+            
+            # scaler 로드 (별도 파일 또는 checkpoint에서)
+            if 'scaler' in checkpoint:
+                # 오래된 형식: checkpoint에 scaler 포함
+                self.scaler = checkpoint['scaler']
+            else:
+                # 새로운 형식: 별도 파일에서 로드
+                try:
+                    with open(self.SCALER_PATH, 'rb') as f:
+                        self.scaler = pickle.load(f)
+                except FileNotFoundError:
+                    print(f"⚠️ Scaler 파일을 찾을 수 없습니다: {self.SCALER_PATH}")
+                    return False
+            
+            # feature_names 로드 (별도 파일 또는 checkpoint에서)
+            if 'feature_names' in checkpoint:
+                # 오래된 형식: checkpoint에 feature_names 포함
+                self.feature_names = checkpoint['feature_names']
+            else:
+                # 새로운 형식: 별도 파일에서 로드
+                try:
+                    with open(self.FEATURE_NAMES_PATH, 'rb') as f:
+                        self.feature_names = pickle.load(f)
+                except FileNotFoundError:
+                    print(f"⚠️ Feature names 파일을 찾을 수 없습니다: {self.FEATURE_NAMES_PATH}")
+                    return False
             
             print(f"📂 모델 로드 완료: {self.MODEL_PATH}")
             return True
+        except KeyError as e:
+            print(f"❌ 모델 로드 실패 ({self.MODEL_PATH}): {e}")
+            print("   모델 파일 형식이 올바르지 않습니다. 모델을 재학습하세요.")
+            return False
+        except FileNotFoundError as e:
+            print(f"❌ 파일을 찾을 수 없습니다: {e}")
+            return False
         except Exception as e:
             print(f"❌ 모델 로드 실패: {e}")
+            import traceback
+            traceback.print_exc()
             return False

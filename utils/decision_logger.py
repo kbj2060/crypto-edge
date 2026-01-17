@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 from datetime import datetime, timezone, timedelta
 from managers.time_manager import get_time_manager
-from utils.session_manager import get_session_manager
 
 
 class DecisionLogger:
@@ -26,7 +25,6 @@ class DecisionLogger:
         self.logs_dir = Path(logs_dir)
         self.logs_dir.mkdir(exist_ok=True)
         self.time_manager = get_time_manager()
-        self.session_manager = get_session_manager()
         
         # 한국 시간대 (UTC+9)
         self.kst_timezone = timezone(timedelta(hours=9))
