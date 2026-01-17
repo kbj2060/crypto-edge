@@ -87,80 +87,39 @@ class MetaLabelingEngine:
     
     def extract_features(self, decision: Dict[str, Any], market_data: Optional[Dict[str, Any]] = None) -> np.ndarray:
         """
-        결정에서 특성 추출
+        결정에서 특성 추출 - 전략 score만 사용
         
         Args:
             decision: 거래 결정 딕셔너리
-            market_data: 시장 데이터 (선택적)
+            market_data: 시장 데이터 (사용하지 않음)
             
         Returns:
-            특성 벡터
+            특성 벡터 (16개 전략 score만)
         """
         features = []
         
-        # 1. 결정 관련 특성
-        net_score = decision.get("net_score", 0.0)
-        action = decision.get("action", "HOLD")
+        # 개별 전략의 score 값만 사용
+        # 모든 전략 목록 (STRATEGY_CATEGORIES 기반)
+        all_strategies = [
+            # SHORT_TERM
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
+            # MEDIUM_TERM
+            'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
+            'support_resistance', 'ema_confluence',
+            # LONG_TERM
+            'oi_delta', 'vpvr', 'ichimoku', 'funding_rate'
+        ]
         
-        # Action 인코딩
-        action_encoded = {"LONG": 1, "SHORT": -1, "HOLD": 0}.get(action, 0)
-        features.append(action_encoded)
-        features.append(net_score)
-        features.append(abs(net_score))  # 절대값
-        
-        # 2. 신뢰도 관련 특성
-        meta = decision.get("meta", {})
-        synergy_meta = meta.get("synergy_meta", {})
-        
-        confidence = synergy_meta.get("confidence", "LOW")
-        confidence_map = {"HIGH": 0.8, "MEDIUM": 0.5, "LOW": 0.2}
-        confidence_value = confidence_map.get(confidence, 0.2)
-        features.append(confidence_value)
-        
-        # 3. 전략 사용 수
-        strategies_used = decision.get("strategies_used", [])
-        features.append(len(strategies_used))
-        
-        # 4. 시너지 메타 특성
-        buy_score = synergy_meta.get("buy_score", 0.0)
-        sell_score = synergy_meta.get("sell_score", 0.0)
-        signals_used = synergy_meta.get("signals_used", 0)
-        
-        features.append(buy_score)
-        features.append(sell_score)
-        features.append(signals_used)
-        features.append(abs(buy_score - sell_score))  # 점수 차이
-        
-        # 5. 포지션 크기 관련
-        sizing = decision.get("sizing", {})
-        risk_usd = sizing.get("risk_usd", 0.0)
-        leverage = decision.get("leverage", 1)
-        
-        features.append(risk_usd)
-        features.append(leverage)
-        
-        # 6. 카테고리 정보
-        category = decision.get("category", "")
-        category_map = {"SHORT_TERM": 0, "MEDIUM_TERM": 1, "LONG_TERM": 2}
-        category_encoded = category_map.get(category, 0)
-        features.append(category_encoded)
-        
-        # 7. 시장 데이터 특성 (있는 경우)
-        if market_data:
-            # ATR, 볼륨, 변동성 등 추가 가능
-            atr = market_data.get("atr", 0.0)
-            volume = market_data.get("volume", 0.0)
-            volatility = market_data.get("volatility", 0.0)
+        # 각 전략의 score 값만 추출 (평면화된 데이터에서)
+        for strategy_name in all_strategies:
+            strategy_score_key = f"{strategy_name}_score"
             
-            features.append(atr)
-            features.append(volume)
-            features.append(volatility)
-        else:
-            # 기본값
-            features.extend([0.0, 0.0, 0.0])
-        
-        # 충돌/시너지 특성 제거: 시그널 특성만 사용 (15개 특성)
-        # conflict_severity, directional_consensus, active_categories 제거됨
+            # decision 딕셔너리에서 직접 찾기 (평면화된 형태)
+            strategy_score = decision.get(strategy_score_key, 0.0)
+            
+            # score만 특성으로 추가
+            features.append(float(strategy_score) if strategy_score is not None else 0.0)
         
         return np.array(features, dtype=np.float32)
     
@@ -566,12 +525,18 @@ class MetaLabelingEngine:
         y = np.array(y)
         
         # 특성 이름 저장 (시그널 특성만, 충돌/시너지 특성 제외)
-        self.feature_names = [
-            'action_encoded', 'net_score', 'abs_net_score', 'confidence',
-            'num_strategies', 'buy_score', 'sell_score', 'signals_used',
-            'score_diff', 'risk_usd', 'leverage', 'category',
-            'atr', 'volume', 'volatility'
+        all_strategies = [
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
+            'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
+            'support_resistance', 'ema_confluence',
+            'oi_delta', 'vpvr', 'ichimoku', 'funding_rate'
         ]
+        
+        strategy_features = [f'{strategy_name}_score' for strategy_name in all_strategies]
+        
+        # 전략 score만 사용
+        self.feature_names = strategy_features
         
         # 클래스 분포 확인 및 분석
         unique, counts = np.unique(y, return_counts=True)

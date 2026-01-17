@@ -911,8 +911,87 @@ class TradeDecisionEngine:
         if not self.meta_labeling_engine:
             return final_decision
         
-        # HOLD는 메타 라벨링 불필요
+        # HOLD인 경우에도 메타 라벨링 실행 (확률 표시를 위해)
+        # 단, 실행 여부는 항상 False로 설정 (HOLD는 실행하지 않음)
         if final_decision.get("action") == "HOLD":
+            # HOLD인 경우에도 메타 라벨링 예측은 수행하되, should_execute는 False
+            # 시장 데이터 수집
+            indicators = get_all_indicators()
+            market_data = {
+                "atr": indicators.get("atr", 0.0),
+                "volume": 0.0,
+                "volatility": indicators.get("vwap_std", 0.0) if indicators.get("vwap") else 0.0
+            }
+            
+            # 메타 라벨링을 위한 결정 생성
+            meta_decision = final_decision.copy()
+            meta_decision["meta"] = meta_decision.get("meta", {})
+            meta_decision["meta"]["synergy_meta"] = {
+                "confidence": final_decision.get("confidence", "LOW"),
+                "buy_score": 0.0,
+                "sell_score": 0.0,
+                "signals_used": sum(len(dec.get("strategies_used", [])) for dec in category_decisions.values())
+            }
+            meta_decision["strategies_used"] = []
+            for dec in category_decisions.values():
+                meta_decision["strategies_used"].extend(dec.get("strategies_used", []))
+            
+            # 개별 전략의 score 추가
+            all_strategies = [
+                'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+                'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
+                'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
+                'support_resistance', 'ema_confluence',
+                'oi_delta', 'vpvr', 'ichimoku', 'funding_rate'
+            ]
+            strategy_name_mapping = {
+                'vol_spike': 'VOL_SPIKE', 'orderflow_cvd': 'ORDERFLOW_CVD', 'vpvr_micro': 'VPVR_MICRO',
+                'session': 'SESSION', 'liquidity_grab': 'LIQUIDITY_GRAB', 'vwap_pinball': 'VWAP_PINBALL',
+                'zscore_mean_reversion': 'ZSCORE_MEAN_REVERSION', 'multi_timeframe': 'MULTI_TIMEFRAME',
+                'htf_trend': 'HTF_TREND', 'bollinger_squeeze': 'BOLLINGER_SQUEEZE',
+                'support_resistance': 'SUPPORT_RESISTANCE', 'ema_confluence': 'EMA_CONFLUENCE',
+                'oi_delta': 'OI_DELTA', 'vpvr': 'VPVR', 'ichimoku': 'ICHIMOKU', 'funding_rate': 'FUNDING_RATE'
+            }
+            
+            for strategy_name in all_strategies:
+                strategy_score_key = f"{strategy_name}_score"
+                strategy_score = 0.0
+                for dec in category_decisions.values():
+                    raw = dec.get("raw", {})
+                    strategy_upper = strategy_name_mapping.get(strategy_name, strategy_name.upper())
+                    for raw_key, raw_value in raw.items():
+                        if raw_key.upper() == strategy_upper:
+                            if isinstance(raw_value, dict):
+                                score = raw_value.get("score", 0.0)
+                                if score is not None and score != 0.0:
+                                    strategy_score = float(score)
+                                    break
+                    if strategy_score != 0.0:
+                        break
+                meta_decision[strategy_score_key] = strategy_score
+            
+            # 메타 라벨링 예측
+            if hasattr(self.meta_labeling_engine, 'predict'):
+                import inspect
+                sig = inspect.signature(self.meta_labeling_engine.predict)
+                if 'indicators' in sig.parameters:
+                    meta_result = self.meta_labeling_engine.predict(meta_decision, market_data, indicators)
+                else:
+                    meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)
+            else:
+                meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)
+            
+            # HOLD인 경우 should_execute는 항상 False
+            meta_result["should_execute"] = False
+            
+            # 메타 라벨링 결과를 결정에 추가
+            final_decision["meta"]["meta_labeling"] = {
+                "should_execute": False,
+                "prediction": meta_result.get("prediction", 0),
+                "probability": meta_result.get("probability", 0.0),
+                "confidence": meta_result.get("confidence", "LOW")
+            }
+            
             return final_decision
         
         # 시장 데이터 수집
@@ -940,8 +1019,73 @@ class TradeDecisionEngine:
         for dec in category_decisions.values():
             meta_decision["strategies_used"].extend(dec.get("strategies_used", []))
         
+        # 개별 전략의 score를 meta_decision에 추가 (extract_features에서 사용)
+        # 모든 전략 목록
+        all_strategies = [
+            'vol_spike', 'orderflow_cvd', 'vpvr_micro', 'session', 
+            'liquidity_grab', 'vwap_pinball', 'zscore_mean_reversion',
+            'multi_timeframe', 'htf_trend', 'bollinger_squeeze', 
+            'support_resistance', 'ema_confluence',
+            'oi_delta', 'vpvr', 'ichimoku', 'funding_rate'
+        ]
+        
+        # 전략 이름 매핑 (대소문자 변환)
+        strategy_name_mapping = {
+            'vol_spike': 'VOL_SPIKE',
+            'orderflow_cvd': 'ORDERFLOW_CVD',
+            'vpvr_micro': 'VPVR_MICRO',
+            'session': 'SESSION',
+            'liquidity_grab': 'LIQUIDITY_GRAB',
+            'vwap_pinball': 'VWAP_PINBALL',
+            'zscore_mean_reversion': 'ZSCORE_MEAN_REVERSION',
+            'multi_timeframe': 'MULTI_TIMEFRAME',
+            'htf_trend': 'HTF_TREND',
+            'bollinger_squeeze': 'BOLLINGER_SQUEEZE',
+            'support_resistance': 'SUPPORT_RESISTANCE',
+            'ema_confluence': 'EMA_CONFLUENCE',
+            'oi_delta': 'OI_DELTA',
+            'vpvr': 'VPVR',
+            'ichimoku': 'ICHIMOKU',
+            'funding_rate': 'FUNDING_RATE'
+        }
+        
+        # category_decisions의 raw 데이터에서 각 전략의 score 추출
+        for strategy_name in all_strategies:
+            strategy_score_key = f"{strategy_name}_score"
+            strategy_score = 0.0
+            
+            # 각 카테고리 결정의 raw 데이터에서 찾기
+            for dec in category_decisions.values():
+                raw = dec.get("raw", {})
+                strategy_upper = strategy_name_mapping.get(strategy_name, strategy_name.upper())
+                
+                # raw에서 전략 찾기 (대소문자 무시)
+                for raw_key, raw_value in raw.items():
+                    if raw_key.upper() == strategy_upper:
+                        if isinstance(raw_value, dict):
+                            score = raw_value.get("score", 0.0)
+                            if score is not None and score != 0.0:
+                                strategy_score = float(score)
+                                break  # 첫 번째로 찾은 값 사용
+                if strategy_score != 0.0:
+                    break
+            
+            # meta_decision에 추가
+            meta_decision[strategy_score_key] = strategy_score
+        
         # 메타 라벨링 예측
-        meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)
+        # meta_labeling_nn의 경우 indicators도 전달
+        if hasattr(self.meta_labeling_engine, 'predict'):
+            import inspect
+            sig = inspect.signature(self.meta_labeling_engine.predict)
+            if 'indicators' in sig.parameters:
+                # meta_labeling_nn은 indicators를 별도 파라미터로 받음
+                meta_result = self.meta_labeling_engine.predict(meta_decision, market_data, indicators)
+            else:
+                # meta_labeling_engine은 indicators를 받지 않음
+                meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)
+        else:
+            meta_result = self.meta_labeling_engine.predict(meta_decision, market_data)
         
         # 메타 라벨링 결과를 결정에 추가
         final_decision["meta"]["meta_labeling"] = {

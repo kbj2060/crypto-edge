@@ -28,7 +28,7 @@ def _print_meta_guided_consensus_decision(decision: dict) -> None:
     # 메타 라벨링 정보
     meta_labeling = final_decision.get("meta", {}).get("meta_labeling", {})
     should_execute = meta_labeling.get("should_execute", True) if meta_labeling else True
-    probability = meta_labeling.get("probability", 0.0) if meta_labeling else 0.0
+    probability = meta_labeling.get("probability", None) if meta_labeling else None
     
     # 카테고리 요약 (한 줄)
     consensus_meta = final_decision.get("consensus_meta", {})
@@ -41,7 +41,10 @@ def _print_meta_guided_consensus_decision(decision: dict) -> None:
     
     # 1줄 요약
     execute_status = "✅" if should_execute else "❌"
-    ml_prob = f"{probability:.0%}" if meta_labeling else "N/A"
+    if meta_labeling and probability is not None:
+        ml_prob = f"{probability:.0%}"
+    else:
+        ml_prob = "N/A"
     
     print(f"\n[{time_str}] {action_emoji} {action} | {confidence_emoji} {confidence} | 점수: {net_score:.2f} | ML: {execute_status} {ml_prob}")
     
