@@ -90,7 +90,7 @@ class DataManager:
             return False
     
     def update_with_candle(self, candle_data: pd.Series) -> None:
-        """새로운 캔들 데이터로 업데이트 (실시간 용)"""
+        """새로운 캔들 데이터로 업데이트 (실시간 용) - 최적화 버전"""
         try:
             if candle_data is None:
                 return
@@ -102,19 +102,33 @@ class DataManager:
             close_price = float(candle_data['close'])
             volume = float(candle_data['volume'])
             quote_volume = float(candle_data['quote_volume'])
-                        
-            # 새로운 캔들 데이터를 DataFrame에 추가
-            new_row = pd.DataFrame([{
-                'open': open_price,
-                'high': high_price,
-                'low': low_price,
-                'close': close_price,
-                'volume': volume,
-                'quote_volume': quote_volume
-            }], index=[candle_data.name])
             
-            self.data = pd.concat([self.data, new_row], ignore_index=False)
-            self.data = self.data[~self.data.index.duplicated(keep='last')]
+            timestamp = candle_data.name
+            
+            # 최적화: pd.concat 대신 직접 loc로 추가 (더 빠름)
+            if timestamp in self.data.index:
+                # 기존 행 업데이트
+                self.data.loc[timestamp, 'open'] = open_price
+                self.data.loc[timestamp, 'high'] = high_price
+                self.data.loc[timestamp, 'low'] = low_price
+                self.data.loc[timestamp, 'close'] = close_price
+                self.data.loc[timestamp, 'volume'] = volume
+                self.data.loc[timestamp, 'quote_volume'] = quote_volume
+            else:
+                # 새 행 추가 (더 빠른 방법)
+                self.data.loc[timestamp] = {
+                    'open': open_price,
+                    'high': high_price,
+                    'low': low_price,
+                    'close': close_price,
+                    'volume': volume,
+                    'quote_volume': quote_volume
+                }
+                
+                # 데이터 크기 제한 (메모리 관리)
+                if len(self.data) > 2000:
+                    # 가장 오래된 데이터 제거
+                    self.data = self.data.tail(1500)
             
 
             #print(f"✅ 3분봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
@@ -128,27 +142,42 @@ class DataManager:
         else:
             new = data
             
-        self.data_15m = pd.concat([self.data_15m, new], ignore_index=False)
-        self.data_15m = self.data_15m[~self.data_15m.index.duplicated(keep='last')]
-        self.data_15m = self.data_15m.drop_duplicates()
-
-        if len(self.data_15m) > 400:
-            self.data_15m = self.data_15m.tail(400)
+        # 최적화: pd.concat 대신 직접 loc로 추가
+        if new is not None and not new.empty:
+            for timestamp, row in new.iterrows():
+                if timestamp in self.data_15m.index:
+                    # 기존 행 업데이트
+                    self.data_15m.loc[timestamp] = row
+                else:
+                    # 새 행 추가
+                    self.data_15m.loc[timestamp] = row
+                    
+                    # 데이터 크기 제한
+                    if len(self.data_15m) > 400:
+                        self.data_15m = self.data_15m.tail(400)
 
         #print(f"✅ 15분봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
 
     def update_with_candle_1h(self, symbol: str = 'ETHUSDT', data: pd.DataFrame = None) -> None:
+        # 최적화: pd.concat 대신 직접 loc로 추가
         if data is None:
             new = self.dataloader.fetch_data(interval="1h", symbol=symbol, limit=1)
         else:
             new = data
             
-        self.data_1h = pd.concat([self.data_1h, new], ignore_index=False)
-        self.data_1h = self.data_1h[~self.data_1h.index.duplicated(keep='last')]
-        self.data_1h = self.data_1h.drop_duplicates()
-
-        if len(self.data_1h) > 300:
-            self.data_1h = self.data_1h.tail(300)
+        # 최적화: pd.concat 대신 직접 loc로 추가
+        if new is not None and not new.empty:
+            for timestamp, row in new.iterrows():
+                if timestamp in self.data_1h.index:
+                    # 기존 행 업데이트
+                    self.data_1h.loc[timestamp] = row
+                else:
+                    # 새 행 추가
+                    self.data_1h.loc[timestamp] = row
+                    
+                    # 데이터 크기 제한
+                    if len(self.data_1h) > 300:
+                        self.data_1h = self.data_1h.tail(300)
 
         #print(f"✅ 1시간봉 데이터 업데이트 완료: {self.time_manager.get_current_time().strftime('%H:%M:%S')}")
     

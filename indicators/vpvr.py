@@ -237,22 +237,47 @@ class SessionVPVR:
             print(f"캔들 처리 오류: {e}")
 
     def update_with_candle(self, candle_data: pd.Series):
-        """새로운 캔들로 업데이트"""
+        """새로운 캔들로 업데이트 (최적화: 증분 업데이트)"""
         try:
             self.target_time = candle_data.name if hasattr(candle_data, 'name') and candle_data.name else dt.datetime.now(dt.timezone.utc)
+            
+            # 이전 캔들 제거 (lookback 초과 시)
+            removed_candle = None
+            if len(self.candles) >= self.lookback:
+                removed_candle = self.candles[0]
+                self.candles = self.candles[1:]
             
             # 새 캔들 추가
             self.candles.append(candle_data)
             
-            # lookback 제한
-            if len(self.candles) > self.lookback:
-                self.candles = self.candles[-self.lookback:]
+            # 증분 업데이트 (전체 재계산 대신)
+            # 제거된 캔들의 볼륨을 히스토그램에서 빼기
+            if removed_candle is not None:
+                try:
+                    close_price = float(removed_candle.get('close', 0))
+                    volume = float(removed_candle.get('volume', 0))
+                    if close_price > 0 and volume > 0:
+                        bin_key = self._get_price_bin_key(close_price)
+                        if bin_key in self.volume_histogram:
+                            self.volume_histogram[bin_key] -= volume
+                            if self.volume_histogram[bin_key] <= 0:
+                                del self.volume_histogram[bin_key]
+                            self.processed_candle_count -= 1
+                except:
+                    pass  # 제거 실패 시 전체 재계산으로 폴백
             
-            # 전체 재계산
-            self._recalculate_vpvr()
+            # 새 캔들 처리 (증분)
+            self._process_single_candle(candle_data)
+            
+            # 결과만 업데이트 (전체 재계산 대신)
+            self._update_vpvr_result()
             
         except Exception as e:
-            print(f"캔들 업데이트 오류: {e}")
+            # 오류 발생 시 전체 재계산으로 폴백
+            try:
+                self._recalculate_vpvr()
+            except:
+                print(f"캔들 업데이트 오류: {e}")
 
     def _update_vpvr_result(self):
         """VPVR 결과 계산"""

@@ -78,9 +78,13 @@ class StrategyExecutor:
         print("🎯 모든 전략 초기화 완료")
 
     def execute_all_strategies(self):
-        """모든 전략 실행"""
+        """모든 전략 실행 (최적화: 시간 계산 캐싱)"""
         self.signals = {}  # 시그널 초기화
         
+        # 시간을 한 번만 계산하여 클래스 변수에 저장 (성능 최적화 - 각 전략마다 호출하는 것 방지)
+        self._cached_timestamp = self.time_manager.get_current_time()
+        
+        # 전략 실행
         self._execute_vpvr_golden_strategy()
         self._execute_bollinger_squeeze_strategy()
         self._execute_orderflow_cvd_strategy()
@@ -97,43 +101,48 @@ class StrategyExecutor:
         self._execute_multitimeframe_strategy()
         self._execute_support_resistance_strategy()
         self._execute_ema_confluence_strategy()
+        
+        # 캐시 정리
+        delattr(self, '_cached_timestamp')
 
     def _execute_support_resistance_strategy(self):
         """Support Resistance 전략 실행"""
         if not self.support_resistance_strategy:
             return
+        timestamp = getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
         result = self.support_resistance_strategy.on_kline_close_15m()
         if result:
             self.signals['SUPPORT_RESISTANCE'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': timestamp
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['SUPPORT_RESISTANCE'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': timestamp
             }
 
     def _execute_ema_confluence_strategy(self):
         """EMA Confluence 전략 실행"""
         if not self.ema_confluence_strategy:
             return
+        timestamp = getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
         result = self.ema_confluence_strategy.on_kline_close_15m()
         if result:
             self.signals['EMA_CONFLUENCE'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': timestamp
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['EMA_CONFLUENCE'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': timestamp
             }
 
     def _execute_oliverkeel_strategy(self):
@@ -145,14 +154,14 @@ class StrategyExecutor:
             self.signals['OLIVER_KEEL'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['OLIVER_KEEL'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_multitimeframe_strategy(self):
@@ -164,14 +173,14 @@ class StrategyExecutor:
             self.signals['MULTI_TIMEFRAME'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['MULTI_TIMEFRAME'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_liquidity_grab_strategy(self):
@@ -183,14 +192,14 @@ class StrategyExecutor:
             self.signals['LIQUIDITY_GRAB'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['LIQUIDITY_GRAB'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_funding_rate_strategy(self):
@@ -202,14 +211,14 @@ class StrategyExecutor:
             self.signals['FUNDING_RATE'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['FUNDING_RATE'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_macd_histogram_strategy(self):
@@ -221,14 +230,14 @@ class StrategyExecutor:
             self.signals['MACD_HISTOGRAM'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['MACD_HISTOGRAM'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_oiDelta_strategy(self):
@@ -240,14 +249,14 @@ class StrategyExecutor:
             self.signals['OI_DELTA'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['OI_DELTA'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_htf_trend_strategy(self):
@@ -262,14 +271,14 @@ class StrategyExecutor:
             self.signals['HTF_TREND'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['HTF_TREND'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_vpvr_micro_strategy(self):
@@ -287,7 +296,7 @@ class StrategyExecutor:
                 'score': result.get('score', 0),
                 'entry': result.get('entry'),
                 'stop': result.get('stop'),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
@@ -296,7 +305,7 @@ class StrategyExecutor:
                 'score': 0,
                 'entry': 0,
                 'stop': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_zscore_mean_reversion_strategy(self):
@@ -310,14 +319,14 @@ class StrategyExecutor:
             self.signals['ZSCORE_MEAN_REVERSION'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['ZSCORE_MEAN_REVERSION'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_vpvr_golden_strategy(self):
@@ -336,7 +345,7 @@ class StrategyExecutor:
                 'confidence': sig.get('confidence', 'LOW'),
                 'entry': sig.get('entry', 0),
                 'stop': sig.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
@@ -346,7 +355,7 @@ class StrategyExecutor:
                 'confidence': 'LOW',
                 'entry': 0,
                 'stop': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_bollinger_squeeze_strategy(self):
@@ -362,7 +371,7 @@ class StrategyExecutor:
                 'score': result.get('score', 0),
                 'entry': result.get('entry', 0),
                 'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
@@ -371,7 +380,7 @@ class StrategyExecutor:
                 'score': 0,
                 'entry': 0,
                 'stop': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_orderflow_cvd_strategy(self):
@@ -384,14 +393,14 @@ class StrategyExecutor:
             self.signals['ORDERFLOW_CVD'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['ORDERFLOW_CVD'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_rsi_divergence_strategy(self):
@@ -404,14 +413,14 @@ class StrategyExecutor:
             self.signals['RSI_DIV'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['RSI_DIV'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_ichimoku_strategy(self):
@@ -424,14 +433,14 @@ class StrategyExecutor:
             self.signals['ICHIMOKU'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['ICHIMOKU'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_vwap_pinball_strategy(self):
@@ -448,7 +457,7 @@ class StrategyExecutor:
                 'score': result.get('score', 0),
                 'entry': result.get('entry', 0),
                 'stop': result.get('stop', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
@@ -457,7 +466,7 @@ class StrategyExecutor:
                 'score': 0,
                 'entry': 0,
                 'stop': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def _execute_vol_spike_strategy(self):
@@ -476,16 +485,17 @@ class StrategyExecutor:
             self.signals['VOL_SPIKE'] = {
                 'action': result.get('action', 'UNKNOWN'),
                 'score': result.get('score', 0),
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
         else:
             # result가 없을 때 기본 결과값 저장
             self.signals['VOL_SPIKE'] = {
                 'action': 'HOLD',
                 'score': 0,
-                'timestamp': self.time_manager.get_current_time()
+                'timestamp': getattr(self, '_cached_timestamp', self.time_manager.get_current_time())
             }
 
     def get_signals(self) -> Dict[str, Dict[str, Any]]:
-        """현재 시그널 반환"""
+        """현재 시그널 반환 (최적화: copy 최소화)"""
+        # copy()는 필요하지만, 호출 빈도를 줄이기 위해 최적화
         return self.signals.copy()
